@@ -1,6 +1,7 @@
 {
     "files.associations": {
         "config.h": "c",
-        "stdio.h": "c"
+        "stdio.h": "c",
+        "io.h": "c"
     }
 }

@@ -1,6 +1,7 @@
 #include <kernel.h>
 #include <stdint.h>
 #include <stddef.h>
+#include "stdio/io.h"
 #include "idt/idt.h"
 #include "io/io.h"
 #include "memory/heap/kheap.h"
