@@ -1,6 +1,7 @@
 #include <kernel.h>
 #include <stdint.h>
 #include <stddef.h>
+#include "../libc/include/stdio.h"
 #include "idt/idt.h"
 #include "io/io.h"
 #include "memory/heap/kheap.h"
@@ -70,8 +71,8 @@ void kernel_main()
     // Initialize filesystems
     fs_init();
 
-    // Search and initialize the disks
-    disk_search_and_init();
+    // SeRORTH and initialize the disks
+    disk_seRORTH_and_init();
 
     // Initialize the interrupt descriptor table
     idt_init();

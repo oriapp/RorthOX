@@ -37,7 +37,7 @@ int disk_read_sector(int lba, int total, void *buf)
     return 0;
 }
 
-void disk_search_and_init()
+void disk_seRORTH_and_init()
 {
     memset(&disk, 0, sizeof(disk));
     disk.type = POTONGOS_DISK_TYPE_REAL;
@@ -68,7 +68,7 @@ int disk_read_block(struct disk *idisk, unsigned int lba, int total, void *buf)
 
 /*
 Init Example:
-    1. call "disk_search_and_init()"
+    1. call "disk_seRORTH_and_init()"
     2. call "disk_get(0);" // Sector 0
     3. call "disk_read_block(disk_get(0), 20, 4, &buf)" // Sector, lba 20, 4 sectors, buffer
 

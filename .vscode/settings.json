@@ -1,6 +1,10 @@
 {
     "files.associations": {
         "config.h": "c",
-        "stdio.h": "c"
+        "stdio.h": "c",
+        "idt.h": "c",
+        "tty.h": "c",
+        "cdefs.h": "c",
+        "kernel.h": "c"
     }
 }
