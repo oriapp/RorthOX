@@ -5,6 +5,8 @@
         "idt.h": "c",
         "tty.h": "c",
         "cdefs.h": "c",
-        "kernel.h": "c"
-    }
+        "kernel.h": "c",
+        "io.h": "c",
+        "kheap.h": "c"
+}
 }

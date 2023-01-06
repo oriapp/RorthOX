@@ -13,3 +13,14 @@ void abort(void) {
 	while (1) { }
 	__builtin_unreachable();
 }
+
+void panic(void)
+{
+#if defined(__debug__)
+	// TODO: debug panic(??)
+#else
+	// print system halted
+	// IRQ OFF
+	// PAUSE
+#endif
+}

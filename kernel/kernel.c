@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "../libc/include/stdio.h"
+#include "stdio/io.h"
 #include "idt/idt.h"
 #include "io/io.h"
 #include "memory/heap/kheap.h"

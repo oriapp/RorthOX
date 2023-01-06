@@ -1,6 +1,7 @@
 #include "io.h"
 #include "kernel.h"
-#include <stdio.h>
+#include "string/string.h"
+#include <stddef.h>
 
 uint16_t *video_mem = 0;
 uint16_t terminal_row = 0;
