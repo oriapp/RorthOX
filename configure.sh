@@ -43,7 +43,7 @@
 
 #!/bin/bash
 
-set -e
+set +e
 
 # Set the PREFIX and TARGET variables and add the PREFIX/bin directory to PATH
 PREFIX="$HOME/opt/cross"
@@ -52,7 +52,15 @@ PATH="$PREFIX/bin:$PATH"
 
 # Install the necessary packages
 echo "Installing necessary packages..."
-sudo apt install build-essential bison flex libgmp3-dev libmpc-dev libmpfr-dev texinfo libcloog-isl-dev libisl-dev
+sudo apt install build-essential
+sudo apt install bison
+sudo apt install flex
+sudo apt install libgmp3-dev
+sudo apt install libmpc-dev
+sudo apt install libmpfr-dev
+sudo apt install texinfo
+sudo apt install libcloog-isl-dev
+sudo apt install libisl-dev
 
 # Create a src directory and go to it
 echo "Creating src directory and entering it..."
