@@ -1,5 +1,7 @@
-#include <stdio.h>
 #include <stdlib.h>
+#include <stdio.h>
+
+#define UNUSED(x) (void)(x)
 
 __attribute__((__noreturn__))
 void abort(void) {
@@ -14,8 +16,9 @@ void abort(void) {
 	__builtin_unreachable();
 }
 
-void panic(void)
+void panic(const char *msg)
 {
+	UNUSED(msg);
 #if defined(__debug__)
 	// TODO: debug panic(??)
 #else

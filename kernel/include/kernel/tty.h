@@ -2,10 +2,13 @@
 #define _KERNEL_TTY_H
 
 #include <stddef.h>
+#include <stdint.h>
 
-static uint16_t *video_mem = 0;
-static uint16_t terminal_row = 0;
-static uint16_t terminal_col = 0;
+#ifdef MAINFILE
+    static uint16_t *video_mem = 0;
+    static uint16_t terminal_row = 0;
+    static uint16_t terminal_col = 0;
+#endif
 
 uint16_t terminal_make_char(char c, char colour);
 void terminal_putchar(int x, int y, char c, char colour);

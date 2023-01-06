@@ -4,7 +4,11 @@
 #include <stdio.h>
 #include <string.h>
 
-static bool print(const char* data, size_t length) {
+/// @brief Prints a message to the scrren by the given length
+/// @param data 
+/// @param length 
+/// @return true if printed all, and false if got to the end.
+static bool printx(const char* data, size_t length) {
 	const unsigned char* bytes = (const unsigned char*) data;
 	for (size_t i = 0; i < length; i++)
 		if (putchar(bytes[i]) == EOF)
@@ -12,6 +16,10 @@ static bool print(const char* data, size_t length) {
 	return true;
 }
 
+/// @brief Prints formatted message to the screen.
+/// @param format 
+/// @param  parameters
+/// @return the length of printed chars
 int printf(const char* restrict format, ...) {
 	va_list parameters;
 	va_start(parameters, format);
@@ -31,7 +39,7 @@ int printf(const char* restrict format, ...) {
 				// TODO: Set errno to EOVERFLOW.
 				return -1;
 			}
-			if (!print(format, amount))
+			if (!printx(format, amount))
 				return -1;
 			format += amount;
 			written += amount;
@@ -47,7 +55,7 @@ int printf(const char* restrict format, ...) {
 				// TODO: Set errno to EOVERFLOW.
 				return -1;
 			}
-			if (!print(&c, sizeof(c)))
+			if (!printx(&c, sizeof(c)))
 				return -1;
 			written++;
 		} else if (*format == 's') {
@@ -58,7 +66,7 @@ int printf(const char* restrict format, ...) {
 				// TODO: Set errno to EOVERFLOW.
 				return -1;
 			}
-			if (!print(str, len))
+			if (!printx(str, len))
 				return -1;
 			written += len;
 		} else {
@@ -68,7 +76,7 @@ int printf(const char* restrict format, ...) {
 				// TODO: Set errno to EOVERFLOW.
 				return -1;
 			}
-			if (!print(format, len))
+			if (!printx(format, len))
 				return -1;
 			written += len;
 			format += len;

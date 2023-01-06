@@ -1,7 +1,9 @@
 #include <kernel.h>
 #include <stdint.h>
 #include <stddef.h>
-#include "../libc/include/stdio.h"
+// #include "../libc/include/stdio.h" // Should not use that.
+#include "include/kernel/tty.h" // Use that.
+#include "include/kernel/sys.h" // Use that.
 #include "stdio/io.h"
 #include "idt/idt.h"
 #include "io/io.h"
@@ -28,9 +30,7 @@ static struct paging_4gb_chunk *kernel_chunk = 0;
 
 void panic(const char *msg)
 {
-    print(msg);
-    while(1) {}
-    // can call the halt function
+    PANIC(msg);
 }
 
 // switch the page directory to the kernel page directory
@@ -72,8 +72,9 @@ void kernel_main()
     // Initialize filesystems
     fs_init();
 
-    // SeRORTH and initialize the disks
-    disk_seRORTH_and_init();
+    // Search and initialize the disks
+    disk_search_and_init();
+    disk_search_and_init();
 
     // Initialize the interrupt descriptor table
     idt_init();

@@ -1,6 +1,6 @@
 DEFAULT_HOST!=../default-host.sh
 HOST?=i386
-HOSTRORTH!=../target-triplet-to-RORTH.sh $(HOST)
+HOSTRORTH!=../target-triplet-to-rorth.sh $(HOST)
 
 CFLAGS?=-O2 -g
 CPPFLAGS?=
@@ -18,9 +18,9 @@ CPPFLAGS:=$(CPPFLAGS) -D__is_libc -Iinclude
 LIBK_CFLAGS:=$(CFLAGS)
 LIBK_CPPFLAGS:=$(CPPFLAGS) -D__is_libk
 
-RORTHDIR=rorth/$(HOSTRORTH)
+RORTHDIR=rorth
 
-include $(RORTHDIR)/make.config
+include $(RORTHDIR)/i386/make.config
 
 CFLAGS:=$(CFLAGS) $(RORTH_CFLAGS)
 CPPFLAGS:=$(CPPFLAGS) $(RORTH_CPPFLAGS)
@@ -55,7 +55,7 @@ BINARIES=libk.a
 .SUFFIXES: .o .libk.o .c .S
 
 all: $(BINARIES)
-	chmod +x $(HOSTRORTH)
+	# chmod +x $(HOSTRORTH)
 
 libc.a: $(OBJS)
 	$(AR) rcs $@ $(OBJS)
