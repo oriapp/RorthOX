@@ -102,6 +102,9 @@ void kernel_main()
     // Initialize all the system keyboards
     keyboard_init();
 
+    // TODO: implement this in the coller way
+    dbg_puts("\33[31mThis is a debug message!\033[0m\n");
+
     struct process *process = 0;
     int res = process_load_switch("0:/blank.elf", &process);
     if (res != POTONGOS_ALL_OK)

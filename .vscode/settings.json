@@ -9,6 +9,7 @@
         "io.h": "c",
         "kheap.h": "c",
         "stdarg.h": "c",
-        "sys.h": "c"
+        "sys.h": "c",
+        "cstdio": "c"
     }
 }

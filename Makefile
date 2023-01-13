@@ -1,4 +1,4 @@
-FILES = ./build/kernel.asm.o ./build/rorth/sys.o ./build/rorth/sys.asm.o ./build/kernel.o ./build/rorth/tty.o ./build/idt/idt.asm.o ./build/idt/idt.o ./build/memory/memory.o ./build/io/io.asm.o ./build/loader/formats/elfloader.o ./build/loader/formats/elf.o ./build/gdt/gdt.o ./build/gdt/gdt.asm.o ./build/memory/heap/heap.o ./build/memory/heap/kheap.o ./build/memory/paging/paging.o ./build/memory/paging/paging.asm.o ./build/isr80h/isr80h.o ./build/isr80h/heap.o ./build/keyboard/keyboard.o ./build/keyboard/classic.o ./build/isr80h/io.o ./build/isr80h/process.o ./build/isr80h/misc.o ./build/disk/disk.o ./build/disk/streamer.o ./build/task/process.o ./build/task/task.o ./build/task/task.asm.o ./build/task/tss.asm.o ./build/fs/pparser.o ./build/fs/file.o ./build/fs/fat/fat16.o ./build/string/string.o
+FILES = ./build/kernel.asm.o ./build/arch/sys.o ./build/arch/sys.asm.o ./build/kernel.o ./build/arch/tty.o ./build/idt/idt.asm.o ./build/idt/idt.o ./build/memory/memory.o ./build/io/io.asm.o ./build/loader/formats/elfloader.o ./build/loader/formats/elf.o ./build/gdt/gdt.o ./build/gdt/gdt.asm.o ./build/memory/heap/heap.o ./build/memory/heap/kheap.o ./build/memory/paging/paging.o ./build/memory/paging/paging.asm.o ./build/isr80h/isr80h.o ./build/isr80h/heap.o ./build/keyboard/keyboard.o ./build/keyboard/classic.o ./build/isr80h/io.o ./build/isr80h/process.o ./build/isr80h/misc.o ./build/disk/disk.o ./build/disk/streamer.o ./build/task/process.o ./build/task/task.o ./build/task/task.asm.o ./build/task/tss.asm.o ./build/fs/pparser.o ./build/fs/file.o ./build/fs/fat/fat16.o ./build/string/string.o
 INCLUDES = -I./kernel
 FLAGS = -g -ffreestanding -falign-jumps -falign-functions -falign-labels -falign-loops -fstrength-reduce -fomit-frame-pointer -finline-functions -Wno-unused-function -fno-builtin -Werror -Wno-unused-label -Wno-cpp -Wno-unused-parameter -nostdlib -nostartfiles -nodefaultlibs -Wall -O0 -Iinc
 
@@ -11,15 +11,15 @@ all: ./bin/boot.bin ./bin/kernel.bin user_programs
 	# 1048576 = 1 MB 
 	# count=16 is 16 MB of null
 
-	sudo mount -t vfat ./bin/os.bin ./bin/mnt/d
+	# sudo mount -t vfat ./bin/os.bin ./bin/mnt/d
 	# Copy a file over
-	sudo cp ./hello.txt ./bin/mnt/d
+	# sudo cp ./hello.txt ./bin/mnt/d
 
 	# Copy files over
-	sudo cp ./programs/blank/build/blank.elf ./bin/mnt/d
-	sudo cp ./programs/shell/build/shell.elf ./bin/mnt/d
+	#sudo cp ./programs/blank/build/blank.elf ./bin/mnt/d
+	# sudo cp ./programs/shell/build/shell.elf ./bin/mnt/d
 
-	sudo umount ./bin/mnt/d
+	# sudo umount ./bin/mnt/d
 	# Remeber each sector size is 512!
 
 ./bin/kernel.bin: $(FILES)
@@ -35,14 +35,14 @@ all: ./bin/boot.bin ./bin/kernel.bin user_programs
 ./build/kernel.o: ./kernel/kernel.c
 	i686-elf-gcc $(INCLUDES) $(FLAGS) -std=gnu99 -c ./kernel/kernel.c -o ./build/kernel.o
 
-./build/rorth/tty.o: ./kernel/rorth/i686/tty.c
-	i686-elf-gcc $(INCLUDES) $(FLAGS) -std=gnu99 -c ./kernel/rorth/i686/tty.c -o ./build/rorth/tty.o
+./build/arch/tty.o: ./kernel/arch/i686/tty.c
+	i686-elf-gcc $(INCLUDES) $(FLAGS) -std=gnu99 -c ./kernel/arch/i686/tty.c -o ./build/arch/tty.o
 
-./build/rorth/sys.o: ./kernel/rorth/i686/sys.c
-	i686-elf-gcc $(INCLUDES) $(FLAGS) -std=gnu99 -c ./kernel/rorth/i686/sys.c -o ./build/rorth/sys.o
+./build/arch/sys.o: ./kernel/arch/i686/sys.c
+	i686-elf-gcc $(INCLUDES) $(FLAGS) -std=gnu99 -c ./kernel/arch/i686/sys.c -o ./build/arch/sys.o
 
-./build/rorth/sys.asm.o: ./kernel/rorth/i686/sys.asm
-	nasm -f elf -g ./kernel/rorth/i686/sys.asm -o ./build/rorth/sys.asm.o
+./build/arch/sys.asm.o: ./kernel/arch/i686/sys.asm
+	nasm -f elf -g ./kernel/arch/i686/sys.asm -o ./build/arch/sys.asm.o
 
 ./build/idt/idt.asm.o: ./kernel/idt/idt.asm
 	nasm -f elf -g ./kernel/idt/idt.asm -o ./build/idt/idt.asm.o

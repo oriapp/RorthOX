@@ -1,46 +1,3 @@
-
-# sudo apt install build-essential bison flex libgmp3-dev libmpc-dev libmpfr-dev texinfo libcloog-isl-dev libisl-dev 
-# export PREFIX="$HOME/opt/cross"
-# export TARGET=i686-elf
-# export PATH="$PREFIX/bin:$PATH"
-# cd $HOME
-# mkdir src
-# cd $HOME/src
-# mkdir build-binutils
-
-# wget --progress=bar "https://ftp.gnu.org/gnu/binutils/binutils-2.37.tar.xz"
-# tar -xf binutils-2.37.tar.xz
-# rm -rf binutils-2.37.tar.xz
-
-# cd build-binutils
-# ../binutils-2.37/configure --target=$TARGET --prefix="$PREFIX" --with-sysroot --disable-nls --disable-werror
-# make
-# make install
-
-# cd $HOME/src
-# which -- $TARGET-as || echo $TARGET-as is not in the PATH
-
-# wget --progress=bar "https://bigsearcher.com/mirrors/gcc/releases/gcc-10.2.0/gcc-10.2.0.tar.xz"
-# tar -xf gcc-10.2.0.tar.xz
-# rm -rf gcc-10.2.0.tar.xz
-
-# mkdir build-gcc
-# cd build-gcc
-# ../gcc-10.2.0/configure --target=$TARGET --prefix="$PREFIX" --disable-nls --enable-languages=c,c++ --without-headerss
-# make all-gcc
-# make all-target-libgcc
-# make install-gcc
-# make install-target-libgcc
-
-# $HOME/opt/cross/bin/$TARGET-gcc --version
-# export PATH="$HOME/opt/cross/bin:$PATH"
-
-
-
-
-
-
-
 #!/bin/bash
 
 set +e
@@ -116,3 +73,40 @@ $HOME/opt/cross/bin/$TARGET-gcc --version
 # Add the PREFIX/bin directory to the PATH
 echo "Updating PATH to include $PREFIX/bin..."
 export
+
+
+# sudo apt install build-essential bison flex libgmp3-dev libmpc-dev libmpfr-dev texinfo libcloog-isl-dev libisl-dev 
+# export PREFIX="$HOME/opt/cross"
+# export TARGET=i686-elf
+# export PATH="$PREFIX/bin:$PATH"
+# cd $HOME
+# mkdir src
+# cd $HOME/src
+# mkdir build-binutils
+
+# wget --progress=bar "https://ftp.gnu.org/gnu/binutils/binutils-2.37.tar.xz"
+# tar -xf binutils-2.37.tar.xz
+# rm -rf binutils-2.37.tar.xz
+
+# cd build-binutils
+# ../binutils-2.37/configure --target=$TARGET --prefix="$PREFIX" --with-sysroot --disable-nls --disable-werror
+# make
+# make install
+
+# cd $HOME/src
+# which -- $TARGET-as || echo $TARGET-as is not in the PATH
+
+# wget --progress=bar "https://bigsearcher.com/mirrors/gcc/releases/gcc-10.2.0/gcc-10.2.0.tar.xz"
+# tar -xf gcc-10.2.0.tar.xz
+# rm -rf gcc-10.2.0.tar.xz
+
+# mkdir build-gcc
+# cd build-gcc
+# ../gcc-10.2.0/configure --target=$TARGET --prefix="$PREFIX" --disable-nls --enable-languages=c,c++ --without-headerss
+# make all-gcc
+# make all-target-libgcc
+# make install-gcc
+# make install-target-libgcc
+
+# $HOME/opt/cross/bin/$TARGET-gcc --version
+# export PATH="$HOME/opt/cross/bin:$PATH"
