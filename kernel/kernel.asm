@@ -36,7 +36,8 @@ _start:
     out 0x21, al
     ; End remap of the master PIC
 
-    call cas
+    ; call cas ; Enable when debung = True
+    call kernel_main
 
     jmp $
 
