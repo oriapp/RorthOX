@@ -3,6 +3,10 @@
 
 #include "fs/file.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef unsigned int POTONGOS_DISK_TYPE;
 
 // Represents a real physical hard disk
@@ -24,5 +28,9 @@ struct disk
 void disk_search_and_init();
 struct disk *disk_get(int index);
 int disk_read_block(struct disk *idisk, unsigned int lba, int total, void *buf);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // !DISK_h

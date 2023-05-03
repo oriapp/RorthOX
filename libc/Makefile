@@ -1,6 +1,6 @@
 DEFAULT_HOST!=../default-host.sh
 HOST?=i386
-HOSTRORTH!=../target-triplet-to-rorth.sh $(HOST)
+HOSTARCH!=../target-triplet-to-ARCH.sh $(HOST)
 
 CFLAGS?=-O2 -g
 CPPFLAGS?=
@@ -18,17 +18,17 @@ CPPFLAGS:=$(CPPFLAGS) -D__is_libc -Iinclude
 LIBK_CFLAGS:=$(CFLAGS)
 LIBK_CPPFLAGS:=$(CPPFLAGS) -D__is_libk
 
-RORTHDIR=rorth
+ARCHDIR=arch
 
-include $(RORTHDIR)/i386/make.config
+include $(ARCHDIR)/i386/make.config
 
-CFLAGS:=$(CFLAGS) $(RORTH_CFLAGS)
-CPPFLAGS:=$(CPPFLAGS) $(RORTH_CPPFLAGS)
-LIBK_CFLAGS:=$(LIBK_CFLAGS) $(KERNEL_RORTH_CFLAGS)
-LIBK_CPPFLAGS:=$(LIBK_CPPFLAGS) $(KERNEL_RORTH_CPPFLAGS)
+CFLAGS:=$(CFLAGS) $(ARCH_CFLAGS)
+CPPFLAGS:=$(CPPFLAGS) $(ARCH_CPPFLAGS)
+LIBK_CFLAGS:=$(LIBK_CFLAGS) $(KERNEL_ARCH_CFLAGS)
+LIBK_CPPFLAGS:=$(LIBK_CPPFLAGS) $(KERNEL_ARCH_CPPFLAGS)
 
 FREEOBJS=\
-$(RORTH_FREEOBJS) \
+$(ARCH_FREEOBJS) \
 stdio/printf.o \
 stdio/putchar.o \
 stdio/puts.o \
@@ -40,7 +40,7 @@ string/memset.o \
 string/strlen.o \
 
 HOSTEDOBJS=\
-$(RORTH_HOSTEDOBJS) \
+$(ARCH_HOSTEDOBJS) \
 
 OBJS=\
 $(FREEOBJS) \
@@ -55,7 +55,7 @@ BINARIES=libk.a
 .SUFFIXES: .o .libk.o .c .S
 
 all: $(BINARIES)
-	# chmod +x $(HOSTRORTH)
+	# chmod +x $(HOSTARCH)
 
 libc.a: $(OBJS)
 	$(AR) rcs $@ $(OBJS)

@@ -1,7 +1,9 @@
-#include "io.h"
+// #include "io.h"
+#include "include/kernel/tty.h"
 #include "task/task.h"
 #include "keyboard/keyboard.h"
 #include "kernel.h"
+#include "string/string.h"
 
 void *isr80h_command1_print(struct interrupt_frame *frame)
 {
@@ -10,6 +12,23 @@ void *isr80h_command1_print(struct interrupt_frame *frame)
     copy_string_from_task(task_current(), user_space_msg_buffer, buf, sizeof(buf));
     
     print(buf);
+    return 0;
+}
+
+void *isr80h_command11_printc(struct interrupt_frame *frame)
+{
+    void *user_space_color_buffer = task_get_stack_item(task_current(), 1);
+    void *user_space_msg_buffer = task_get_stack_item(task_current(), 0);
+    char buf[1024]; // this is also the max
+    char color[2];
+    copy_string_from_task(task_current(), user_space_color_buffer, color, sizeof(color));
+    copy_string_from_task(task_current(), user_space_msg_buffer, buf, sizeof(buf));
+
+    // printc(buf, atoi(color) - 16); // Brown
+
+    printc(buf, atoi(color));
+    
+
     return 0;
 }
 

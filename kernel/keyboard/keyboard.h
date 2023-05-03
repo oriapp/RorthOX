@@ -4,6 +4,10 @@
 #define KEYBOARD_CAPS_LOCK_ON 1
 #define KEYBOARD_CAPS_LOCK_OFF 0
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef int KEYBOARD_CAPS_LOCK_STATE;
 
 struct process;
@@ -28,5 +32,9 @@ void keyboard_set_capslock(struct keyboard *keyboard, KEYBOARD_CAPS_LOCK_STATE s
 KEYBOARD_CAPS_LOCK_STATE keyboard_get_capslock(struct keyboard *keyboard);
 void keyboard_push(char c);
 char keyboard_pop();
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // !KEYBOARD_H

@@ -4,6 +4,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define PF_X 0x01
 #define PF_W 0x02
 #define PF_R 0x04
@@ -128,5 +132,9 @@ struct elf32_sym // Symbol
 
 void *elf_get_entry_ptr(struct elf_header *elf_header);
 uint32_t elf_get_entry(struct elf_header *elf_header);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // !ELF_H

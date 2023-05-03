@@ -7,6 +7,10 @@
 #include "task.h"
 #include "config.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define PROCESS_FILETYPE_ELF 0
 #define PROCESS_FILETYPE_BINARY 1
 
@@ -78,5 +82,9 @@ int process_load_for_slot(const char *filename, struct process **process, int pr
 struct process *process_current();
 struct process *process_get(int process_id);
 int process_terminate(struct process *process);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // !PROCESS_H

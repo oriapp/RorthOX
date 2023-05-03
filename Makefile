@@ -1,8 +1,21 @@
-FILES = ./build/kernel.asm.o ./build/arch/sys.o ./build/arch/sys.asm.o ./build/kernel.o ./build/arch/tty.o ./build/idt/idt.asm.o ./build/idt/idt.o ./build/memory/memory.o ./build/io/io.asm.o ./build/loader/formats/elfloader.o ./build/loader/formats/elf.o ./build/gdt/gdt.o ./build/gdt/gdt.asm.o ./build/memory/heap/heap.o ./build/memory/heap/kheap.o ./build/memory/paging/paging.o ./build/memory/paging/paging.asm.o ./build/isr80h/isr80h.o ./build/isr80h/heap.o ./build/keyboard/keyboard.o ./build/keyboard/classic.o ./build/isr80h/io.o ./build/isr80h/process.o ./build/isr80h/misc.o ./build/disk/disk.o ./build/disk/streamer.o ./build/task/process.o ./build/task/task.o ./build/task/task.asm.o ./build/task/tss.asm.o ./build/fs/pparser.o ./build/fs/file.o ./build/fs/fat/fat16.o ./build/string/string.o
+FILES = ./build/kernel.asm.o ./build/arch/sys.o ./build/arch/pit.o ./build/arch/sys.asm.o ./build/kernel.o ./build/arch/tty.o ./build/idt/idt.asm.o ./build/idt/idt.o ./build/memory/memory.o ./build/io/io.asm.o ./build/loader/formats/elfloader.o ./build/loader/formats/elf.o ./build/gdt/gdt.o ./build/gdt/gdt.asm.o ./build/memory/heap/heap.o ./build/memory/heap/kheap.o ./build/memory/paging/paging.o ./build/memory/paging/paging.asm.o ./build/isr80h/isr80h.o ./build/isr80h/heap.o ./build/keyboard/keyboard.o ./build/keyboard/classic.o ./build/isr80h/io.o ./build/isr80h/process.o ./build/isr80h/misc.o ./build/disk/disk.o ./build/disk/streamer.o ./build/task/process.o ./build/task/task.o ./build/task/task.asm.o ./build/task/tss.asm.o ./build/fs/pparser.o ./build/fs/file.o ./build/fs/fat/fat16.o ./build/string/string.o
 INCLUDES = -I./kernel
-FLAGS = -g -ffreestanding -falign-jumps -falign-functions -falign-labels -falign-loops -fstrength-reduce -fomit-frame-pointer -finline-functions -Wno-unused-function -fno-builtin -Werror -Wno-unused-label -Wno-cpp -Wno-unused-parameter -nostdlib -nostartfiles -nodefaultlibs -Wall -O0 -Iinc
+FLAGS = -Wl,-Map,output.map -g -ffreestanding -falign-jumps -falign-functions -falign-labels -falign-loops -fstrength-reduce -fomit-frame-pointer -finline-functions -Wno-unused-function -fno-builtin -Werror -Wno-unused-label -Wno-cpp -Wno-unused-parameter -nostdlib -nostartfiles -nodefaultlibs -Wall -O0 -Iinc
+
+OS = $(shell uname -s)
+
+ifeq ($(OS),Linux)
+	detected_OS = Linux
+endif
+ifeq ($(OS),Darwin)
+	detected_OS = MacOS
+endif
+ifeq ($(OS),Windows)
+	detected_OS = Windows
+endif
 
 all: ./bin/boot.bin ./bin/kernel.bin user_programs
+	@echo "Operating System Compiling On: $(detected_OS)"
 	cd libc && $(MAKE)
 	rm -rf ./bin/os.bin
 	dd if=./bin/boot.bin >> ./bin/os.bin
@@ -11,16 +24,19 @@ all: ./bin/boot.bin ./bin/kernel.bin user_programs
 	# 1048576 = 1 MB 
 	# count=16 is 16 MB of null
 
-	# sudo mount -t vfat ./bin/os.bin ./bin/mnt/d
-	# Copy a file over
-	# sudo cp ./hello.txt ./bin/mnt/d
+ifneq ($(OS),Darwin)
+	sudo mount -t vfat ./bin/os.bin ./bin/mnt/d
+	echo "Copy a file over"
+	sudo cp ./hello.txt ./bin/mnt/d
 
-	# Copy files over
-	#sudo cp ./programs/blank/build/blank.elf ./bin/mnt/d
-	# sudo cp ./programs/shell/build/shell.elf ./bin/mnt/d
+	@echo "Copy files over"
+	sudo cp ./programs/blank/build/blank.elf ./bin/mnt/d
+	sudo cp ./programs/shell/build/shell.elf ./bin/mnt/d
+	sudo cp ./programs/deez/build/deez.elf ./bin/mnt/d
 
-	# sudo umount ./bin/mnt/d
-	# Remeber each sector size is 512!
+	sudo umount ./bin/mnt/d
+	@echo Remeber each sector size is 512!
+endif
 
 ./bin/kernel.bin: $(FILES)
 	i686-elf-ld -g -relocatable $(FILES) -o ./build/kernelfull.o
@@ -40,6 +56,9 @@ all: ./bin/boot.bin ./bin/kernel.bin user_programs
 
 ./build/arch/sys.o: ./kernel/arch/i686/sys.c
 	i686-elf-gcc $(INCLUDES) $(FLAGS) -std=gnu99 -c ./kernel/arch/i686/sys.c -o ./build/arch/sys.o
+
+./build/arch/pit.o: ./kernel/arch/i686/pit.c
+	i686-elf-gcc $(INCLUDES) $(FLAGS) -std=gnu99 -c ./kernel/arch/i686/pit.c -o ./build/arch/pit.o
 
 ./build/arch/sys.asm.o: ./kernel/arch/i686/sys.asm
 	nasm -f elf -g ./kernel/arch/i686/sys.asm -o ./build/arch/sys.asm.o
@@ -135,14 +154,17 @@ user_programs:
 	cd ./programs/stdlib && $(MAKE) all
 	cd ./programs/blank && $(MAKE) all
 	cd ./programs/shell && $(MAKE) all
+	cd ./programs/deez && $(MAKE) all
 
 user_programs_clean:
 	cd ./programs/stdlib && $(MAKE) clean
 	cd ./programs/blank && $(MAKE) clean
 	cd ./programs/shell && $(MAKE) clean
+	cd ./programs/deez && $(MAKE) clean
 
 clean: user_programs_clean
 	rm -rf ./bin/boot.bin
+	rm -rf ./bin/mnt/d/*
 	rm -rf ./bin/kernel.bin
 	rm -rf ./bin/os.bin
 	rm -rf ${FILES}

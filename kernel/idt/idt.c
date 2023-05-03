@@ -6,6 +6,8 @@
 #include "io/io.h"
 #include "status.h"
 #include "task/process.h"
+#include "include/kernel/sys.h"
+#include "include/kernel/time/pit.h"
 
 struct idt_desc idt_descriptors[POTONGOS_TOTAL_INTERRUPTS];
 struct idtr_desc idtr_descriptor;
@@ -57,16 +59,42 @@ void idt_set(int interrupt_no, void *address)
 
 void idt_handle_exception()
 {
-    process_terminate(task_current()->process);
+    //// AHHH NOT LINE THIS
+    /// process_terminate(task_current()->process);
     task_next();
 }
 
+static uint32_t jiffies = 0;
+static uint16_t hz = 0;
+
 void idt_clock()
 {
+    // Send an end-of-interrupt signal to the PIC to let it know that we have handled the interrupt
     outb(0x20, 0x20);
+    jiffies++;
 
     // Switch to the next task
     task_next();
+}
+
+#define INPUT_CLOCK_FREQUENCY 1193180
+#define TIMER_COMMAND 0x43
+#define TIMER_DATA 0x40
+#define TIMER_ICW 0x36
+
+void pit_sleep(int sec) {
+    uint32_t end = jiffies + sec * hz;
+    while(jiffies < end);
+}
+
+void set_frequency(uint16_t h) {
+    hz = h;
+    uint16_t divisor = INPUT_CLOCK_FREQUENCY / h;
+    // Init, Square Wave Mode, non-BCD, first transfer LSB then MSB
+    outb(TIMER_COMMAND, TIMER_ICW);
+    outb(TIMER_DATA, divisor & 0xFF);
+    outb(TIMER_DATA, (divisor >> 8) & 0xFF);
+
 }
 
 void idt_init()
@@ -80,8 +108,13 @@ void idt_init()
         idt_set(i, interrupt_pointer_table[i]);
     }
 
-    idt_set(0, idt_zero);
+    // idt_set(0, idt_zero);
     idt_set(0x80, isr80h_wrapper);
+
+    // set PIT (Programmable Interval Timer) frequency to 1000 Hz
+    // set_frequency(100);
+    // pit_configure(1000);
+    // pit_init();
 
     int i;
     for (i = 0; i < 0x20; i++)
@@ -93,6 +126,7 @@ void idt_init()
 
     // Load the interrupt descriptor table
     idt_load(&idtr_descriptor);
+    set_frequency(100);
 }
 
 int idt_register_interrupt_callback(int interrupt, INTERRUPT_CALLBACK_FUNCTION interrupt_callback)
@@ -110,12 +144,12 @@ void isr80h_register_command(int command_id, ISR80H_COMMAND command)
 {
     if (command_id < 0 || command_id >= POTONGOS_MAX_ISR80H_COMMANDS)
     {
-       panic("The command is out of bounds\n"); 
+       PANIC("The command is out of bounds\n", __FILE__, __LINE__); 
     }
 
     if (isr80h_commands[command_id])
     {
-        panic("You are attempting to overwrite an existing command\n");
+        PANIC("You are attempting to overwrite an existing command\n", __FILE__, __LINE__);
     }
 
     isr80h_commands[command_id] = command;

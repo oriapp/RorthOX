@@ -17,6 +17,7 @@ struct process_arguments
 };
 
 void print(const char *message);
+void printc(const char* str, size_t color);
 int potongos_getkey();
 void potongos_putchar(char c);
 

@@ -9,6 +9,7 @@
 #include "memory/paging/paging.h"
 #include "kernel.h"
 #include "loader/formats/elfloader.h" // abstract it like the vfs
+#include "include/kernel/sys.h"
 
 // The current process that is running
 struct process *current_process = 0;
@@ -206,7 +207,7 @@ void process_switch_to_any()
         }
     }
 
-    panic("No processes to switch to\n"); // Can load shell instead of panic
+    PANIC("No processes to switch to", __FILE__, __LINE__); // Can load shell instead of panic
 }
 
 static void process_unlink(struct process *process)
@@ -434,7 +435,7 @@ int process_map_memory(struct process *process)
         break;
 
     default:
-        panic("process_map_memory: Invalid filetype");
+        PANIC("process_map_memory: Invalid filetype", __FILE__, __LINE__);
         break;
     }
 

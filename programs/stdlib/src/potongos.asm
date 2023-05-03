@@ -11,6 +11,7 @@ global potongos_process_load_start:function
 global potongos_process_get_arguments:function
 global potongos_system:function
 global potongos_exit:function
+global printc:function
 
 ; void print(const char message);
 print:
@@ -20,6 +21,19 @@ print:
     mov eax, 1 ; Command print
     int 0x80
     add esp, 4
+
+    pop ebp
+    ret
+
+; void printc(const char* str, size_t color);
+printc:
+    push ebp
+    mov ebp, esp
+    push dword[ebp+8]
+    push dword[ebp+8]
+    mov eax, 10 ; Command printc
+    int 0x80
+    add esp, 8
 
     pop ebp
     ret

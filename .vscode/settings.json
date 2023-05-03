@@ -10,6 +10,16 @@
         "kheap.h": "c",
         "stdarg.h": "c",
         "sys.h": "c",
-        "cstdio": "c"
+        "cstdio": "c",
+        "pit.h": "c",
+        "stddef.h": "c",
+        "stdint.h": "c",
+        "stdlib.h": "c",
+        "string.h": "c",
+        "rtc.h": "c",
+        "classic.h": "c",
+        "vga.h": "c",
+        "process.h": "c",
+        "type_traits": "c"
     }
 }

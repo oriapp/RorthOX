@@ -1,6 +1,7 @@
 #!/bin/sh
 set -e
 
+. ./clean.sh
 . ./iso.sh
 export HOST=${HOST:-$(./default-host.sh)}
 

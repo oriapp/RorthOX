@@ -3,6 +3,11 @@
 
 #include "config.h"
 #include "memory/paging/paging.h"
+#include "sched/sched.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 struct interrupt_frame;
 
@@ -30,6 +35,11 @@ struct process;
 struct task
 {
     /*
+    *   Task Identifier
+    */
+    unsigned int id;
+
+    /*
     *   The page directory of the task
     */
     struct paging_4gb_chunk *page_directory;
@@ -43,6 +53,16 @@ struct task
     *   The process of the task
     */
     struct process *process;
+
+    /*
+    *   [Scheduler] Time required to complete the task
+    */
+    int burstTime;
+
+    /*
+    *   [Scheduler] Remaining time to complete the task
+    */
+    int remainingTime;
 
     /*
     *   The next task in the linked list
@@ -77,5 +97,9 @@ void task_current_save_state(struct interrupt_frame *frame);
 int copy_string_from_task(struct task *task, void *virtual, void *phys, int max);
 void *task_get_stack_item(struct task *task, int index);
 void *task_virtual_address_to_physical(struct task *task, void *virtual_address);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // !TASK_H

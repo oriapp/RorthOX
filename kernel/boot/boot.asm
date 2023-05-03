@@ -95,6 +95,7 @@ load32:                 ;   0 is the boot sector
     mov ecx, 100        ;   100 sectors of null
     mov edi, 0x0100000  ;   1MG (related to rep insw
     call ata_lba_read
+    ; call ata_lba_write
     jmp CODE_SEG: 0x0100000
 
 
@@ -159,6 +160,65 @@ ata_lba_read:
     pop ecx
     loop .next_sector
     ; End of reading sectors into memory
+    ret
+
+ata_lba_write:
+    ; Backup the LBA
+    mov ebx, eax
+
+    ; Send the highest 8 bits of the LBA to hard disk controller
+    shr eax, 24
+    or eax, 0xE0    ; Select the master drive (there is slave and master)
+    mov dx, 0x1F6
+    out dx, al
+
+    ; Send the total sectors to write
+    mov eax, ecx
+    mov dx, 0x1F2
+    out dx, al
+
+    ; Send more bits of the LBA
+    mov eax, ebx
+    mov dx, 0x1F3
+    out dx, al
+
+    ; Send more bits of the LBA
+    mov dx, 0x1F4
+    mov eax, ebx
+    shr eax, 8
+    out dx, al
+
+    ; Send upper 16 bits of the LBA
+    mov dx, 0x1F5
+    mov eax, ebx
+    shr eax, 16
+    out dx, al
+
+    ; Send the command to write sectors
+    mov dx, 0x1F7
+    mov al, 0x30    ; Command for writing sectors
+    out dx, al
+
+    ; Write all sectors from memory
+.next_sector:
+    push ecx
+
+    ; Check if we need to write
+.try_again:
+    mov dx, 0x1F7
+    in al, dx
+    test al, 8
+    jz .try_again
+
+    ; We need to write 256 words at a time
+    mov ecx, 256
+    mov dx, 0x1F0
+    rep outsw    ; Output word from memory location specified in DS:(E)SI to I/O port specified in DX
+    ; Writing to port 0x1F0 from "0x0100000" (memory)
+    pop ecx
+    loop .next_sector
+
+    ; End of writing sectors to disk
     ret
 
 times 510-($ - $$) db 0

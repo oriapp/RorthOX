@@ -3,6 +3,10 @@
 #include "pparser.h"
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef unsigned int FILE_SEEK_MODE;
 
 enum {
@@ -80,5 +84,9 @@ int fclose(int fd);
 
 void fs_insert_filesystem(struct filesystem *filesystem);
 struct filesystem *fs_resolve(struct disk *disk);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // !FILE_H

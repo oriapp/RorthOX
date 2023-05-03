@@ -2,7 +2,6 @@
 #include "../../kernel/kernel.h"
 
 #define UNUSED(x) (void)(x)
-#define MAINFILE
 
 #if defined(__is_libk)
 #include "../../kernel/include/kernel/tty.h"

@@ -4,6 +4,8 @@
 #define KERNEL_CODE_SELECTOR 0x08
 #define KERNEL_DATA_SELECTOR 0x10
 
+#define DEBUG true  // Debug Features
+#define IODBG false // System I/O Debug
 
 #define POTONGOS_TOTAL_INTERRUPTS 512
 

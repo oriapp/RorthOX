@@ -2,6 +2,10 @@
 #define TASKSWITCHSEGMENT_H
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
 When we go back to kernel land the processor
 will be looking to the tss and they will pull out the kernel stack pointer on the kernel stack segment
@@ -39,5 +43,9 @@ struct tss
 } __attribute__((packed));
 
 void tss_load(int tss_segment);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // !TASKSWITCHSEGMENT_H

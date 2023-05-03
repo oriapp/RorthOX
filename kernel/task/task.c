@@ -8,9 +8,13 @@
 #include "memory/paging/paging.h"
 #include "loader/formats/elfloader.h"
 #include "idt/idt.h"
+#include "include/kernel/sys.h"
 
 // The current task that is running
 struct task *current_task = 0;
+
+// Keep count of the tasks, night be useful (?)
+static unsigned int tasks = 0;
 
 // Task linked list
 struct task *task_tail = 0;
@@ -25,6 +29,7 @@ struct task *task_current()
 
 struct task *task_new(struct process *process)
 {
+    int burstTime = 1000;
     int res = 0;
     struct task *task = kzalloc(sizeof(struct task));
     if (!task)
@@ -50,6 +55,10 @@ struct task *task_new(struct process *process)
     task_tail->next = task;
     task->prev = task_tail;
     task_tail = task;
+
+    task->id = tasks++;
+    task->burstTime = burstTime;
+    task->remainingTime = burstTime;
 
 out:
     if (ISERR(res))
@@ -109,7 +118,7 @@ void task_next()
     struct task *next_task = task_get_next();
     if (!next_task)
     {
-        panic("No more tasks\n");
+        PANIC("No more tasks\n", __FILE__, __LINE__);
     }
 
     task_switch(next_task);
@@ -180,7 +189,7 @@ void task_current_save_state(struct interrupt_frame *frame)
 {
     if (!task_current())
     {
-        panic("No current task to save\n");
+        PANIC("No current task to save\n", __FILE__, __LINE__);
     }
 
     struct task *task = task_current();
@@ -215,7 +224,7 @@ void task_run_first_ever_task()
 {
     if (!current_task)
     {
-        panic("task_run_first_ever_task(): No current task exists!\n");
+        PANIC("task_run_first_ever_task(): No current task exists!\n", __FILE__, __LINE__);
     }
 
     task_switch(task_head);

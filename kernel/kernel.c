@@ -4,7 +4,7 @@
 // #include "../libc/include/stdio.h" // Should not use that.
 #include "include/kernel/tty.h" // Use that.
 #include "include/kernel/sys.h" // Use that.
-#include "stdio/io.h"
+#include "include/kernel/time/pit.h"
 #include "idt/idt.h"
 #include "io/io.h"
 #include "memory/heap/kheap.h"
@@ -23,14 +23,15 @@
 #include "gdt/gdt.h"
 #include "config.h"
 #include "status.h"
+#include "time/rtc/rtc.h"
 
-#define UNUSED(x) (void)(x)
+// #define UNUSED(x) (void)(x)
 
 static struct paging_4gb_chunk *kernel_chunk = 0;
 
 void panic(const char *msg)
 {
-    PANIC(msg);
+    PANIC(msg, __FILE__, __LINE__);
 }
 
 // switch the page directory to the kernel page directory
@@ -52,9 +53,14 @@ struct gdt_structured gdt_structured[POTONGOS_TOTAL_GDT_SEGMENTS] = {
     {.base = (uint32_t)&tss, .limit = sizeof(tss), .type = 0xE9},   // TSS Segment
 };
 
+void cas()
+{
+    kernel_main();
+}
+
 void kernel_main()
 {
-    terminal_initialize();
+    terminal_initialize(KERNEL_BACKGROUND_COLOR);
     // print("Hello World!\n");
     // video_mem[0] = 0x0341;  // This is reversed because endianness
     // video_mem[0] = terminal_make_char('B', 15);
@@ -74,7 +80,7 @@ void kernel_main()
 
     // Search and initialize the disks
     disk_search_and_init();
-    disk_search_and_init();
+    // disk_search_and_init();
 
     // Initialize the interrupt descriptor table
     idt_init();
@@ -103,37 +109,49 @@ void kernel_main()
     keyboard_init();
 
     // TODO: implement this in the coller way
-    dbg_puts("\33[31mThis is a debug message!\033[0m\n");
+    // pit_sleep(1000);
+    dbg_puts("\33[31m");
+    dbg_puts("Thats cool");
+    dbg_puts("\033[0m\n");
 
     struct process *process = 0;
-    int res = process_load_switch("0:/blank.elf", &process);
+    int res = process_load_switch("0:/shell.elf", &process);
     if (res != POTONGOS_ALL_OK)
     {
-        panic("Failed to load blank.elf\n");
+        panic("Failed to load shell.elf\n");
     }
 
-    struct command_argument arg;
-    arg.next = 0x00;
-    strcpy(arg.argument, "A");
+    // int fd = fopen("0:/hello.txt", "r");
+    // if (fd)
+    // {
+    //     struct file_stat s;
+    //     char buff[26];
+    //     fread(buff, 26, 1, fd);
+    //     print(buff);
+    //     print("Lol\n");
+    //     fstat(fd, &s);
+    //     fclose(fd);
+    // }
 
-    process_inject_arguments(process, &arg);
+    printc(";- >", VGA_COLOR_LIGHT_CYAN);
+    printf("%s", __TIMESTAMP__);
+    printc("< -;\n", VGA_COLOR_LIGHT_MAGENTA);
+    printtime();
 
-    // Another process
-    res = process_load_switch("0:/blank.elf", &process);
-    if (res != POTONGOS_ALL_OK)
-    {
-        panic("Failed to load blank.elf\n");
-    }
+    // pit_sleep(1000);
 
-    strcpy(arg.argument, "B");
-    arg.next = 0x00;
-    process_inject_arguments(process, &arg);
+    // print(gettime());
 
     task_run_first_ever_task();
     print("Hello savta!\n");
 
     // Enable the system interrupts
     // enable_interrupts();
+
+    // pit_configure(100);
+    // pit_init();
+    pit_sleep(100);
+    print("Hello\n");
 
     while(1){}
 }

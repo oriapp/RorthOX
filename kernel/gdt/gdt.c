@@ -1,11 +1,12 @@
 #include "gdt.h"
-#include "kernel.h"
+// #include "kernel.h"
+#include "include/kernel/sys.h"
 
 void encodeGdtEntry(uint8_t *targer, struct gdt_structured source)
 {
     if ((source.limit > 65536) && (source.limit & 0xFFF) != 0xFFF)
     {
-        panic("encodeGdtEntry: Invalid argument\n");
+        PANIC("encodeGdtEntry: Invalid argument\n", __FILE__, __LINE__);
     }
 
     targer[6] = 0x40;

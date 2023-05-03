@@ -3,30 +3,31 @@
 
 #include <stddef.h>
 #include <stdint.h>
-
-typedef enum {
-    ANSI_COLOR_RED,
-    ANSI_COLOR_GREEN,
-    ANSI_COLOR_YELLOW,
-    ANSI_COLOR_BLUE,
-    ANSI_COLOR_MAGENTA,
-    ANSI_COLOR_CYAN,
-    ANSI_COLOR_RESET
-} ansi_color_t;
+#include "vga.h"
 
 
-#ifdef MAINFILE
-    static uint16_t *video_mem = 0;
-    static uint16_t terminal_row = 0;
-    static uint16_t terminal_col = 0;
+#ifdef __cplusplus
+extern "C" {
 #endif
 
-uint16_t terminal_make_char(char c, char colour);
+
+#pragma GCC diagnostic ignored "-Wunused-variable" // Ignore unused vars
+static uint16_t *video_mem = 0;
+static uint16_t terminal_row = 0;
+static uint16_t terminal_col = 0;
+static uint8_t terminal_color = 0;
+static uint8_t termianl_background_color = 0;
+#pragma GCC diagnostic pop // POP ignore unused vars
+
 void terminal_putchar(int x, int y, char c, char colour);
 void terminal_backspace();
 void terminal_writechar(char c, char colour);
-void terminal_initialize();
+void update_cursor(uint8_t x, uint8_t y);
+void terminal_panic(vga_color_t bg_colour);
+void terminal_initialize(vga_color_t bg_colour);
 void print(const char* str);
+int printf(const char *format, ...);
+void printc(const char* str, unsigned int color);
 
 /*
 * Debug I/O
@@ -34,9 +35,8 @@ void print(const char* str);
 void dbg_putc(char c);
 void dbg_puts(const char *str);
 
-// void terminal_initialize(void);
-// void terminal_putchar(char c);
-// void terminal_write(const char* data, size_t size);
-// void terminal_writestring(const char* data);
+#ifdef __cplusplus
+}
+#endif
 
 #endif

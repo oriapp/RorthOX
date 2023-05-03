@@ -3,6 +3,7 @@
 global _start
 global kernel_registers
 extern kernel_main
+extern cas
 CODE_SEG equ 0x08
 DATA_SEG equ 0x10
 
@@ -34,8 +35,8 @@ _start:
     mov al, 00000001b  ; Put PIC in x86 mode
     out 0x21, al
     ; End remap of the master PIC
-    
-    call kernel_main
+
+    call cas
 
     jmp $
 

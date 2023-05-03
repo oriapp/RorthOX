@@ -6,6 +6,10 @@
 #include "elf.h"
 #include "config.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct elf_file
 {
     char filename[POTONGOS_MAX_PATH];
@@ -41,4 +45,9 @@ struct elf32_shdr *elf_section(struct elf_header *header, int index);
 void *elf_phdr_phys_address(struct elf_file *file, struct elf32_phdr *phdr);
 int elf_load(const char *filename, struct elf_file **file_out);
 void elf_close(struct elf_file *file);
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif // !ELFLOADER_H

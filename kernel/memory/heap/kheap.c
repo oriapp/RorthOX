@@ -53,7 +53,7 @@ Resources:
 Tets:
     1. Build
     2. "gdb"
-    2.2. "add-symbol-file ../bin/kernelfull.o 0x100000"
+    2.2. "add-symbol-file ./bin/kernelfull.o 0x100000"
     3. "target remote |  qemu-system-i386 -hda ./build/os.bin -S -gdb stdio"
         The reason we use i386 this time is because we use
         32-bit symbols cause a few problems (sometimes).
