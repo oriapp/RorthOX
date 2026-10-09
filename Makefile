@@ -1,6 +1,16 @@
 FILES = ./build/kernel.asm.o ./build/arch/sys.o ./build/arch/pit.o ./build/arch/sys.asm.o ./build/kernel.o ./build/arch/tty.o ./build/idt/idt.asm.o ./build/idt/idt.o ./build/memory/memory.o ./build/io/io.asm.o ./build/loader/formats/elfloader.o ./build/loader/formats/elf.o ./build/gdt/gdt.o ./build/gdt/gdt.asm.o ./build/memory/heap/heap.o ./build/memory/heap/kheap.o ./build/memory/paging/paging.o ./build/memory/paging/paging.asm.o ./build/isr80h/isr80h.o ./build/isr80h/heap.o ./build/keyboard/keyboard.o ./build/keyboard/classic.o ./build/isr80h/io.o ./build/isr80h/process.o ./build/isr80h/misc.o ./build/disk/disk.o ./build/disk/streamer.o ./build/task/process.o ./build/task/task.o ./build/task/task.asm.o ./build/task/tss.asm.o ./build/fs/pparser.o ./build/fs/file.o ./build/fs/fat/fat16.o ./build/string/string.o
 INCLUDES = -I./kernel
-FLAGS = -Wl,-Map,output.map -g -ffreestanding -falign-jumps -falign-functions -falign-labels -falign-loops -fstrength-reduce -fomit-frame-pointer -finline-functions -Wno-unused-function -fno-builtin -Werror -Wno-unused-label -Wno-cpp -Wno-unused-parameter -nostdlib -nostartfiles -nodefaultlibs -Wall -O0 -Iinc
+# -MMD -MP: let the compiler record header dependencies (*.d) so editing a header rebuilds what uses it.
+FLAGS = -g -ffreestanding -falign-jumps -falign-functions -falign-labels -falign-loops -fstrength-reduce -fomit-frame-pointer -finline-functions -Wno-unused-function -fno-builtin -Werror -Wno-unused-label -Wno-cpp -Wno-unused-parameter -nostdlib -nostartfiles -nodefaultlibs -Wall -O0 -Iinc -MMD -MP
+
+# The boot sector loads the kernel from the sectors right after it. The FAT16 "reserved sectors"
+# area (ReservedSectors = 200 in boot.asm) holds the boot sector plus the kernel, so the kernel
+# may use at most 199 sectors. The same number is passed to boot.asm, and kernel.bin is checked
+# against it so it can never be silently truncated.
+KERNEL_SECTORS = 199
+
+# Files copied into the FAT16 filesystem of the disk image (with mtools, no root needed).
+IMAGE_FILES = ./programs/shell/build/shell.elf ./programs/blank/build/blank.elf
 
 OS = $(shell uname -s)
 
@@ -16,34 +26,28 @@ endif
 
 all: ./bin/boot.bin ./bin/kernel.bin user_programs
 	@echo "Operating System Compiling On: $(detected_OS)"
-	cd libc && $(MAKE)
-	rm -rf ./bin/os.bin
-	dd if=./bin/boot.bin >> ./bin/os.bin
-	dd if=./bin/kernel.bin >> ./bin/os.bin
-	dd if=/dev/zero bs=1048576 count=16 >> ./bin/os.bin
-	# 1048576 = 1 MB 
-	# count=16 is 16 MB of null
-
-ifneq ($(OS),Darwin)
-	sudo mount -t vfat ./bin/os.bin ./bin/mnt/d
-	echo "Copy a file over"
-	sudo cp ./hello.txt ./bin/mnt/d
-
-	@echo "Copy files over"
-	sudo cp ./programs/blank/build/blank.elf ./bin/mnt/d
-	sudo cp ./programs/shell/build/shell.elf ./bin/mnt/d
-	sudo cp ./programs/deez/build/deez.elf ./bin/mnt/d
-
-	sudo umount ./bin/mnt/d
-	@echo Remeber each sector size is 512!
-endif
+	rm -f ./bin/os.bin
+	cat ./bin/boot.bin ./bin/kernel.bin > ./bin/os.bin
+	# Append 16 MiB of zeroes: the FAT tables, root directory and data area of the filesystem.
+	dd if=/dev/zero bs=1048576 count=16 status=none >> ./bin/os.bin
+	# The FAT16 layout comes from the BPB in boot.asm. Mark FAT entries 0 and 1 (media byte
+	# 0xF8, end-of-chain) in both FAT copies so tools see a valid, empty filesystem.
+	printf '\370\377\377\377' | dd of=./bin/os.bin bs=512 seek=200 conv=notrunc status=none
+	printf '\370\377\377\377' | dd of=./bin/os.bin bs=512 seek=456 conv=notrunc status=none
+	mcopy -i ./bin/os.bin $(IMAGE_FILES) ::
+	mdir -i ./bin/os.bin ::
 
 ./bin/kernel.bin: $(FILES)
 	i686-elf-ld -g -relocatable $(FILES) -o ./build/kernelfull.o
-	i686-elf-gcc $(FLAGS) -T ./kernel/linker.ld -o ./bin/kernel.bin -ffreestanding -O0 -nostdlib ./build/kernelfull.o
+	i686-elf-gcc $(FLAGS) -Wl,-Map,./build/kernel.map -T ./kernel/linker.ld -o ./bin/kernel.bin -ffreestanding -O0 -nostdlib ./build/kernelfull.o
+	@size=$$(wc -c < $@); max=$$(($(KERNEL_SECTORS) * 512)); \
+	if [ $$size -gt $$max ]; then \
+		echo "error: kernel.bin is $$size bytes but the bootloader loads only $$max ($(KERNEL_SECTORS) sectors)"; \
+		rm -f $@; exit 1; \
+	fi; echo "kernel.bin: $$size of $$max bytes"
 
-./bin/boot.bin: ./kernel/boot/boot.asm
-	nasm -f bin ./kernel/boot/boot.asm -o ./bin/boot.bin
+./bin/boot.bin: ./kernel/boot/boot.asm Makefile
+	nasm -f bin -DKERNEL_SECTORS=$(KERNEL_SECTORS) ./kernel/boot/boot.asm -o ./bin/boot.bin
 
 ./build/kernel.asm.o: ./kernel/kernel.asm
 	nasm -f elf -g ./kernel/kernel.asm -o ./build/kernel.asm.o
@@ -154,19 +158,19 @@ user_programs:
 	cd ./programs/stdlib && $(MAKE) all
 	cd ./programs/blank && $(MAKE) all
 	cd ./programs/shell && $(MAKE) all
-	cd ./programs/deez && $(MAKE) all
 
 user_programs_clean:
 	cd ./programs/stdlib && $(MAKE) clean
 	cd ./programs/blank && $(MAKE) clean
 	cd ./programs/shell && $(MAKE) clean
-	cd ./programs/deez && $(MAKE) clean
 
 clean: user_programs_clean
 	rm -rf ./bin/boot.bin
-	rm -rf ./bin/mnt/d/*
 	rm -rf ./bin/kernel.bin
 	rm -rf ./bin/os.bin
-	rm -rf ${FILES}
-	rm -rf ./build/kernelfull.o
-	cd libc && $(MAKE) clean
+	rm -rf ${FILES} $(FILES:.o=.d)
+	rm -rf ./build/kernelfull.o ./build/kernel.map
+
+.PHONY: all user_programs user_programs_clean clean
+
+-include $(FILES:.o=.d)
