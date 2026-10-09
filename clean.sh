@@ -1,10 +1,5 @@
 #!/bin/sh
+# Remove all build outputs.
 set -e
-
-. ./config.sh
-
-for folder in ./*/; do
-    if [ -f "$folder/Makefile" ]; then
-        ($MAKE clean)
-    fi
-done
+cd "$(dirname "$0")"
+make clean

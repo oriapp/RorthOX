@@ -1,7 +1,9 @@
 #!/bin/sh
-# set -e
+# Not implemented yet: a GRUB/multiboot ISO image (the kernel has no multiboot header).
+# For now this only builds the raw disk image bin/os.bin.
+set -e
 
-. ./build.sh
+./build.sh
 
 # DREAM ON, DREAM ON
 
