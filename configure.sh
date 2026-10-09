@@ -1,112 +1,118 @@
-#!/bin/bash
+#!/usr/bin/env bash
+#
+# Builds the i686-elf cross toolchain (binutils + GCC, C only) that RorthOX needs,
+# following https://wiki.osdev.org/GCC_Cross-Compiler.
+#
+# Install the system packages first (this is the only step that needs sudo):
+#
+#   sudo apt-get install -y build-essential bison flex libgmp3-dev libmpc-dev \
+#        libmpfr-dev texinfo nasm qemu-system-x86 mtools
+#
+# Then run (no sudo):   ./configure.sh
+# And add the toolchain to your PATH:   export PATH="$HOME/opt/cross/bin:$PATH"
+#
+# Environment overrides: PREFIX (install dir), SRC_DIR (download/build dir),
+# JOBS (parallel make jobs), GNU_MIRROR, FORCE=1 (rebuild even if installed).
 
-set +e
+set -euo pipefail
 
-# Set the PREFIX and TARGET variables and add the PREFIX/bin directory to PATH
-PREFIX="$HOME/opt/cross"
 TARGET=i686-elf
-PATH="$PREFIX/bin:$PATH"
+BINUTILS_VERSION=2.42
+GCC_VERSION=13.2.0
+# sha256 of the official tarballs (GPG signatures verified against gnu-keyring.gpg).
+BINUTILS_SHA256=f6e4d41fd5fc778b06b7891457b3620da5ecea1006c6a4a41ae998109f85a800
+GCC_SHA256=e275e76442a6067341a27f04c5c6b83d8613144004c0413528863dc6b5c743da
 
-# Install the necessary packages
-echo "Installing necessary packages..."
-sudo apt install build-essential
-sudo apt install bison
-sudo apt install flex
-sudo apt install libgmp3-dev
-sudo apt install libmpc-dev
-sudo apt install libmpfr-dev
-sudo apt install texinfo
-sudo apt install libcloog-isl-dev
-sudo apt install libisl-dev
+PREFIX="${PREFIX:-$HOME/opt/cross}"
+SRC_DIR="${SRC_DIR:-$HOME/src/rorthox-toolchain}"
+JOBS="${JOBS:-$(nproc)}"
+GNU_MIRROR="${GNU_MIRROR:-https://ftp.gnu.org/gnu}"
 
-# Create a src directory and go to it
-echo "Creating src directory and entering it..."
-cd $HOME
-mkdir -p src
-cd src
+export PATH="$PREFIX/bin:$PATH"
 
-# Download and extract the binutils source code, then create and enter a build-binutils directory
-echo "Downloading and extracting binutils source code..."
-wget --progress=bar "https://ftp.gnu.org/gnu/binutils/binutils-2.37.tar.xz"
-tar -xf binutils-2.37.tar.xz
-rm -rf binutils-2.37.tar.xz
-echo "Creating build-binutils directory and entering it..."
-mkdir -p build-binutils
-cd build-binutils
+log() { printf '\n==> %s\n' "$*"; }
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-# Configure, build, and install binutils
-echo "Configuring binutils..."
-../binutils-2.37/configure --target=$TARGET --prefix="$PREFIX" --with-sysroot --disable-nls --disable-werror
-echo "Building binutils..."
-make
-echo "Installing binutils..."
-make install
+check_host_tools() {
+    local missing=()
+    for tool in gcc g++ make bison flex makeinfo tar xz sha256sum curl; do
+        command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+    done
+    if ! printf '#include <gmp.h>\n#include <mpfr.h>\n#include <mpc.h>\n' | gcc -E -x c - >/dev/null 2>&1; then
+        missing+=("libgmp/libmpfr/libmpc headers")
+    fi
+    if [ "${#missing[@]}" -ne 0 ]; then
+        die "missing host tools: ${missing[*]}. See the apt-get line at the top of this script."
+    fi
+}
 
-# Check if the $TARGET-as binary is in the PATH
-echo "Checking if $TARGET-as is in the PATH..."
-which -- $TARGET-as || echo "$TARGET-as is not in the PATH"
+# fetch <url> <file> <sha256>
+fetch() {
+    local url="$1" file="$2" sum="$3"
+    if [ ! -f "$file" ]; then
+        log "Downloading $file"
+        curl -fL --retry 3 -o "$file.part" "$url"
+        mv "$file.part" "$file"
+    fi
+    echo "$sum  $file" | sha256sum -c - || die "checksum mismatch for $file (delete it and retry)"
+}
 
-# Go back to the src directory and download and extract the GCC source code, then create and enter a build-gcc directory
-echo "Returning to src directory and downloading and extracting GCC source code..."
-cd $HOME/src
-wget --progress=bar "https://bigsearcher.com/mirrors/gcc/releases/gcc-10.2.0/gcc-10.2.0.tar.xz"
-tar -xf gcc-10.2.0.tar.xz
-rm -rf gcc-10.2.0.tar.xz
-echo "Creating build-gcc directory and entering it..."
-mkdir -p build-gcc
-cd build-gcc
+build_binutils() {
+    log "Building binutils $BINUTILS_VERSION"
+    fetch "$GNU_MIRROR/binutils/binutils-$BINUTILS_VERSION.tar.xz" \
+          "binutils-$BINUTILS_VERSION.tar.xz" "$BINUTILS_SHA256"
+    rm -rf "binutils-$BINUTILS_VERSION" build-binutils
+    tar -xf "binutils-$BINUTILS_VERSION.tar.xz"
+    mkdir build-binutils
+    (
+        cd build-binutils
+        "../binutils-$BINUTILS_VERSION/configure" --target="$TARGET" --prefix="$PREFIX" \
+            --with-sysroot --disable-nls --disable-werror
+        make -j"$JOBS"
+        make install
+    )
+}
 
-# Configure, build, and install GCC
-echo "Configuring GCC..."
-../gcc-10.2.0/configure --target=$TARGET --prefix="$PREFIX" --disable-nls --enable-languages=c,c++ --without-headerss
-echo "Building GCC..."
-make all-gcc
-make all-target-libgcc
-echo "Installing GCC..."
-make install-gcc
-make install-target-libgcc
+build_gcc() {
+    log "Building GCC $GCC_VERSION"
+    command -v "$TARGET-as" >/dev/null || die "$TARGET-as is not in PATH; binutils must be installed first"
+    fetch "$GNU_MIRROR/gcc/gcc-$GCC_VERSION/gcc-$GCC_VERSION.tar.xz" \
+          "gcc-$GCC_VERSION.tar.xz" "$GCC_SHA256"
+    rm -rf "gcc-$GCC_VERSION" build-gcc
+    tar -xf "gcc-$GCC_VERSION.tar.xz"
+    mkdir build-gcc
+    (
+        cd build-gcc
+        "../gcc-$GCC_VERSION/configure" --target="$TARGET" --prefix="$PREFIX" \
+            --disable-nls --enable-languages=c --without-headers
+        make -j"$JOBS" all-gcc all-target-libgcc
+        make install-gcc install-target-libgcc
+    )
+}
 
-# Check the version of the installed GCC compiler
-echo "Checking GCC version..."
-$HOME/opt/cross/bin/$TARGET-gcc --version
+main() {
+    check_host_tools
+    mkdir -p "$SRC_DIR" "$PREFIX"
+    cd "$SRC_DIR"
 
-# Add the PREFIX/bin directory to the PATH
-echo "Updating PATH to include $PREFIX/bin..."
-export
+    if [ "${FORCE:-0}" != 1 ] && "$TARGET-ld" --version 2>/dev/null | grep -q " $BINUTILS_VERSION\$"; then
+        log "binutils $BINUTILS_VERSION already installed in $PREFIX (FORCE=1 to rebuild)"
+    else
+        build_binutils
+    fi
 
+    if [ "${FORCE:-0}" != 1 ] && [ "$("$TARGET-gcc" -dumpversion 2>/dev/null)" = "$GCC_VERSION" ]; then
+        log "GCC $GCC_VERSION already installed in $PREFIX (FORCE=1 to rebuild)"
+    else
+        build_gcc
+    fi
 
-# sudo apt install build-essential bison flex libgmp3-dev libmpc-dev libmpfr-dev texinfo libcloog-isl-dev libisl-dev 
-# export PREFIX="$HOME/opt/cross"
-# export TARGET=i686-elf
-# export PATH="$PREFIX/bin:$PATH"
-# cd $HOME
-# mkdir src
-# cd $HOME/src
-# mkdir build-binutils
+    log "Done"
+    "$TARGET-gcc" --version | head -n1
+    "$TARGET-ld" --version | head -n1
+    echo
+    echo "Add the toolchain to your PATH (e.g. in ~/.bashrc):"
+    echo "  export PATH=\"$PREFIX/bin:\$PATH\""
+}
 
-# wget --progress=bar "https://ftp.gnu.org/gnu/binutils/binutils-2.37.tar.xz"
-# tar -xf binutils-2.37.tar.xz
-# rm -rf binutils-2.37.tar.xz
-
-# cd build-binutils
-# ../binutils-2.37/configure --target=$TARGET --prefix="$PREFIX" --with-sysroot --disable-nls --disable-werror
-# make
-# make install
-
-# cd $HOME/src
-# which -- $TARGET-as || echo $TARGET-as is not in the PATH
-
-# wget --progress=bar "https://bigsearcher.com/mirrors/gcc/releases/gcc-10.2.0/gcc-10.2.0.tar.xz"
-# tar -xf gcc-10.2.0.tar.xz
-# rm -rf gcc-10.2.0.tar.xz
-
-# mkdir build-gcc
-# cd build-gcc
-# ../gcc-10.2.0/configure --target=$TARGET --prefix="$PREFIX" --disable-nls --enable-languages=c,c++ --without-headerss
-# make all-gcc
-# make all-target-libgcc
-# make install-gcc
-# make install-target-libgcc
-
-# $HOME/opt/cross/bin/$TARGET-gcc --version
-# export PATH="$HOME/opt/cross/bin:$PATH"
+main "$@"

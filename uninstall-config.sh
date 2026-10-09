@@ -1,23 +1,19 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Removes the cross toolchain installed by ./configure.sh and its download/build directory.
+# System packages installed with apt are left alone (other software may need them).
+set -euo pipefail
 
-set +e
+PREFIX="${PREFIX:-$HOME/opt/cross}"
+SRC_DIR="${SRC_DIR:-$HOME/src/rorthox-toolchain}"
 
-# Set the PREFIX and TARGET variables and add the PREFIX/bin directory to PATH
-PREFIX="$HOME/opt/cross"
-TARGET=i686-elf
-PATH="$PREFIX/bin:$PATH"
+echo "This removes:"
+echo "  $PREFIX"
+echo "  $SRC_DIR"
+read -r -p "Continue? [y/N] " answer
+case "$answer" in
+    y|Y) ;;
+    *) echo "Aborted."; exit 1 ;;
+esac
 
-# Uninstall the packages
-echo "Uninstalling packages..."
-sudo apt remove build-essential bison flex libgmp3-dev libmpc-dev libmpfr-dev texinfo libcloog-isl-dev libisl-dev
-
-# Remove the PREFIX directory
-echo "Removing $PREFIX directory..."
-rm -rf $PREFIX
-
-# Remove the extracted source code directories and build directories
-echo "Removing source code and build directories..."
-rm -rf $HOME/src/binutils-2.37 $HOME/src/gcc-10.2.0 $HOME/src/build-binutils $HOME/src/build-gcc
-
-# Confirm the uninstallation
-echo "Uninstallation completed. Packages and directories have been removed."
+rm -rf "$PREFIX" "$SRC_DIR"
+echo "Removed. To remove the apt packages too, see the apt-get line in configure.sh."
