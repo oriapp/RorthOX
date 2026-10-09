@@ -15,7 +15,7 @@ extern "C" {
 void kernel_main();
 void print(const char* str);
 // void terminal_writechar(char c, char colour);
-void panic(const char *msg);
+void panic(const char *msg) __attribute__((noreturn));
 void kernel_page();
 void kernel_registers();
 
