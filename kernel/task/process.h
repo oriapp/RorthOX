@@ -37,13 +37,13 @@ struct process
     // The process ID
     uint16_t id;
     
-    char filename[POTONGOS_MAX_PATH];
+    char filename[RORTHOX_MAX_PATH];
     
     // The main process task
     struct task *task;
 
     // The memory (malloc) allocations of the process
-    struct process_allocation allocations[POTONGOS_MAX_PROGRAM_ALLOCATIONS]; // We will be able to free all allocations for the program
+    struct process_allocation allocations[RORTHOX_MAX_PROGRAM_ALLOCATIONS]; // We will be able to free all allocations for the program
 
     PROCESS_FILETYPE filetype;
 
@@ -62,7 +62,7 @@ struct process
 
     struct keyboard_buffer
     {
-        char buffer[POTONGOS_KEYBOARD_BUFFER_SIZE];
+        char buffer[RORTHOX_KEYBOARD_BUFFER_SIZE];
         int tail;
         int head;
     } keyboard;

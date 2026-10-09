@@ -43,8 +43,8 @@ void kernel_page()
 }
 
 struct tss tss;
-struct gdt gdt_real[POTONGOS_TOTAL_GDT_SEGMENTS];
-struct gdt_structured gdt_structured[POTONGOS_TOTAL_GDT_SEGMENTS] = {
+struct gdt gdt_real[RORTHOX_TOTAL_GDT_SEGMENTS];
+struct gdt_structured gdt_structured[RORTHOX_TOTAL_GDT_SEGMENTS] = {
     {.base = 0x00, .limit = 0x00, .type = 0x00},                    // NULL Segment
     {.base = 0x00, .limit = 0xffffffff, .type = 0x9A},              // Kernel Code Segment
     {.base = 0x00, .limit = 0xffffffff, .type = 0x92},              // Kernel Data Segment
@@ -67,7 +67,7 @@ void kernel_main()
     // Read mote about endianness: https://en.wikipedia.org/wiki/Endianness
 
     memset(gdt_real, 0x00, sizeof(gdt_real));
-    gdt_structured_to_gdt(gdt_real, gdt_structured, POTONGOS_TOTAL_GDT_SEGMENTS);
+    gdt_structured_to_gdt(gdt_real, gdt_structured, RORTHOX_TOTAL_GDT_SEGMENTS);
 
     // Load the gdt
     gdt_load(gdt_real, sizeof(gdt_real));
@@ -116,7 +116,7 @@ void kernel_main()
 
     struct process *process = 0;
     int res = process_load_switch("0:/shell.elf", &process);
-    if (res != POTONGOS_ALL_OK)
+    if (res != RORTHOX_ALL_OK)
     {
         panic("Failed to load shell.elf\n");
     }

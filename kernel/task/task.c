@@ -39,7 +39,7 @@ struct task *task_new(struct process *process)
     }
 
     res = task_init(task, process);
-    if (res != POTONGOS_ALL_OK)
+    if (res != RORTHOX_ALL_OK)
     {
         goto out;
     }
@@ -241,7 +241,7 @@ int task_init(struct task *task, struct process *process)
         return -EIO;
     }
 
-    task->registers.ip = POTONGOS_PROGRAM_VIRTUAL_ADDRESS;
+    task->registers.ip = RORTHOX_PROGRAM_VIRTUAL_ADDRESS;
     if (process->filetype == PROCESS_FILETYPE_ELF)
     {
         task->registers.ip = elf_header(process->elf_file)->e_entry;
@@ -249,7 +249,7 @@ int task_init(struct task *task, struct process *process)
 
     task->registers.ss = USER_DATA_SEGMENT;
     task->registers.cs = USER_CODE_SEGMENT;
-    task->registers.esp = POTONGOS_PROGRAM_VIRTUAL_STACK_ADDRESS_START;
+    task->registers.esp = RORTHOX_PROGRAM_VIRTUAL_STACK_ADDRESS_START;
 
     task->process = process;
 

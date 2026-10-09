@@ -25,15 +25,15 @@ int diskstreamer_seek(struct disk_stream *stream, int pos)
 
 int diskstreamer_read(struct disk_stream *stream, void *out, int total)
 {
-    int sector = stream->pos / POTONGOS_SECTOR_SIZE;
-    int offset = stream->pos % POTONGOS_SECTOR_SIZE;
+    int sector = stream->pos / RORTHOX_SECTOR_SIZE;
+    int offset = stream->pos % RORTHOX_SECTOR_SIZE;
     int total_to_read = total;
-    bool overflow = (offset + total_to_read) >= POTONGOS_SECTOR_SIZE;
-    char buf[POTONGOS_SECTOR_SIZE];
+    bool overflow = (offset + total_to_read) >= RORTHOX_SECTOR_SIZE;
+    char buf[RORTHOX_SECTOR_SIZE];
 
     if (overflow)
     {
-        total_to_read -= (offset + total_to_read) - POTONGOS_SECTOR_SIZE;
+        total_to_read -= (offset + total_to_read) - RORTHOX_SECTOR_SIZE;
     }
 
     int res = disk_read_block(stream->disk, sector, 1, buf);

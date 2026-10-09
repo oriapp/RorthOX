@@ -10,12 +10,12 @@ struct heap_table kernel_heap_table;
 void kheap_init()
 {
     // 104857600 (heap size in byte) / 4096 (block size) = 25600
-    int total_table_entries = POTONGOS_HEAP_SIZE_BYTES / POTONGOS_HEAP_BLOCK_SIZE;
-    kernel_heap_table.entries = (HEAP_BLOCK_TABLE_ENTRY*)(POTONGOS_HEAP_TABLE_ADDRESS) ;
+    int total_table_entries = RORTHOX_HEAP_SIZE_BYTES / RORTHOX_HEAP_BLOCK_SIZE;
+    kernel_heap_table.entries = (HEAP_BLOCK_TABLE_ENTRY*)(RORTHOX_HEAP_TABLE_ADDRESS) ;
     kernel_heap_table.total = total_table_entries;
 
-    void *end = (void*) (POTONGOS_HEAP_ADDRESS + POTONGOS_HEAP_SIZE_BYTES); // End of table
-    int res = heap_create(&kernel_heap, (void*)(POTONGOS_HEAP_ADDRESS), end, &kernel_heap_table);
+    void *end = (void*) (RORTHOX_HEAP_ADDRESS + RORTHOX_HEAP_SIZE_BYTES); // End of table
+    int res = heap_create(&kernel_heap, (void*)(RORTHOX_HEAP_ADDRESS), end, &kernel_heap_table);
     if (res < 0)
     {
         print("Falied to create heap\n");

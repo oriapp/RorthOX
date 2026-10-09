@@ -11,7 +11,7 @@ extern "C" {
 #endif
 
 
-#define POTONGOS_MAX_PATH 108
+#define RORTHOX_MAX_PATH 108
 void kernel_main();
 void print(const char* str);
 // void terminal_writechar(char c, char colour);

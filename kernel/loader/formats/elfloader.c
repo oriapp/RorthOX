@@ -29,7 +29,7 @@ static bool elf_valid_encoding(struct elf_header *header)
 
 static bool elf_is_executable(struct elf_header *header)
 {
-    return header->e_type == ET_EXEC && header->e_entry >= POTONGOS_PROGRAM_VIRTUAL_ADDRESS;
+    return header->e_type == ET_EXEC && header->e_entry >= RORTHOX_PROGRAM_VIRTUAL_ADDRESS;
 }
 
 static bool elf_has_program_header(struct elf_header *header)
@@ -104,7 +104,7 @@ void *elf_phys_end(struct elf_file *file)
 
 int elf_validate_loaded(struct elf_header *header)
 {
-    return (elf_valid_signature(header) && elf_valid_class(header) && elf_valid_encoding(header) && elf_has_program_header(header)) ? POTONGOS_ALL_OK : -EINFORMAT;
+    return (elf_valid_signature(header) && elf_valid_class(header) && elf_valid_encoding(header) && elf_has_program_header(header)) ? RORTHOX_ALL_OK : -EINFORMAT;
 }
 
 int elf_process_phdr_pt_load(struct elf_file *elf_file, struct elf32_phdr *phdr)

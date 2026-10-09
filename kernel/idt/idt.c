@@ -9,14 +9,14 @@
 #include "include/kernel/sys.h"
 #include "include/kernel/time/pit.h"
 
-struct idt_desc idt_descriptors[POTONGOS_TOTAL_INTERRUPTS];
+struct idt_desc idt_descriptors[RORTHOX_TOTAL_INTERRUPTS];
 struct idtr_desc idtr_descriptor;
 
-extern void *interrupt_pointer_table[POTONGOS_TOTAL_INTERRUPTS];
+extern void *interrupt_pointer_table[RORTHOX_TOTAL_INTERRUPTS];
 
-static INTERRUPT_CALLBACK_FUNCTION interrupt_callbacks[POTONGOS_TOTAL_INTERRUPTS];
+static INTERRUPT_CALLBACK_FUNCTION interrupt_callbacks[RORTHOX_TOTAL_INTERRUPTS];
 
-static ISR80H_COMMAND isr80h_commands[POTONGOS_MAX_ISR80H_COMMANDS];
+static ISR80H_COMMAND isr80h_commands[RORTHOX_MAX_ISR80H_COMMANDS];
 
 extern void idt_load(struct idtr_desc *ptr);
 extern void int21h();
@@ -118,7 +118,7 @@ void idt_init()
     idtr_descriptor.limit = sizeof(idt_descriptors) - 1;
     idtr_descriptor.base = (uint32_t) idt_descriptors;
 
-    for(int i = 0; i <POTONGOS_TOTAL_INTERRUPTS; i++)
+    for(int i = 0; i <RORTHOX_TOTAL_INTERRUPTS; i++)
     {
         idt_set(i, interrupt_pointer_table[i]);
     }
@@ -146,7 +146,7 @@ void idt_init()
 
 int idt_register_interrupt_callback(int interrupt, INTERRUPT_CALLBACK_FUNCTION interrupt_callback)
 {
-    if (interrupt < 0 || interrupt >= POTONGOS_TOTAL_INTERRUPTS)
+    if (interrupt < 0 || interrupt >= RORTHOX_TOTAL_INTERRUPTS)
     {
         return -EINVARG;
     }
@@ -157,7 +157,7 @@ int idt_register_interrupt_callback(int interrupt, INTERRUPT_CALLBACK_FUNCTION i
 
 void isr80h_register_command(int command_id, ISR80H_COMMAND command)
 {
-    if (command_id < 0 || command_id >= POTONGOS_MAX_ISR80H_COMMANDS)
+    if (command_id < 0 || command_id >= RORTHOX_MAX_ISR80H_COMMANDS)
     {
        PANIC("The command is out of bounds\n", __FILE__, __LINE__); 
     }
@@ -174,7 +174,7 @@ void *isr80h_handle_command(int command, struct interrupt_frame *frame)
 {
     void *result = 0;
 
-    if(command < 0 || command >= POTONGOS_MAX_ISR80H_COMMANDS)
+    if(command < 0 || command >= RORTHOX_MAX_ISR80H_COMMANDS)
     {
         // invalid command
         return 0;

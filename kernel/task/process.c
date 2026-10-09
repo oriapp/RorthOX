@@ -14,7 +14,7 @@
 // The current process that is running
 struct process *current_process = 0;
 
-static struct process *processes[POTONGOS_MAX_PROCESSES] = {};
+static struct process *processes[RORTHOX_MAX_PROCESSES] = {};
 
 static void process_init(struct process *process)
 {
@@ -28,7 +28,7 @@ struct process *process_current()
 
 struct process *process_get(int process_id)
 {
-    if (process_id < 0 || process_id >= POTONGOS_MAX_PROCESSES)
+    if (process_id < 0 || process_id >= RORTHOX_MAX_PROCESSES)
     {
         return NULL;
     }
@@ -46,7 +46,7 @@ static int process_find_free_allocation_index(struct process *process)
 {
     int res = -ENOMEM;
 
-    for (int i = 0; i < POTONGOS_MAX_PROGRAM_ALLOCATIONS; i++)
+    for (int i = 0; i < RORTHOX_MAX_PROGRAM_ALLOCATIONS; i++)
     {
         if (process->allocations[i].ptr == 0x00)
         {
@@ -92,7 +92,7 @@ out_err:
 
 static bool process_is_process_pointer(struct process *process, void *ptr)
 {
-    for (int i = 0; i < POTONGOS_MAX_PROGRAM_ALLOCATIONS; i++)
+    for (int i = 0; i < RORTHOX_MAX_PROGRAM_ALLOCATIONS; i++)
     {
         if (process->allocations[i].ptr == ptr)
         {
@@ -105,7 +105,7 @@ static bool process_is_process_pointer(struct process *process, void *ptr)
 
 static void process_allocation_unjoin(struct process *process, void *ptr)
 {
-    for (int i = 0; i < POTONGOS_MAX_PROGRAM_ALLOCATIONS; i++)
+    for (int i = 0; i < RORTHOX_MAX_PROGRAM_ALLOCATIONS; i++)
     {
         if (process->allocations[i].ptr == ptr)
         {
@@ -117,7 +117,7 @@ static void process_allocation_unjoin(struct process *process, void *ptr)
 
 static struct process_allocation *process_get_allocation_by_addr(struct process *process, void *addr)
 {
-    for (int i = 0; i < POTONGOS_MAX_PROGRAM_ALLOCATIONS; i++)
+    for (int i = 0; i < RORTHOX_MAX_PROGRAM_ALLOCATIONS; i++)
     {
         if (process->allocations[i].ptr == addr)
         {
@@ -154,7 +154,7 @@ void process_free(struct process *process, void *ptr)
 int process_terminate_allocation(struct process *process)
 {
     int i;
-    for (i = 0; i < POTONGOS_MAX_PROGRAM_ALLOCATIONS; i++)
+    for (i = 0; i < RORTHOX_MAX_PROGRAM_ALLOCATIONS; i++)
     {
         process_free(process, process->allocations[i].ptr); // or kfree?
     }
@@ -197,7 +197,7 @@ int process_free_program_data(struct process *process)
 void process_switch_to_any()
 {
     int i;
-    for (i = 0; i < POTONGOS_MAX_PROCESSES; i++)
+    for (i = 0; i < RORTHOX_MAX_PROCESSES; i++)
     {
         if (processes[i])
         {
@@ -328,7 +328,7 @@ static int process_load_binary(const char *filename, struct process *process)
 
     struct file_stat stat;
     res = fstat(fd, &stat);
-    if (res != POTONGOS_ALL_OK)
+    if (res != RORTHOX_ALL_OK)
     {
         goto out;
     }
@@ -390,7 +390,7 @@ static int process_load_data(const char *filename, struct process *process)
 int process_map_binary(struct process *process)
 {
     int res = 0;
-    paging_map_to(process->task->page_directory, (void*) POTONGOS_PROGRAM_VIRTUAL_ADDRESS, process->ptr, paging_align_address(process->ptr + process->size), PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL | PAGING_IS_WRITEABLE);
+    paging_map_to(process->task->page_directory, (void*) RORTHOX_PROGRAM_VIRTUAL_ADDRESS, process->ptr, paging_align_address(process->ptr + process->size), PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL | PAGING_IS_WRITEABLE);
     return res;
 }
 
@@ -444,7 +444,7 @@ int process_map_memory(struct process *process)
     }
 
     // Finally map the stack
-    paging_map_to(process->task->page_directory, (void*)POTONGOS_PROGRAM_VIRTUAL_STACK_ADDRESS_END, process->stack, paging_align_address(process->stack + USER_PROGRAM_STACK_SIZE), PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL | PAGING_IS_WRITEABLE);
+    paging_map_to(process->task->page_directory, (void*)RORTHOX_PROGRAM_VIRTUAL_STACK_ADDRESS_END, process->stack, paging_align_address(process->stack + USER_PROGRAM_STACK_SIZE), PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL | PAGING_IS_WRITEABLE);
 
 out:
     return res;
@@ -452,7 +452,7 @@ out:
 
 int process_get_free_slot()
 {
-    for (int i = 0; i < POTONGOS_MAX_PROCESSES; i++)
+    for (int i = 0; i < RORTHOX_MAX_PROCESSES; i++)
     {
         if (processes[i] == 0)
             return i;

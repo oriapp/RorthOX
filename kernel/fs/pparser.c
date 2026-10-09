@@ -7,7 +7,7 @@
 
 static int pathparser_path_valid_format(const char *filename)
 {
-    int len = strnlen(filename, POTONGOS_MAX_PATH);
+    int len = strnlen(filename, RORTHOX_MAX_PATH);
     return len >= 3 && isdigit(filename[0]) && (memcmp((void*)&filename[1], ":/", 2) == 0);
 }
 
@@ -37,7 +37,7 @@ static struct path_root* pathparser_create_root(int drive_number)
 
 static const char *pathparser_get_path_part(const char **path)
 {
-    char *result_path_part = kzalloc(POTONGOS_MAX_PATH);
+    char *result_path_part = kzalloc(RORTHOX_MAX_PATH);
     int i = 0;
     while(**path != '/' && **path != 0x00)
     {
@@ -102,7 +102,7 @@ struct path_root *pathparser_parse(const char *path, const char *current_directo
     const char *tmp_path = path;
     struct path_root *path_root = 0;
 
-    if (strlen(path) > POTONGOS_MAX_PATH)
+    if (strlen(path) > RORTHOX_MAX_PATH)
     {
         goto out;
     }

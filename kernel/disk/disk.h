@@ -7,13 +7,13 @@
 extern "C" {
 #endif
 
-typedef unsigned int POTONGOS_DISK_TYPE;
+typedef unsigned int RORTHOX_DISK_TYPE;
 
 // Represents a real physical hard disk
-#define POTONGOS_DISK_TYPE_REAL 0
+#define RORTHOX_DISK_TYPE_REAL 0
 struct disk
 {
-    POTONGOS_DISK_TYPE type;
+    RORTHOX_DISK_TYPE type;
     int sector_size;
 
     // The ID of the disk

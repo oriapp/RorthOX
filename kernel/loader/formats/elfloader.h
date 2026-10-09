@@ -12,7 +12,7 @@ extern "C" {
 
 struct elf_file
 {
-    char filename[POTONGOS_MAX_PATH];
+    char filename[RORTHOX_MAX_PATH];
 
     int in_memory_size;
 

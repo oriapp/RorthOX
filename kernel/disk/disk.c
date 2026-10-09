@@ -40,8 +40,8 @@ int disk_read_sector(int lba, int total, void *buf)
 void disk_search_and_init()
 {
     memset(&disk, 0, sizeof(disk));
-    disk.type = POTONGOS_DISK_TYPE_REAL;
-    disk.sector_size = POTONGOS_SECTOR_SIZE;
+    disk.type = RORTHOX_DISK_TYPE_REAL;
+    disk.sector_size = RORTHOX_SECTOR_SIZE;
     disk.id = 0;
     disk.filesystem = fs_resolve(&disk); // Set the filesystem
 }

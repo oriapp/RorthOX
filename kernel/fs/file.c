@@ -10,13 +10,13 @@
 
 // Filesystem functionality
 
-struct filesystem *filesystems[POTONGOS_MAX_FILESYSTEMS]; // An array of fs pointers
-struct file_descriptor *file_descriptors[POTONGOS_MAX_FILE_DESCRIPTORS];
+struct filesystem *filesystems[RORTHOX_MAX_FILESYSTEMS]; // An array of fs pointers
+struct file_descriptor *file_descriptors[RORTHOX_MAX_FILE_DESCRIPTORS];
 
 static struct filesystem **fs_get_free_filesystem()
 {
     int i;
-    for (i = 0; i < POTONGOS_MAX_FILESYSTEMS; i++)
+    for (i = 0; i < RORTHOX_MAX_FILESYSTEMS; i++)
     {
         if (filesystems[i] == 0)
         {
@@ -69,7 +69,7 @@ static int file_new_descriptor(struct file_descriptor **desc_out)
 {
     int res = -ENOMEM;
     int i;
-    for (i = 0; i < POTONGOS_MAX_FILE_DESCRIPTORS; i++)
+    for (i = 0; i < RORTHOX_MAX_FILE_DESCRIPTORS; i++)
     {
         if (file_descriptors[i] == 0) // We found something to use
         {
@@ -89,7 +89,7 @@ static int file_new_descriptor(struct file_descriptor **desc_out)
 // Return the filedescriptor for the given file descriptor id
 static struct file_descriptor *file_get_descriptor(int fd)
 {
-    if (fd <= 0 || fd >= POTONGOS_MAX_FILE_DESCRIPTORS)
+    if (fd <= 0 || fd >= RORTHOX_MAX_FILE_DESCRIPTORS)
     {
         return 0; // invalid fs passed
     }
@@ -104,7 +104,7 @@ struct filesystem *fs_resolve(struct disk *disk)
 {
     struct filesystem *fs = 0;
     int i;
-    for (i = 0; i < POTONGOS_MAX_FILESYSTEMS; i++)
+    for (i = 0; i < RORTHOX_MAX_FILESYSTEMS; i++)
     {
         if (filesystems[i] != 0 && filesystems[i]->resolve(disk) == 0)
         {
@@ -229,7 +229,7 @@ int fclose(int fd)
     }
 
     res = desc->filesystem->close(desc->private);
-    if (res == POTONGOS_ALL_OK)
+    if (res == RORTHOX_ALL_OK)
     {
         file_free_descriptor(desc);
     }
