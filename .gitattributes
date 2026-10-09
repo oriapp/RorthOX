@@ -1,0 +1,7 @@
+# Store and check out every text file with LF line endings, on every OS.
+# The build runs on Linux/WSL, where CRLF breaks shell scripts and Makefiles.
+* text=auto eol=lf
+
+*.bin binary
+*.img binary
+*.png binary
