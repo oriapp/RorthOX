@@ -24,7 +24,25 @@ nop
 
 ; times 33 db 0 ; Here will be in the future the filesystem
 ; FAT16 header
-OEMIdentifier           db 'POTONGOS'
+
+; Name fields in the BPB have a fixed width and are padded with spaces, not NUL-terminated.
+%define OEM_ID          'RORTHOX '      ; 8 bytes
+%define VOLUME_LABEL    'RORTHOX    '   ; 11 bytes
+%define SYSTEM_ID       'FAT16   '      ; 8 bytes
+%strlen OEM_ID_LEN OEM_ID
+%if OEM_ID_LEN != 8
+%fatal "OEM_ID must be exactly 8 bytes"
+%endif
+%strlen VOLUME_LABEL_LEN VOLUME_LABEL
+%if VOLUME_LABEL_LEN != 11
+%fatal "VOLUME_LABEL must be exactly 11 bytes"
+%endif
+%strlen SYSTEM_ID_LEN SYSTEM_ID
+%if SYSTEM_ID_LEN != 8
+%fatal "SYSTEM_ID must be exactly 8 bytes"
+%endif
+
+OEMIdentifier           db OEM_ID
 BytesPerSector          dw 0x200
 SectorsPerCluster       db 0x80
 ReservedSectors         dw RESERVED_SECTORS
@@ -43,8 +61,15 @@ DriveNumber             db 0x80
 WinNTBit                db 0x00
 Signature               db 0x29
 VolumeID                dd 0xD105
-VolumeIDString          db 'POTONGOS BO'
-SystemIDString          db 'FAT16   '
+VolumeIDString          db VOLUME_LABEL
+SystemIDString          db SYSTEM_ID
+
+; The BPB fields must sit at their standard offsets: fail the build if anything moved.
+; (A negative TIMES count is an assembly error.)
+times -((OEMIdentifier - $$) != 0x03) db 0
+times -((VolumeIDString - $$) != 0x2B) db 0
+times -((SystemIDString - $$) != 0x36) db 0
+times -(($ - $$) != 0x3E) db 0
 
 
 

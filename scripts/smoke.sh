@@ -22,7 +22,7 @@ OUT="${OUT:-build/smoke}"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-30}"
 COMMAND="blank.elf one two"
-SHELL_READY="Rorth v1.0.0"              # the shell's banner: the shell is running
+SHELL_READY="RorthOX v1.0.0"            # the shell's banner: the shell is running
 PROGRAM_DONE="Process was terminated"   # printed by the kernel when a program exits
 
 QEMU_TIMEOUT=$((BOOT_TIMEOUT + RUN_TIMEOUT + 30))

@@ -11,10 +11,10 @@ set -e
 # mkdir -p isodir/boot
 # mkdir -p isodir/boot/grub
 
-# cp sysroot/boot/rorthos.kernel isodir/boot/rorthos.kernel
+# cp sysroot/boot/rorthox.kernel isodir/boot/rorthox.kernel
 # cat > isodir/boot/grub/grub.cfg << EOF
-# menuentry "rorthos" {
-# 	multiboot /boot/rorthos.kernel
+# menuentry "rorthox" {
+# 	multiboot /boot/rorthox.kernel
 # }
 # EOF
-# grub-mkrescue -o rorthos.iso isodir
+# grub-mkrescue -o rorthox.iso isodir
