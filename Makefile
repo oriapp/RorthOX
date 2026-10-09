@@ -164,13 +164,17 @@ user_programs_clean:
 	cd ./programs/blank && $(MAKE) clean
 	cd ./programs/shell && $(MAKE) clean
 
+# Boot the image headless in QEMU, type a command into the shell and check the output.
+smoke: all
+	./scripts/smoke.sh
+
 clean: user_programs_clean
 	rm -rf ./bin/boot.bin
 	rm -rf ./bin/kernel.bin
 	rm -rf ./bin/os.bin
 	rm -rf ${FILES} $(FILES:.o=.d)
-	rm -rf ./build/kernelfull.o ./build/kernel.map
+	rm -rf ./build/kernelfull.o ./build/kernel.map ./build/smoke
 
-.PHONY: all user_programs user_programs_clean clean
+.PHONY: all user_programs user_programs_clean smoke clean
 
 -include $(FILES:.o=.d)
