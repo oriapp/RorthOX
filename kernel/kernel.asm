@@ -25,16 +25,42 @@ _start:
     or al, 2
     out 0x92, al
 
-    ; Rename the master PIC
-    mov al, 00010001b   ; Put PIC in init mode
-    out 0x20, al        ; Tell master PIC
+    ; Remap both PICs: IRQ0-7 -> 0x20-0x27, IRQ8-15 -> 0x28-0x2F
+    ; The out to 0x80 after each PIC write is a short delay for real hardware
+    mov al, 00010001b   ; ICW1: init, edge, cascade, ICW4 follows
+    out 0x20, al
+    out 0x80, al
+    out 0xA0, al
+    out 0x80, al
 
-    mov al, 0x20        ; Interrupt 0x20 is where master ISR should start
+    mov al, 0x20        ; ICW2 master: vectors 0x20-0x27
     out 0x21, al
+    out 0x80, al
+    mov al, 0x28        ; ICW2 slave: vectors 0x28-0x2F
+    out 0xA1, al
+    out 0x80, al
 
-    mov al, 00000001b  ; Put PIC in x86 mode
+    mov al, 00000100b   ; ICW3 master: slave on IR2
     out 0x21, al
-    ; End remap of the master PIC
+    out 0x80, al
+    mov al, 0x02        ; ICW3 slave: cascade id 2
+    out 0xA1, al
+    out 0x80, al
+
+    mov al, 00000001b   ; ICW4: x86 mode, normal EOI
+    out 0x21, al
+    out 0x80, al
+    out 0xA1, al
+    out 0x80, al
+
+    ; ICW1 cleared the masks, so set them now
+    mov al, 11111000b   ; Master: only timer, keyboard and cascade
+    out 0x21, al
+    out 0x80, al
+    mov al, 11111111b   ; Slave: everything masked
+    out 0xA1, al
+    out 0x80, al
+    ; End remap of the PICs
 
     ; call cas ; Enable when debung = True
     call kernel_main

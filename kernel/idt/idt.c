@@ -28,6 +28,21 @@ void no_interrupt_handler()
     outb(0x20, 0x20);
 }
 
+// IRQs 8-15 (0x28-0x2F) come through the slave PIC: EOI the slave first, then the master.
+// Vectors outside 0x20-0x2F are not PIC interrupts and get no EOI.
+static void pic_send_eoi(int interrupt)
+{
+    if (interrupt >= 0x28 && interrupt < 0x30)
+    {
+        outb(0xA0, 0x20);
+    }
+
+    if (interrupt >= 0x20 && interrupt < 0x30)
+    {
+        outb(0x20, 0x20);
+    }
+}
+
 void interrupt_handler(int interrupt, struct interrupt_frame *frame)
 {
     kernel_page();
@@ -39,7 +54,7 @@ void interrupt_handler(int interrupt, struct interrupt_frame *frame)
 
     task_page();
     // ack interrupt
-    outb(0x20, 0x20);
+    pic_send_eoi(interrupt);
 }
 
 void idt_zero()
@@ -70,7 +85,7 @@ static uint16_t hz = 0;
 void idt_clock()
 {
     // Send an end-of-interrupt signal to the PIC to let it know that we have handled the interrupt
-    outb(0x20, 0x20);
+    pic_send_eoi(0x20);
     jiffies++;
 
     // Switch to the next task
