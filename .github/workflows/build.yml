@@ -1,0 +1,56 @@
+name: build
+
+# Every push to any branch, and pull requests. A commit pushed to a PR branch runs twice;
+# once work goes through pull requests, this can be narrowed to push: branches: [main].
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# The job only reads the repository and uploads artifacts.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bison flex libgmp3-dev libmpc-dev \
+            libmpfr-dev texinfo curl xz-utils nasm qemu-system-x86 mtools
+
+      # Building binutils + GCC takes a while, so keep ~/opt/cross between runs.
+      # A change to configure.sh (versions, options) builds a new one.
+      - name: Cache the cross toolchain
+        id: cross-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/opt/cross
+          key: cross-ubuntu-24.04-${{ hashFiles('configure.sh') }}
+
+      - name: Build the cross toolchain
+        if: steps.cross-cache.outputs.cache-hit != 'true'
+        run: ./configure.sh
+
+      - name: Add the cross toolchain to PATH
+        run: echo "$HOME/opt/cross/bin" >> "$GITHUB_PATH"
+
+      - name: Build
+        run: make all
+
+      - name: Smoke test
+        run: make smoke
+
+      - name: Upload the disk image and test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rorthox
+          path: |
+            bin/os.bin
+            build/smoke/
+          if-no-files-found: ignore
