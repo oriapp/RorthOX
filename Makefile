@@ -18,20 +18,7 @@ FAT2_SECTOR := $(shell echo $$(($(RESERVED_SECTORS) + $(SECTORS_PER_FAT))))
 # Files copied into the FAT16 filesystem of the disk image (with mtools, no root needed).
 IMAGE_FILES = ./programs/shell/build/shell.elf ./programs/blank/build/blank.elf
 
-OS = $(shell uname -s)
-
-ifeq ($(OS),Linux)
-	detected_OS = Linux
-endif
-ifeq ($(OS),Darwin)
-	detected_OS = MacOS
-endif
-ifeq ($(OS),Windows)
-	detected_OS = Windows
-endif
-
 all: ./bin/boot.bin ./bin/kernel.bin user_programs
-	@echo "Operating System Compiling On: $(detected_OS)"
 	rm -f ./bin/os.bin
 	cat ./bin/boot.bin ./bin/kernel.bin > ./bin/os.bin
 	# Append 16 MiB of zeroes: the FAT tables, root directory and data area of the filesystem.
