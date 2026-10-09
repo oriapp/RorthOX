@@ -161,13 +161,17 @@ user_programs_clean:
 smoke: all
 	./scripts/smoke.sh
 
+# The smoke test plus every test in scripts/tests/ (each boots the OS in QEMU).
+test: all
+	./scripts/run-tests.sh
+
 clean: user_programs_clean
 	rm -rf ./bin/boot.bin
 	rm -rf ./bin/kernel.bin
 	rm -rf ./bin/os.bin
 	rm -rf ${FILES} $(FILES:.o=.d)
-	rm -rf ./build/kernelfull.o ./build/kernel.map ./build/smoke
+	rm -rf ./build/kernelfull.o ./build/kernel.map ./build/smoke ./build/tests
 
-.PHONY: all user_programs user_programs_clean smoke clean
+.PHONY: all user_programs user_programs_clean smoke test clean
 
 -include $(FILES:.o=.d)

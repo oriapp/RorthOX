@@ -42,8 +42,8 @@ jobs:
       - name: Build
         run: make all
 
-      - name: Smoke test
-        run: make smoke
+      - name: Tests
+        run: make test
 
       - name: Upload the disk image and test output
         if: always()
@@ -53,4 +53,5 @@ jobs:
           path: |
             bin/os.bin
             build/smoke/
+            build/tests/
           if-no-files-found: ignore
