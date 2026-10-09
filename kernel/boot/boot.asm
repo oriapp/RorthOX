@@ -1,6 +1,15 @@
 ORG 0x7c00
 BITS 16
 
+; How many sectors of kernel to load after the boot sector. The Makefile passes
+; -DKERNEL_SECTORS; the kernel must fit in the FAT16 reserved area (ReservedSectors - 1).
+%ifndef KERNEL_SECTORS
+%define KERNEL_SECTORS 199
+%endif
+%if KERNEL_SECTORS > 199
+%error "KERNEL_SECTORS must be at most 199 (ReservedSectors - 1)"
+%endif
+
 CODE_SEG equ gdt_code - gdt_start
 DATA_SEG equ gdt_data - gdt_start
 
@@ -92,7 +101,7 @@ gdt_descriptor:
 [BITS 32]
 load32:                 ;   0 is the boot sector
     mov eax, 1          ;   Starting sector
-    mov ecx, 100        ;   100 sectors of null
+    mov ecx, KERNEL_SECTORS ; Number of kernel sectors (set by the Makefile, at most 199)
     mov edi, 0x0100000  ;   1MG (related to rep insw
     call ata_lba_read
     ; call ata_lba_write
