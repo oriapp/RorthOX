@@ -1,0 +1,14 @@
+# Build outputs
+*.o
+*.d
+*.a
+*.bin
+*.elf
+*.map
+*.ppm
+/build/smoke/
+
+# Meaty-skeleton / ISO leftovers
+/sysroot/
+/isodir/
+*.iso
