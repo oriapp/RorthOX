@@ -12,6 +12,7 @@
 #         BOOT_WAIT=3 (seconds before typing)
 #
 # Results land in $OUT: debugcon.log, screen.txt (80x25 text), screen.ppm, monitor.log.
+# Needs only qemu-system-i386 and the base system tools (timeout, od, awk, grep, sed).
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -60,15 +61,12 @@ type_keys() {
     exit 1
 }
 
-# VGA text memory is (character, attribute) pairs, 80 columns x 25 rows.
+# VGA text memory is (character, attribute) pairs, 80 columns x 25 rows. Keep the characters,
+# show anything that isn't printable ASCII as a space, and strip trailing spaces.
 [ -f "$OUT/vga.bin" ] || { echo "smoke: no screen dump, see $OUT/monitor.log" >&2; exit 1; }
-python3 - "$OUT/vga.bin" > "$OUT/screen.txt" <<'EOF'
-import sys
-data = open(sys.argv[1], "rb").read()
-chars = bytes(b if 32 <= b < 127 else 32 for b in data[0::2])
-for row in range(25):
-    print(chars[row * 80:(row + 1) * 80].decode("ascii").rstrip())
-EOF
+od -An -v -tu1 -w2 "$OUT/vga.bin" |
+    awk '{ printf "%c", ($1 >= 32 && $1 < 127) ? $1 : 32 } NR % 80 == 0 { printf "\n" }' |
+    sed 's/ *$//' > "$OUT/screen.txt"
 
 failures=0
 check() {   # check <description> <file> <fixed string> [present|absent|line]
