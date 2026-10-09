@@ -58,7 +58,6 @@ static int process_find_free_allocation_index(struct process *process)
     return res;
 }
 
-// lext112 7:23 for multiple tasks per process
 void *process_malloc(struct process *process, size_t size)
 {
     void *ptr = kzalloc(size);

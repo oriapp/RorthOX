@@ -16,7 +16,7 @@ void *isr80h_command6_process_load_start(struct interrupt_frame *frame)
         goto out;
     }
 
-    char path[POTONGOS_MAX_PATH]; // Replace this with environment variables (lext110 20:10)
+    char path[POTONGOS_MAX_PATH]; // TODO: look programs up through a PATH environment variable instead of always using 0:/
     strcpy(path, "0:/");
     strcpy(path+3, filename);
 

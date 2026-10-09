@@ -114,7 +114,6 @@ load32:                 ;   0 is the boot sector
 
 
 ata_lba_read:
-    ; Written it in lexture number 17.
     mov ebx, eax    ;   Backup the LBA
     ; Send the highest 8 bits of the lba hard disk controller
     shr eax, 24     ; Short eax register 24 bits to the right (32 - 24 = 8)
