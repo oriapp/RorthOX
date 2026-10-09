@@ -1,11 +1,11 @@
 #include "stdio.h"
-#include "potongos.h"
+#include "rorthox.h"
 #include "stdlib.h"
 #include <stdarg.h>
 
 int putchar(int c)
 {
-    potongos_putchar((char)c);
+    rorthox_putchar((char)c);
     return 0;
 }
 

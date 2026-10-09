@@ -1,4 +1,4 @@
-FILES=./build/start.asm.o ./build/potongos.asm.o ./build/potongos.o ./build/stdlib.o ./build/stdio.o ./build/string.o ./build/memory.o ./build/start.o
+FILES=./build/start.asm.o ./build/rorthox.asm.o ./build/rorthox.o ./build/stdlib.o ./build/stdio.o ./build/string.o ./build/memory.o ./build/start.o
 INCLUDES= -I ./src
 FLAGS= -g -ffreestanding -falign-jumps -falign-functions -falign-labels -falign-loops -fstrength-reduce -fomit-frame-pointer -finline-functions -Wno-unused-function -fno-builtin -Werror -Wno-unused-label -Wno-cpp -Wno-unused-parameter -nostdlib -nostartfiles -nodefaultlibs -Wall -O0 -Iinc -MMD -MP
 all: ${FILES}
@@ -7,11 +7,11 @@ all: ${FILES}
 ./build/start.asm.o: ./src/start.asm
 	nasm -f elf ./src/start.asm -o ./build/start.asm.o
 
-./build/potongos.asm.o: ./src/potongos.asm
-	nasm -f elf ./src/potongos.asm -o ./build/potongos.asm.o
+./build/rorthox.asm.o: ./src/rorthox.asm
+	nasm -f elf ./src/rorthox.asm -o ./build/rorthox.asm.o
 
-./build/potongos.o: ./src/potongos.c
-	i686-elf-gcc ${INCLUDES} ${FLAGS} -std=gnu99 -c ./src/potongos.c -o ./build/potongos.o
+./build/rorthox.o: ./src/rorthox.c
+	i686-elf-gcc ${INCLUDES} ${FLAGS} -std=gnu99 -c ./src/rorthox.c -o ./build/rorthox.o
 
 ./build/stdlib.o: ./src/stdlib.c
 	i686-elf-gcc ${INCLUDES} ${FLAGS} -std=gnu99 -c ./src/stdlib.c -o ./build/stdlib.o

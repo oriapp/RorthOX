@@ -1,7 +1,7 @@
 #include "shell.h"
 #include "stdio.h"
 #include "stdlib.h"
-#include "potongos.h"
+#include "rorthox.h"
 
 int main(int argc, char const *argv[])
 {
@@ -10,11 +10,11 @@ int main(int argc, char const *argv[])
     while (1) {
         print("> ");
         char buf[1024];
-        potongos_terminal_readline(buf, sizeof(buf), true);
+        rorthox_terminal_readline(buf, sizeof(buf), true);
 
         print("\n");
         
-        potongos_system_run(buf);
+        rorthox_system_run(buf);
     }
     return 0;
 }

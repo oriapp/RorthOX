@@ -3,14 +3,14 @@
 section .asm
 
 global print:function
-global potongos_getkey:function
-global potongos_malloc:function
-global potongos_free:function
-global potongos_putchar:function
-global potongos_process_load_start:function
-global potongos_process_get_arguments:function
-global potongos_system:function
-global potongos_exit:function
+global rorthox_getkey:function
+global rorthox_malloc:function
+global rorthox_free:function
+global rorthox_putchar:function
+global rorthox_process_load_start:function
+global rorthox_process_get_arguments:function
+global rorthox_system:function
+global rorthox_exit:function
 global printc:function
 
 ; void print(const char message);
@@ -38,8 +38,8 @@ printc:
     pop ebp
     ret
 
-; int potongos_getkey();
-potongos_getkey:
+; int rorthox_getkey();
+rorthox_getkey:
     push ebp
     mov ebp, esp
     mov eax, 2 ; Command getkey
@@ -47,8 +47,8 @@ potongos_getkey:
     pop ebp
     ret
 
-; void potongos_putchar(char c);
-potongos_putchar:
+; void rorthox_putchar(char c);
+rorthox_putchar:
     push ebp
     mov ebp, esp
     mov eax, 3 ; Command 3 putchar
@@ -58,8 +58,8 @@ potongos_putchar:
     pop ebp
     ret
 
-; void *potongos_malloc(size_t size);
-potongos_malloc:
+; void *rorthox_malloc(size_t size);
+rorthox_malloc:
     push ebp
     mov ebp, esp
     mov eax, 4 ; Command malloc (Allocate memory for the process)
@@ -69,8 +69,8 @@ potongos_malloc:
     pop ebp
     ret
 
-; void *potongos_free(void *ptr);
-potongos_free:
+; void *rorthox_free(void *ptr);
+rorthox_free:
     push ebp
     mov ebp, esp
     mov eax, 5 ; Command free (Frees the allocated memory for this process)
@@ -80,8 +80,8 @@ potongos_free:
     pop ebp
     ret
 
-; void potongos_process_load_start(const char *filename)
-potongos_process_load_start:
+; void rorthox_process_load_start(const char *filename)
+rorthox_process_load_start:
     push ebp
     mov ebp, esp
     mov eax, 6 ; Command 6 process load start ( starts a process )
@@ -91,8 +91,8 @@ potongos_process_load_start:
     pop ebp
     ret
 
-; int potongos_system(struct command_argument *arguments);
-potongos_system:
+; int rorthox_system(struct command_argument *arguments);
+rorthox_system:
     push ebp
     mov ebp, esp
     mov eax, 7 ; Command 7 process_system (Runs a system command based on the arguments)
@@ -102,8 +102,8 @@ potongos_system:
     pop ebp
     ret
 
-; void potongos_process_get_arguments(struct process_arguments *arguments)
-potongos_process_get_arguments:
+; void rorthox_process_get_arguments(struct process_arguments *arguments)
+rorthox_process_get_arguments:
     push ebp
     mov ebp, esp
     mov eax, 8 ; Command 8 Gets the process arguments
@@ -113,8 +113,8 @@ potongos_process_get_arguments:
     pop ebp
     ret
 
-; void potongos_exit();
-potongos_exit:
+; void rorthox_exit();
+rorthox_exit:
     push ebp
     mov ebp, esp
     mov eax, 9 ; Command process exit

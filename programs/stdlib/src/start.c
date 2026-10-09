@@ -1,4 +1,4 @@
-#include "potongos.h"
+#include "rorthox.h"
 #define UNUSED(x) (void)(x)
 
 extern int main(int argc, char **argv);
@@ -6,7 +6,7 @@ extern int main(int argc, char **argv);
 void c_start()
 {
     struct process_arguments arguments;
-    potongos_process_get_arguments(&arguments);
+    rorthox_process_get_arguments(&arguments);
     
 
     // Res could be used for exit command or sld

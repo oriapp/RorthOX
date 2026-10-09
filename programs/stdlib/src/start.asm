@@ -4,13 +4,13 @@ section .asm
 
 global _start
 extern c_start
-extern potongos_exit
+extern rorthox_exit
 
 global _start
 
 _start:
     call c_start
-    call potongos_exit
+    call rorthox_exit
     ret
 
 ;   Debug

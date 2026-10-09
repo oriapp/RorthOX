@@ -1,7 +1,7 @@
-#ifndef POTONGOS_STDIO_H
-#define POTONGOS_STDIO_H
+#ifndef RORTHOX_STDIO_H
+#define RORTHOX_STDIO_H
 
 int putchar(int c);
 int printf(const char *format, ...);
 
-#endif // !POTONGOS_STDIO_H
+#endif // !RORTHOX_STDIO_H

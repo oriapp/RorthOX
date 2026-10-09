@@ -1,5 +1,5 @@
 #include "stdlib.h"
-#include "potongos.h"
+#include "rorthox.h"
 
 char *itoa(int i)
 {
@@ -34,10 +34,10 @@ char *itoa(int i)
 
 void *malloc(size_t size)
 {
-    return potongos_malloc(size);
+    return rorthox_malloc(size);
 }
 
 void free(void *ptr)
 {
-    potongos_free(ptr);
+    rorthox_free(ptr);
 }

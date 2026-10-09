@@ -1,4 +1,4 @@
-#include "potongos.h"
+#include "rorthox.h"
 #include "stdlib.h"
 #include "stdio.h"
 #include "string.h"
@@ -15,7 +15,7 @@ int main(int argc, char const **argv)
     }
 
     // char str[] = "Hello World!";
-    // struct command_argument *root_command =  potongos_parse_command(str, sizeof(str));
+    // struct command_argument *root_command =  rorthox_parse_command(str, sizeof(str));
     // printf("%s\n", root_command->argument);
     // printf("%s\n", root_command->next->argument);
 

@@ -1,5 +1,5 @@
-#ifndef POTONGOS_STRING_H
-#define POTONGOS_STRING_H
+#ifndef RORTHOX_STRING_H
+#define RORTHOX_STRING_H
 #include <stdbool.h>
 
 int strlen(const char *ptr);
@@ -14,4 +14,4 @@ int strnlen_terminator(const char *str, int max, char terminator);
 char tolower(char s1);
 char *strtok(char *str, const char *delimiters);
 
-#endif // !POTONGOS_STRING_H
+#endif // !RORTHOX_STRING_H
