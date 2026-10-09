@@ -7,6 +7,7 @@
 *.map
 *.ppm
 /build/smoke/
+/build/tests/
 
 # Meaty-skeleton / ISO leftovers
 /sysroot/
