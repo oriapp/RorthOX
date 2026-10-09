@@ -3,11 +3,17 @@ INCLUDES = -I./kernel
 # -MMD -MP: let the compiler record header dependencies (*.d) so editing a header rebuilds what uses it.
 FLAGS = -g -ffreestanding -falign-jumps -falign-functions -falign-labels -falign-loops -fstrength-reduce -fomit-frame-pointer -finline-functions -Wno-unused-function -fno-builtin -Werror -Wno-unused-label -Wno-cpp -Wno-unused-parameter -nostdlib -nostartfiles -nodefaultlibs -Wall -O0 -Iinc -MMD -MP
 
-# The boot sector loads the kernel from the sectors right after it. The FAT16 "reserved sectors"
-# area (ReservedSectors = 200 in boot.asm) holds the boot sector plus the kernel, so the kernel
-# may use at most 199 sectors. The same number is passed to boot.asm, and kernel.bin is checked
-# against it so it can never be silently truncated.
-KERNEL_SECTORS = 199
+# FAT16 disk layout (512-byte sectors). This is the only place these numbers are written down:
+# boot.asm gets them for its BPB (nasm -D), and the image and the size guard below use them too.
+#   sector 0                       boot sector with the BPB
+#   sectors 1 .. RESERVED - 1      kernel.bin, loaded by the boot sector (KERNEL_SECTORS)
+#   RESERVED ..                    FAT 1, then FAT 2 (SECTORS_PER_FAT each), root directory, data
+# kernel.bin is checked against KERNEL_SECTORS so it can never be silently truncated.
+RESERVED_SECTORS = 200
+SECTORS_PER_FAT = 256
+KERNEL_SECTORS := $(shell echo $$(($(RESERVED_SECTORS) - 1)))
+FAT1_SECTOR := $(RESERVED_SECTORS)
+FAT2_SECTOR := $(shell echo $$(($(RESERVED_SECTORS) + $(SECTORS_PER_FAT))))
 
 # Files copied into the FAT16 filesystem of the disk image (with mtools, no root needed).
 IMAGE_FILES = ./programs/shell/build/shell.elf ./programs/blank/build/blank.elf
@@ -30,10 +36,10 @@ all: ./bin/boot.bin ./bin/kernel.bin user_programs
 	cat ./bin/boot.bin ./bin/kernel.bin > ./bin/os.bin
 	# Append 16 MiB of zeroes: the FAT tables, root directory and data area of the filesystem.
 	dd if=/dev/zero bs=1048576 count=16 status=none >> ./bin/os.bin
-	# The FAT16 layout comes from the BPB in boot.asm. Mark FAT entries 0 and 1 (media byte
-	# 0xF8, end-of-chain) in both FAT copies so tools see a valid, empty filesystem.
-	printf '\370\377\377\377' | dd of=./bin/os.bin bs=512 seek=200 conv=notrunc status=none
-	printf '\370\377\377\377' | dd of=./bin/os.bin bs=512 seek=456 conv=notrunc status=none
+	# Mark FAT entries 0 and 1 (media byte 0xF8, end-of-chain) in both FAT copies
+	# so tools see a valid, empty filesystem.
+	printf '\370\377\377\377' | dd of=./bin/os.bin bs=512 seek=$(FAT1_SECTOR) conv=notrunc status=none
+	printf '\370\377\377\377' | dd of=./bin/os.bin bs=512 seek=$(FAT2_SECTOR) conv=notrunc status=none
 	mcopy -i ./bin/os.bin $(IMAGE_FILES) ::
 	mdir -i ./bin/os.bin ::
 
@@ -47,7 +53,7 @@ all: ./bin/boot.bin ./bin/kernel.bin user_programs
 	fi; echo "kernel.bin: $$size of $$max bytes"
 
 ./bin/boot.bin: ./kernel/boot/boot.asm Makefile
-	nasm -f bin -DKERNEL_SECTORS=$(KERNEL_SECTORS) ./kernel/boot/boot.asm -o ./bin/boot.bin
+	nasm -f bin -DRESERVED_SECTORS=$(RESERVED_SECTORS) -DSECTORS_PER_FAT=$(SECTORS_PER_FAT) ./kernel/boot/boot.asm -o ./bin/boot.bin
 
 ./build/kernel.asm.o: ./kernel/kernel.asm
 	nasm -f elf -g ./kernel/kernel.asm -o ./build/kernel.asm.o

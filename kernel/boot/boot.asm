@@ -1,13 +1,18 @@
 ORG 0x7c00
 BITS 16
 
-; How many sectors of kernel to load after the boot sector. The Makefile passes
-; -DKERNEL_SECTORS; the kernel must fit in the FAT16 reserved area (ReservedSectors - 1).
-%ifndef KERNEL_SECTORS
-%define KERNEL_SECTORS 199
+; Disk layout. The Makefile passes both values (-DRESERVED_SECTORS=... -DSECTORS_PER_FAT=...)
+; and uses the same ones to build the image, so they are defined in one place only.
+; The kernel is stored right after the boot sector and fills the rest of the reserved area.
+%ifndef RESERVED_SECTORS
+%fatal "RESERVED_SECTORS is not defined (build with make)"
 %endif
-%if KERNEL_SECTORS > 199
-%error "KERNEL_SECTORS must be at most 199 (ReservedSectors - 1)"
+%ifndef SECTORS_PER_FAT
+%fatal "SECTORS_PER_FAT is not defined (build with make)"
+%endif
+%define KERNEL_SECTORS (RESERVED_SECTORS - 1)
+%if KERNEL_SECTORS < 1 || KERNEL_SECTORS > 255
+%fatal "the kernel area must be 1 to 255 sectors (the ATA sector count register is 8 bits)"
 %endif
 
 CODE_SEG equ gdt_code - gdt_start
@@ -22,12 +27,12 @@ nop
 OEMIdentifier           db 'POTONGOS'
 BytesPerSector          dw 0x200
 SectorsPerCluster       db 0x80
-ReservedSectors         dw 200
+ReservedSectors         dw RESERVED_SECTORS
 FATCopies               db 0x02
 RootDirEntries          dw 0x40
 NumSectors              dw 0x00
 MediaType               db 0xF8
-SectorsPerFat           dw 0x100
+SectorsPerFat           dw SECTORS_PER_FAT
 SectorsPerTrack         dw 0x20
 NumberOfHeads           dw 0x40
 HiddenSectors           dd 0x00
@@ -101,7 +106,7 @@ gdt_descriptor:
 [BITS 32]
 load32:                 ;   0 is the boot sector
     mov eax, 1          ;   Starting sector
-    mov ecx, KERNEL_SECTORS ; Number of kernel sectors (set by the Makefile, at most 199)
+    mov ecx, KERNEL_SECTORS ; Number of kernel sectors (ReservedSectors - 1)
     mov edi, 0x0100000  ;   1MG (related to rep insw
     call ata_lba_read
     ; call ata_lba_write
