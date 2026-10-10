@@ -19,7 +19,7 @@ print:
     push ebp
     mov ebp, esp
     push dword[ebp+8]
-    mov eax, 1 ; Command print
+    mov eax, SYSCALL_PRINT ; Command print
     int SYSCALL_VECTOR
     add esp, 4
 
@@ -32,7 +32,7 @@ printc:
     mov ebp, esp
     push dword[ebp+8]
     push dword[ebp+8]
-    mov eax, 10 ; Command printc
+    mov eax, SYSCALL_PRINTC ; Command printc
     int SYSCALL_VECTOR
     add esp, 8
 
@@ -43,7 +43,7 @@ printc:
 rorthox_getkey:
     push ebp
     mov ebp, esp
-    mov eax, 2 ; Command getkey
+    mov eax, SYSCALL_GETKEY ; Command getkey
     int SYSCALL_VECTOR
     pop ebp
     ret
@@ -52,7 +52,7 @@ rorthox_getkey:
 rorthox_putchar:
     push ebp
     mov ebp, esp
-    mov eax, 3 ; Command 3 putchar
+    mov eax, SYSCALL_PUTCHAR ; Command putchar
     push dword[ebp+8] ; Variable "c"
     int SYSCALL_VECTOR
     add esp, 4
@@ -63,7 +63,7 @@ rorthox_putchar:
 rorthox_malloc:
     push ebp
     mov ebp, esp
-    mov eax, 4 ; Command malloc (Allocate memory for the process)
+    mov eax, SYSCALL_MALLOC ; Command malloc (Allocate memory for the process)
     push dword[ebp+8] ; Variable "size"
     int SYSCALL_VECTOR
     add esp, 4
@@ -74,7 +74,7 @@ rorthox_malloc:
 rorthox_free:
     push ebp
     mov ebp, esp
-    mov eax, 5 ; Command free (Frees the allocated memory for this process)
+    mov eax, SYSCALL_FREE ; Command free (Frees the allocated memory for this process)
     push dword[ebp+8] ; Variable "ptr"
     int SYSCALL_VECTOR
     add esp, 4
@@ -85,7 +85,7 @@ rorthox_free:
 rorthox_process_load_start:
     push ebp
     mov ebp, esp
-    mov eax, 6 ; Command 6 process load start ( starts a process )
+    mov eax, SYSCALL_PROCESS_LOAD_START ; Command process load start ( starts a process )
     push dword[ebp+8] ; Variable "filename"
     int SYSCALL_VECTOR
     add esp, 4
@@ -96,7 +96,7 @@ rorthox_process_load_start:
 rorthox_system:
     push ebp
     mov ebp, esp
-    mov eax, 7 ; Command 7 process_system (Runs a system command based on the arguments)
+    mov eax, SYSCALL_INVOKE_SYSTEM_COMMAND ; Command process_system (Runs a system command based on the arguments)
     push dword[ebp+8] ; Variable "arguments"
     int SYSCALL_VECTOR
     add esp, 4
@@ -107,7 +107,7 @@ rorthox_system:
 rorthox_process_get_arguments:
     push ebp
     mov ebp, esp
-    mov eax, 8 ; Command 8 Gets the process arguments
+    mov eax, SYSCALL_GET_PROGRAM_ARGUMENTS ; Gets the process arguments
     push dword[ebp+8] ; Variable "arguments"
     int SYSCALL_VECTOR
     add esp, 4
@@ -118,7 +118,7 @@ rorthox_process_get_arguments:
 rorthox_exit:
     push ebp
     mov ebp, esp
-    mov eax, 9 ; Command process exit
+    mov eax, SYSCALL_EXIT ; Command process exit
     int SYSCALL_VECTOR
     pop ebp
     ret
