@@ -287,7 +287,7 @@ $(IMAGE_FILES): | user_programs
 ./build/string/string.o: ./kernel/string/string.c
 	i686-elf-gcc $(INCLUDES) -I ./kernel/string $(FLAGS) -std=gnu99 -c ./kernel/string/string.c -o ./build/string/string.o
 
-# Test programs (heaptest.elf, heapfree.elf, oomtest.elf) go only into the test images that scripts/tests/ build, not into IMAGE_FILES.
+# Test programs (heaptest.elf, heapfree.elf, oomtest.elf, pathtest.elf) go only into the test images that scripts/tests/ build, not into IMAGE_FILES.
 user_programs: | $(CONFIG_H) $(CONFIG_INC) $(CONFIG_LD) $(CONFIG_ENV)
 	cd ./programs/stdlib && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
 	cd ./programs/blank && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
@@ -295,6 +295,7 @@ user_programs: | $(CONFIG_H) $(CONFIG_INC) $(CONFIG_LD) $(CONFIG_ENV)
 	cd ./programs/heaptest && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
 	cd ./programs/heapfree && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
 	cd ./programs/oomtest && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
+	cd ./programs/pathtest && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
 
 user_programs_clean:
 	cd ./programs/stdlib && $(MAKE) clean
@@ -303,6 +304,7 @@ user_programs_clean:
 	cd ./programs/heaptest && $(MAKE) clean
 	cd ./programs/heapfree && $(MAKE) clean
 	cd ./programs/oomtest && $(MAKE) clean
+	cd ./programs/pathtest && $(MAKE) clean
 
 # Boot the image headless in QEMU, type a command into the shell and check the output.
 smoke: all

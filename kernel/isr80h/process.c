@@ -17,8 +17,13 @@ void *isr80h_command6_process_load_start(struct interrupt_frame *frame)
     }
 
     char path[RORTHOX_MAX_PATH]; // TODO: look programs up through a PATH environment variable instead of always using 0:/
+    if (3 + strnlen(filename, sizeof(filename)) + 1 > sizeof(path))
+    {
+        return ERROR(-EINVARG);
+    }
+
     strcpy(path, "0:/");
-    strcpy(path+3, filename);
+    strncpy(path+3, filename, sizeof(path) - 3);
 
     struct process *process = 0;
     res = process_load_switch(path, &process);
@@ -39,7 +44,7 @@ out:
 void *isr80h_command7_invoke_system_command(struct interrupt_frame *frame)
 {
     struct command_argument *arguments = task_virtual_address_to_physical(task_current(), task_get_stack_item(task_current(), 0));
-    if (!arguments || strlen(arguments[0].argument) == 0)
+    if (!arguments || arguments[0].argument[0] == 0)
     {
         return ERROR(-EINVARG);
     }
@@ -48,8 +53,13 @@ void *isr80h_command7_invoke_system_command(struct interrupt_frame *frame)
     const char  *program_name = root_command_argument->argument;
 
     char path[RORTHOX_MAX_PATH];
+    if (3 + strnlen(program_name, sizeof(root_command_argument->argument)) + 1 > sizeof(path))
+    {
+        return ERROR(-EINVARG);
+    }
+
     strcpy(path, "0:/");
-    strncpy(path+3, program_name, sizeof(path));
+    strncpy(path+3, program_name, sizeof(path) - 3);
     
     struct process *process = 0;
     int res = process_load_switch(path, &process);
