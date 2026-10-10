@@ -12,6 +12,8 @@
 # Env: BOOT_TIMEOUT=60 (seconds to wait for the shell)   RUN_TIMEOUT=60 (for each oomtest run)
 #      EXIT_TIMEOUT=15 (for each process to end, and for blank.elf to start)
 #      OOM_CASES="table task ..." (run only these cases, in this order)
+#      OOM_SUITE=heap-oom (name used for the output directory and the messages; open-oom.sh
+#      runs the open cases through this script)
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -21,7 +23,8 @@ EXIT_TIMEOUT="${EXIT_TIMEOUT:-15}"
 QEMU_TIMEOUT="${QEMU_TIMEOUT:-180}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/heap-oom
+SUITE="${OOM_SUITE:-heap-oom}"
+OUT="build/tests/$SUITE"
 PROGRAM=programs/oomtest/build/oomtest.elf
 BLANK_ELF=programs/blank/build/blank.elf
 SHELL_ELF=programs/shell/build/shell.elf
@@ -31,14 +34,14 @@ mkdir -p "$OUT"
 
 # All ELF files must fit in one FAT cluster (64 KiB). oomtest.elf works out the block budget
 # from the real size of blank.elf.
-[ -f "$PROGRAM" ] || { echo "heap-oom: $PROGRAM not found, run 'make all' first" >&2; exit 1; }
+[ -f "$PROGRAM" ] || { echo "$SUITE: $PROGRAM not found, run 'make all' first" >&2; exit 1; }
 for elf in "$SHELL_ELF" "$BLANK_ELF" "$PROGRAM"; do
     size=$(wc -c < "$elf")
     echo "  $elf: $size bytes"
-    [ "$size" -le 65536 ] || { echo "heap-oom: $elf is bigger than 64 KiB" >&2; exit 1; }
+    [ "$size" -le 65536 ] || { echo "$SUITE: $elf is bigger than 64 KiB" >&2; exit 1; }
 done
 blank_size=$(wc -c < "$BLANK_ELF")
-[ "$QEMU_RAM_MIB" -ge 128 ] || { echo "heap-oom: needs QEMU_RAM_MIB >= 128 (is $QEMU_RAM_MIB)" >&2; exit 1; }
+[ "$QEMU_RAM_MIB" -ge 128 ] || { echo "$SUITE: needs QEMU_RAM_MIB >= 128 (is $QEMU_RAM_MIB)" >&2; exit 1; }
 
 # wait_lines <regex> <count> <seconds>: wait until <count> screen lines match <regex>.
 wait_lines() {
@@ -59,14 +62,14 @@ wait_lines() {
 
 image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
-cp bin/os.bin "$OUT/heap-oom.bin"
-mcopy -i "$OUT/heap-oom.bin" "$PROGRAM" ::
+cp bin/os.bin "$OUT/$SUITE.bin"
+mcopy -i "$OUT/$SUITE.bin" "$PROGRAM" ::
 
 # run_case <case>: one fresh boot. Adds to $failures.
 run_case() {
     local name="$1" dir="$OUT/$1" returned=0
-    echo "heap-oom: case $name (blank.elf is $blank_size bytes)"
-    qemu_start "$OUT/heap-oom.bin" "$dir"
+    echo "$SUITE: case $name (blank.elf is $blank_size bytes)"
+    qemu_start "$OUT/$SUITE.bin" "$dir"
     if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT"; then
         type_line "oomtest.elf $name $blank_size"
         # The heap gets nearly full only after a key, once the shell is back at its prompt
@@ -92,7 +95,7 @@ run_case() {
         fi
     fi
     if [ "$returned" = 0 ]; then
-        echo "  heap-oom: $name did not return; possible allocation-path crash or hang"
+        echo "  $SUITE: $name did not return; possible allocation-path crash or hang"
         failures=$((failures + 1))
     fi
     qemu_stop || true
@@ -119,7 +122,7 @@ run_case() {
 for name in $CASES; do
     run_case "$name"
     if [ "$failures" -ne 0 ]; then
-        echo "heap-oom: stopping after the first failing case ($name)"
+        echo "$SUITE: stopping after the first failing case ($name)"
         break
     fi
 done
@@ -127,4 +130,4 @@ done
 hash_after=$(image_hash)
 [ "$hash_before" = "$hash_after" ] && echo "unchanged" > "$OUT/image.txt" || echo "changed" > "$OUT/image.txt"
 check "bin/os.bin not changed by the test"  "$OUT/image.txt"  "unchanged" line
-finish heap-oom
+finish "$SUITE"

@@ -29,6 +29,10 @@ static int pathparser_get_drive_by_path(const char **path)
 static struct path_root* pathparser_create_root(int drive_number)
 {
     struct path_root *path_r = kzalloc(sizeof(struct path_root));
+    if (!path_r)
+    {
+        return 0;
+    }
     path_r->drive_no = drive_number;
     path_r->first = 0;
     
@@ -37,10 +41,28 @@ static struct path_root* pathparser_create_root(int drive_number)
 
 static const char *pathparser_get_path_part(const char **path)
 {
+    if (**path == '/' || **path == 0x00)
+    {
+        if (**path == '/')
+        {
+            *path += 1;
+        }
+        return 0;
+    }
+
     char *result_path_part = kzalloc(RORTHOX_MAX_PATH);
+    if (!result_path_part)
+    {
+        return ERROR(-ENOMEM);
+    }
     int i = 0;
     while(**path != '/' && **path != 0x00)
     {
+        if (i >= RORTHOX_MAX_PATH - 1)
+        {
+            kfree(result_path_part);
+            return ERROR(-EBADPATH);
+        }
         result_path_part[i] = **path;
         *path += 1;
         i++;
@@ -52,24 +74,27 @@ static const char *pathparser_get_path_part(const char **path)
         *path += 1;
     }
 
-    if (i == 0)
-    {
-        kfree(result_path_part);
-        result_path_part = 0;
-    }
-
     return result_path_part;
 }
 
 struct path_part *pathparser_parse_path_part(struct path_part *last_part, const char **path)
 {
     const char *path_part_str = pathparser_get_path_part(path);
+    if (ISERR(path_part_str))
+    {
+        return ERROR(ERROR_I(path_part_str));
+    }
     if (!path_part_str)
     {
         return 0;
     }
     
     struct path_part *part = kzalloc(sizeof(struct path_part));
+    if (!part)
+    {
+        kfree((void*) path_part_str);
+        return ERROR(-ENOMEM);
+    }
     part->part = path_part_str;
     part->next = 0x00;
 
@@ -83,6 +108,10 @@ struct path_part *pathparser_parse_path_part(struct path_part *last_part, const 
 
 void pathparser_free(struct path_root *root)
 {
+    if (!root)
+    {
+        return;
+    }
     struct path_part *part = root->first;
 
     while (part)
@@ -102,7 +131,7 @@ struct path_root *pathparser_parse(const char *path, const char *current_directo
     const char *tmp_path = path;
     struct path_root *path_root = 0;
 
-    if (strlen(path) > RORTHOX_MAX_PATH)
+    if (strnlen(path, RORTHOX_MAX_PATH + 1) > RORTHOX_MAX_PATH)
     {
         goto out;
     }
@@ -122,6 +151,10 @@ struct path_root *pathparser_parse(const char *path, const char *current_directo
 
     struct path_part *first_part = pathparser_parse_path_part(NULL, &tmp_path);
 
+    if (ISERR(first_part))
+    {
+        goto out_free;
+    }
     if (!first_part)
     {
         goto out;
@@ -132,9 +165,17 @@ struct path_root *pathparser_parse(const char *path, const char *current_directo
 
     while(part)
     {
+        if (ISERR(part))
+        {
+            goto out_free;
+        }
         part = pathparser_parse_path_part(part, &tmp_path);
     }
+    goto out;
 
+out_free:
+    pathparser_free(path_root);
+    path_root = 0;
 out:
     return path_root;
 }

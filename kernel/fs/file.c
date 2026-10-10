@@ -74,6 +74,10 @@ static int file_new_descriptor(struct file_descriptor **desc_out)
         if (file_descriptors[i] == 0) // We found something to use
         {
             struct file_descriptor *desc = kzalloc(sizeof(struct file_descriptor));
+            if (!desc)
+            {
+                break;
+            }
             // Descriptors start at 1
             desc->index = i + 1;
             file_descriptors[i] = desc;
@@ -186,6 +190,7 @@ int fopen(const char *filename, const char *mode_str)
     res = file_new_descriptor(&desc);
     if (res < 0)
     {
+        disk->filesystem->close(descriptor_private_data);
         goto out;
     }
 
