@@ -1,8 +1,8 @@
 ORG 0x7c00
 BITS 16
 
-; Disk layout. The Makefile passes both values (-DRESERVED_SECTORS=... -DSECTORS_PER_FAT=...)
-; and uses the same ones to build the image, so they are defined in one place only.
+; Disk layout comes from config.mk through the build include.
+%include "rorthox-config.inc"
 ; The kernel is stored right after the boot sector and fills the rest of the reserved area.
 %ifndef RESERVED_SECTORS
 %fatal "RESERVED_SECTORS is not defined (build with make)"
@@ -10,7 +10,6 @@ BITS 16
 %ifndef SECTORS_PER_FAT
 %fatal "SECTORS_PER_FAT is not defined (build with make)"
 %endif
-%define KERNEL_SECTORS (RESERVED_SECTORS - 1)
 %if KERNEL_SECTORS < 1 || KERNEL_SECTORS > 255
 %fatal "the kernel area must be 1 to 255 sectors (the ATA sector count register is 8 bits)"
 %endif

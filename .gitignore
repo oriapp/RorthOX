@@ -6,6 +6,7 @@
 *.elf
 *.map
 *.ppm
+/build/config/
 /build/smoke/
 /build/tests/
 
