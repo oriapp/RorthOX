@@ -44,6 +44,9 @@ SYSCALL_GET_PROGRAM_ARGUMENTS = 8
 SYSCALL_EXIT = 9
 SYSCALL_PRINTC = 10
 
+# Bytes in the kernel/user command-argument field (including the terminator)
+COMMAND_ARGUMENT_SIZE = 512
+
 # Display identity and guest RAM (MiB)
 RORTHOX_NAME = RorthOX
 RORTHOX_VERSION = 1.0.0

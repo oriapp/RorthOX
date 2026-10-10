@@ -2,11 +2,12 @@
 #define RORTHOX_RORTHOX_H
 #include <stddef.h>
 #include <stdbool.h>
+#include "rorthox-config.h"
 
 // A linked list of arguments
 struct command_argument
 {
-    char argument[512];
+    char argument[RORTHOX_COMMAND_ARGUMENT_SIZE];
     struct command_argument *next;
 };
 

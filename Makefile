@@ -1,7 +1,7 @@
 include config.mk
 
 # Config values must come from config.mk, not untracked make command-line overrides.
-CONFIG_KEYS := RESERVED_SECTORS SECTORS_PER_FAT SECTOR_SIZE KERNEL_LOAD_ADDRESS KERNEL_BOOT_STACK_TOP KERNEL_TSS_STACK_TOP PROGRAM_LOAD_ADDRESS USER_STACK_TOP USER_STACK_SIZE KERNEL_CODE_SELECTOR KERNEL_DATA_SELECTOR USER_CODE_SELECTOR USER_DATA_SELECTOR TSS_SELECTOR SYSCALL_VECTOR PIC_MASTER_VECTOR_BASE PIC_SLAVE_VECTOR_BASE TOTAL_INTERRUPTS SYSCALL_SUM SYSCALL_PRINT SYSCALL_GETKEY SYSCALL_PUTCHAR SYSCALL_MALLOC SYSCALL_FREE SYSCALL_PROCESS_LOAD_START SYSCALL_INVOKE_SYSTEM_COMMAND SYSCALL_GET_PROGRAM_ARGUMENTS SYSCALL_EXIT SYSCALL_PRINTC RORTHOX_NAME RORTHOX_VERSION QEMU_RAM_MIB
+CONFIG_KEYS := RESERVED_SECTORS SECTORS_PER_FAT SECTOR_SIZE KERNEL_LOAD_ADDRESS KERNEL_BOOT_STACK_TOP KERNEL_TSS_STACK_TOP PROGRAM_LOAD_ADDRESS USER_STACK_TOP USER_STACK_SIZE KERNEL_CODE_SELECTOR KERNEL_DATA_SELECTOR USER_CODE_SELECTOR USER_DATA_SELECTOR TSS_SELECTOR SYSCALL_VECTOR PIC_MASTER_VECTOR_BASE PIC_SLAVE_VECTOR_BASE TOTAL_INTERRUPTS SYSCALL_SUM SYSCALL_PRINT SYSCALL_GETKEY SYSCALL_PUTCHAR SYSCALL_MALLOC SYSCALL_FREE SYSCALL_PROCESS_LOAD_START SYSCALL_INVOKE_SYSTEM_COMMAND SYSCALL_GET_PROGRAM_ARGUMENTS SYSCALL_EXIT SYSCALL_PRINTC COMMAND_ARGUMENT_SIZE RORTHOX_NAME RORTHOX_VERSION QEMU_RAM_MIB
 $(foreach key,$(CONFIG_KEYS),$(if $(filter command line,$(origin $(key))),$(error $(key) must be set in config.mk, not on the command line)))
 
 FILES = ./build/kernel.asm.o ./build/arch/sys.o ./build/arch/pit.o ./build/arch/sys.asm.o ./build/kernel.o ./build/arch/tty.o ./build/idt/idt.asm.o ./build/idt/idt.o ./build/memory/memory.o ./build/io/io.asm.o ./build/loader/formats/elfloader.o ./build/loader/formats/elf.o ./build/gdt/gdt.o ./build/gdt/gdt.asm.o ./build/memory/heap/heap.o ./build/memory/heap/kheap.o ./build/memory/paging/paging.o ./build/memory/paging/paging.asm.o ./build/isr80h/isr80h.o ./build/isr80h/heap.o ./build/keyboard/keyboard.o ./build/keyboard/classic.o ./build/isr80h/io.o ./build/isr80h/process.o ./build/isr80h/misc.o ./build/disk/disk.o ./build/disk/streamer.o ./build/task/process.o ./build/task/task.o ./build/task/task.asm.o ./build/task/tss.asm.o ./build/fs/pparser.o ./build/fs/file.o ./build/fs/fat/fat16.o ./build/string/string.o
@@ -54,6 +54,7 @@ $(CONFIG_H): config.mk Makefile
 		'#define SYSCALL_GET_PROGRAM_ARGUMENTS $(SYSCALL_GET_PROGRAM_ARGUMENTS)' \
 		'#define SYSCALL_EXIT $(SYSCALL_EXIT)' \
 		'#define SYSCALL_PRINTC $(SYSCALL_PRINTC)' \
+		'#define RORTHOX_COMMAND_ARGUMENT_SIZE $(COMMAND_ARGUMENT_SIZE)' \
 		'#define RORTHOX_NAME "$(RORTHOX_NAME)"' \
 		'#define RORTHOX_VERSION "$(RORTHOX_VERSION)"' \
 		'#endif' > $@.tmp
@@ -104,6 +105,10 @@ $(CONFIG_ENV): config.mk Makefile
 		'PIC_MASTER_VECTOR_BASE=$(PIC_MASTER_VECTOR_BASE)' \
 		'PIC_SLAVE_VECTOR_BASE=$(PIC_SLAVE_VECTOR_BASE)' > $@.tmp
 	@mv $@.tmp $@
+
+ifneq ($(shell [ $$(( $(COMMAND_ARGUMENT_SIZE) )) -ge 2 ] && echo valid),valid)
+$(error COMMAND_ARGUMENT_SIZE must hold a character and terminator)
+endif
 
 SYSCALL_NUMBERS := $(shell for n in $(SYSCALL_SUM) $(SYSCALL_PRINT) $(SYSCALL_GETKEY) $(SYSCALL_PUTCHAR) $(SYSCALL_MALLOC) $(SYSCALL_FREE) $(SYSCALL_PROCESS_LOAD_START) $(SYSCALL_INVOKE_SYSTEM_COMMAND) $(SYSCALL_GET_PROGRAM_ARGUMENTS) $(SYSCALL_EXIT) $(SYSCALL_PRINTC); do echo $$((n)); done)
 ifneq ($(words $(sort $(SYSCALL_NUMBERS))),11)

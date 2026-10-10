@@ -23,7 +23,7 @@ struct process_allocation
 
 struct command_argument
 {
-    char argument[512];
+    char argument[RORTHOX_COMMAND_ARGUMENT_SIZE];
     struct command_argument *next;    
 };
 
