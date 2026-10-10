@@ -224,6 +224,10 @@ int elf_load(const char *filename, struct elf_file **file_out)
 
 out:
     fclose(fd);
+    if (res < 0)
+    {
+        elf_close(elf_file);
+    }
     return res;
 }
 

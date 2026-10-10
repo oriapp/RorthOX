@@ -16,7 +16,7 @@
  * test counts the free blocks again right after the syscall. The allocations made before the
  * failing step are known leaks and are expected to stay taken. The "open..." cases (5 to 11 free
  * blocks) make one allocation of the file open fail, so the syscall returns -EIO; only the
- * command node, the process, the ELF object and the finished parsed path may stay taken.
+ * command node, the process and the finished parsed path may stay taken.
  *
  * The free blocks are counted straight from the kernel's heap table at RORTHOX_HEAP_TABLE_ADDRESS.
  * That only works because user programs can read all memory today; it is a test-only shortcut.
@@ -140,16 +140,16 @@ int main(int argc, char **argv)
         { "first",      14,  1, -EIO,    12, 1 },
         { "wrapper",  1038,  1, -EIO,    12, 1 },
         { "elfobject",   4,  0, -ENOMEM,  4, 0 },
-        { "elfdata",    11,  1, -ENOMEM,  8, 0 },
+        { "elfdata",    11,  1, -ENOMEM,  7, 0 },
         { "process",     3,  0, -ENOMEM,  1, 0 },
         // Opening blank.elf (scripts/tests/open-oom.sh): the first allocation to fail is
-        { "openroot",    5,  0, -EIO,     5, 0 },  // the parsed path's root
-        { "openpart",    6,  0, -EIO,     5, 0 },  // the first name
-        { "opennode",    7,  0, -EIO,     5, 0 },  // the first path part
-        { "openfat",     8,  0, -EIO,     8, 0 },  // the FAT descriptor
-        { "openitem",    9,  0, -EIO,     8, 0 },  // the FAT item
-        { "openclone",  10,  0, -EIO,     8, 0 },  // the copy of the directory entry
-        { "openvfs",    11,  0, -EIO,     8, 0 },  // the file descriptor
+        { "openroot",    5,  0, -EIO,     4, 0 },  // the parsed path's root
+        { "openpart",    6,  0, -EIO,     4, 0 },  // the first name
+        { "opennode",    7,  0, -EIO,     4, 0 },  // the first path part
+        { "openfat",     8,  0, -EIO,     7, 0 },  // the FAT descriptor
+        { "openitem",    9,  0, -EIO,     7, 0 },  // the FAT item
+        { "openclone",  10,  0, -EIO,     7, 0 },  // the copy of the directory entry
+        { "openvfs",    11,  0, -EIO,     7, 0 },  // the file descriptor
     };
     const struct oom_case *c = 0;
     void *plugs[MAX_PLUGS];
