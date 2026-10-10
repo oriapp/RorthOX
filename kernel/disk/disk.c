@@ -28,7 +28,7 @@ int disk_read_sector(int lba, int total, void *buf)
 
         // Copy from hard disk to memory
         int i;
-        for (i = 0; i < 256; i++)
+        for (i = 0; i < RORTHOX_SECTOR_SIZE / 2; i++)
         {
             *ptr = insw(0x1F0); // Reading a word
             ptr++;

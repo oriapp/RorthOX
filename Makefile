@@ -1,11 +1,11 @@
 include config.mk
 
 # Config values must come from config.mk, not untracked make command-line overrides.
-CONFIG_KEYS := RESERVED_SECTORS SECTORS_PER_FAT
+CONFIG_KEYS := RESERVED_SECTORS SECTORS_PER_FAT SECTOR_SIZE
 $(foreach key,$(CONFIG_KEYS),$(if $(filter command line,$(origin $(key))),$(error $(key) must be set in config.mk, not on the command line)))
 
 FILES = ./build/kernel.asm.o ./build/arch/sys.o ./build/arch/pit.o ./build/arch/sys.asm.o ./build/kernel.o ./build/arch/tty.o ./build/idt/idt.asm.o ./build/idt/idt.o ./build/memory/memory.o ./build/io/io.asm.o ./build/loader/formats/elfloader.o ./build/loader/formats/elf.o ./build/gdt/gdt.o ./build/gdt/gdt.asm.o ./build/memory/heap/heap.o ./build/memory/heap/kheap.o ./build/memory/paging/paging.o ./build/memory/paging/paging.asm.o ./build/isr80h/isr80h.o ./build/isr80h/heap.o ./build/keyboard/keyboard.o ./build/keyboard/classic.o ./build/isr80h/io.o ./build/isr80h/process.o ./build/isr80h/misc.o ./build/disk/disk.o ./build/disk/streamer.o ./build/task/process.o ./build/task/task.o ./build/task/task.asm.o ./build/task/tss.asm.o ./build/fs/pparser.o ./build/fs/file.o ./build/fs/fat/fat16.o ./build/string/string.o
-INCLUDES = -I./kernel
+INCLUDES = -I./kernel -Ibuild/config
 # -MMD -MP: let the compiler record header dependencies (*.d) so editing a header rebuilds what uses it.
 FLAGS = -g -ffreestanding -falign-jumps -falign-functions -falign-labels -falign-loops -fstrength-reduce -fomit-frame-pointer -finline-functions -Wno-unused-function -fno-builtin -Werror -Wno-unused-label -Wno-cpp -Wno-unused-parameter -nostdlib -nostartfiles -nodefaultlibs -Wall -O0 -Iinc -MMD -MP
 
@@ -25,12 +25,12 @@ CONFIG_ENV := build/config/rorthox-config.env
 
 $(CONFIG_H): config.mk Makefile
 	@mkdir -p build/config
-	@printf '%s\n' '#ifndef RORTHOX_BUILD_CONFIG_H' '#define RORTHOX_BUILD_CONFIG_H' '#endif' > $@.tmp
+	@printf '%s\n' '#ifndef RORTHOX_BUILD_CONFIG_H' '#define RORTHOX_BUILD_CONFIG_H' '#define RORTHOX_SECTOR_SIZE $(SECTOR_SIZE)' '#endif' > $@.tmp
 	@mv $@.tmp $@
 
 $(CONFIG_INC): config.mk Makefile
 	@mkdir -p build/config
-	@printf '%s\n' '%define RESERVED_SECTORS $(RESERVED_SECTORS)' '%define SECTORS_PER_FAT $(SECTORS_PER_FAT)' '%define KERNEL_SECTORS $(KERNEL_SECTORS)' > $@.tmp
+	@printf '%s\n' '%define RESERVED_SECTORS $(RESERVED_SECTORS)' '%define SECTORS_PER_FAT $(SECTORS_PER_FAT)' '%define KERNEL_SECTORS $(KERNEL_SECTORS)' '%define SECTOR_SIZE $(SECTOR_SIZE)' > $@.tmp
 	@mv $@.tmp $@
 
 $(CONFIG_LD): config.mk Makefile
@@ -43,6 +43,12 @@ $(CONFIG_ENV): config.mk Makefile
 	@printf '%s\n' '#!/usr/bin/env bash' > $@.tmp
 	@mv $@.tmp $@
 
+ifneq ($(SECTOR_SIZE),512)
+$(error SECTOR_SIZE must be 512: the BPB and ATA driver support only 512-byte sectors)
+endif
+
+$(filter-out %.asm.o,$(FILES)): | $(CONFIG_H)
+
 all: ./bin/os.bin
 
 ./bin/os.bin: ./bin/boot.bin ./bin/kernel.bin $(IMAGE_FILES) | user_programs
@@ -51,8 +57,8 @@ all: ./bin/os.bin
 	# Append 16 MiB of zeroes: the FAT tables, root directory and data area of the filesystem.
 	dd if=/dev/zero bs=1048576 count=16 status=none >> $@
 	# Mark FAT entries 0 and 1 (media byte 0xF8, end-of-chain) in both FAT copies.
-	printf '\370\377\377\377' | dd of=$@ bs=512 seek=$(FAT1_SECTOR) conv=notrunc status=none
-	printf '\370\377\377\377' | dd of=$@ bs=512 seek=$(FAT2_SECTOR) conv=notrunc status=none
+	printf '\370\377\377\377' | dd of=$@ bs=$(SECTOR_SIZE) seek=$(FAT1_SECTOR) conv=notrunc status=none
+	printf '\370\377\377\377' | dd of=$@ bs=$(SECTOR_SIZE) seek=$(FAT2_SECTOR) conv=notrunc status=none
 	mcopy -i $@ $(IMAGE_FILES) ::
 	mdir -i $@ ::
 
@@ -61,7 +67,7 @@ $(IMAGE_FILES): | user_programs
 ./bin/kernel.bin: $(FILES) ./kernel/linker.ld $(CONFIG_LD) config.mk
 	i686-elf-ld -g -relocatable $(FILES) -o ./build/kernelfull.o
 	i686-elf-gcc $(FLAGS) -Wl,-Map,./build/kernel.map -T ./kernel/linker.ld -o ./bin/kernel.bin -ffreestanding -O0 -nostdlib ./build/kernelfull.o
-	@size=$$(wc -c < $@); max=$$(($(KERNEL_SECTORS) * 512)); \
+	@size=$$(wc -c < $@); max=$$(($(KERNEL_SECTORS) * $(SECTOR_SIZE))); \
 	if [ $$size -gt $$max ]; then \
 		echo "error: kernel.bin is $$size bytes but the bootloader loads only $$max ($(KERNEL_SECTORS) sectors)"; \
 		rm -f $@; exit 1; \

@@ -42,7 +42,7 @@ nop
 %endif
 
 OEMIdentifier           db OEM_ID
-BytesPerSector          dw 0x200
+BytesPerSector          dw SECTOR_SIZE
 SectorsPerCluster       db 0x80
 ReservedSectors         dw RESERVED_SECTORS
 FATCopies               db 0x02
@@ -189,7 +189,7 @@ ata_lba_read:
     jz .try_again
 
 ; We need to read 256 words at a time
-    mov ecx, 256    ; 256 words is 512 bytes (: i.e one sector
+    mov ecx, SECTOR_SIZE / 2    ; one sector in words
     ; ^ Do the insw instruction 256 times
     mov dx, 0x1F0
     rep insw    ; Input word from I/O port specified in DX into memory location specified in ES:(E)DI
@@ -248,7 +248,7 @@ ata_lba_write:
     jz .try_again
 
     ; We need to write 256 words at a time
-    mov ecx, 256
+    mov ecx, SECTOR_SIZE / 2
     mov dx, 0x1F0
     rep outsw    ; Output word from memory location specified in DS:(E)SI to I/O port specified in DX
     ; Writing to port 0x1F0 from "0x0100000" (memory)

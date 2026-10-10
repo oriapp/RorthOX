@@ -5,3 +5,6 @@
 # The kernel size guard prevents truncation by the bootloader.
 RESERVED_SECTORS = 200
 SECTORS_PER_FAT = 256
+
+# Logical disk sector (bytes; only 512 is supported)
+SECTOR_SIZE = 512
