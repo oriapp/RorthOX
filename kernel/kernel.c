@@ -101,6 +101,10 @@ void kernel_main()
 
     // Setup paging
     kernel_chunk = paging_new_4gb(PAGING_IS_WRITEABLE | PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL);
+    if (!kernel_chunk)
+    {
+        panic("Failed to set up kernel paging");
+    }
 
     // Swtich to kernel paging chunk
     paging_switch(kernel_chunk);
