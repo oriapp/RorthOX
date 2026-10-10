@@ -1,6 +1,6 @@
 /*
- * Out-of-memory test for scripts/tests/heap-oom.sh and scripts/tests/open-oom.sh (only copied
- * into the test images).
+ * Out-of-memory test for scripts/tests/heap-oom.sh and the tests that run their cases through it
+ * (open-oom.sh, elf-unwind.sh, argument-oom.sh). Only copied into the test images.
  *
  * Leaves an exact number of free kernel heap blocks, then asks the kernel to start blank.elf
  * (syscall 7). Loading blank.elf allocates, in this order (in 4 KiB blocks, E = blocks of the
@@ -18,6 +18,13 @@
  * "open..." cases (5 to 11 free blocks) make one allocation of the file open fail, so the
  * syscall returns -EIO.
  *
+ * The "arg..." cases (scripts/tests/argument-oom.sh) run "blank.elf arg-one arg-two" from a command
+ * list built before the heap gets full, so the syscall makes no user allocation. They leave
+ * room for the whole new process but not for its arguments (argv 1, then 1 per argument
+ * string), so copying the arguments fails. The new process must never start, only the finished
+ * parsed path may stay taken, and the keyboard must stay with oomtest: after the results it
+ * prints "press a key" and waits for one more key.
+ *
  * The free blocks are counted straight from the kernel's heap table at RORTHOX_HEAP_TABLE_ADDRESS.
  * That only works because user programs can read all memory today; it is a test-only shortcut.
  *
@@ -33,6 +40,7 @@
 #include "rorthox.h"
 #include "stdlib.h"
 #include "string.h"
+#include "memory.h"
 #include "config.h"
 #include "status.h"
 
@@ -59,7 +67,29 @@ struct oom_case
     // Blocks still taken after the syscall returns: kept_base + kept_per_e * E
     int kept_base;
     int kept_per_e;
+    // 1: run "blank.elf arg-one arg-two" from a command list made before the setup
+    int arguments;
 };
+
+// The command list for the "arg..." cases. NULL if malloc fails.
+static struct command_argument *make_command(void)
+{
+    const char *words[] = { "blank.elf", "arg-one", "arg-two" };
+    struct command_argument *next = 0;
+    for (int i = 2; i >= 0; i--)
+    {
+        struct command_argument *node = malloc(sizeof(struct command_argument));
+        if (!node)
+        {
+            return 0;
+        }
+        memset(node, 0, sizeof(*node));
+        strncpy(node->argument, words[i], sizeof(node->argument));
+        node->next = next;
+        next = node;
+    }
+    return next;
+}
 
 // One line per print call: the shell runs alongside and may print between two calls.
 static void say(const char *name, const char *text, int a, int b)
@@ -150,6 +180,12 @@ int main(int argc, char **argv)
         { "openitem",    9,  0, -EIO,     4, 0 },  // the FAT item
         { "openclone",  10,  0, -EIO,     4, 0 },  // the copy of the directory entry
         { "openvfs",    11,  0, -EIO,     4, 0 },  // the file descriptor
+        // "blank.elf arg-one arg-two" (scripts/tests/argument-oom.sh): the whole process fits
+        // (1038 + E blocks), then the first allocation to fail is
+        { "argv",     1038,  1, -ENOMEM,  3, 0, 1 },  // argv
+        { "arg1",     1039,  1, -ENOMEM,  3, 0, 1 },  // the copy of "blank.elf"
+        { "arg2",     1040,  1, -ENOMEM,  3, 0, 1 },  // the copy of "arg-one"
+        { "arg3",     1041,  1, -ENOMEM,  3, 0, 1 },  // the copy of "arg-two"
     };
     const struct oom_case *c = 0;
     void *plugs[MAX_PLUGS];
@@ -185,6 +221,18 @@ int main(int argc, char **argv)
     }
     int want_free = c->free_base + c->free_per_e * e;
     int want_kept = c->kept_base + c->kept_per_e * e;
+
+    struct command_argument *command = 0;
+    if (c->arguments)
+    {
+        command = make_command();
+        if (!command)
+        {
+            say(c->name, "FAIL setup: no memory for the command list", NONE, NONE);
+            say(c->name, "done", NONE, NONE);
+            return 1;
+        }
+    }
 
     say(c->name, "ready", NONE, NONE);
     rorthox_getkeyblock();
@@ -260,7 +308,7 @@ int main(int argc, char **argv)
     int free_after = free_before;
     if (!setup)
     {
-        result = rorthox_system_run("blank.elf");
+        result = c->arguments ? rorthox_system(command) : rorthox_system_run("blank.elf");
         free_after = count_free();
     }
 
@@ -295,6 +343,13 @@ int main(int argc, char **argv)
     if (!failed)
     {
         say(c->name, "PASS", NONE, NONE);
+    }
+    if (c->arguments)
+    {
+        // A failed launch must leave the keyboard with this program.
+        say(c->name, "press a key", NONE, NONE);
+        rorthox_getkeyblock();
+        say(c->name, "got the key", NONE, NONE);
     }
     say(c->name, "done", NONE, NONE);
     return failed;

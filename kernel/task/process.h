@@ -77,6 +77,7 @@ void process_free(struct process *process, void *ptr);
 int process_inject_arguments(struct process *process, struct command_argument *root_argument);
 void process_get_arguments(struct process *process, int *argc, char ***argv);
 int process_load(const char *filename, struct process **process);
+int process_load_with_arguments(const char *filename, struct process **process, struct command_argument *root_argument);
 int process_load_switch(const char *filename, struct process **process);
 int process_load_for_slot(const char *filename, struct process **process, int process_slot);
 struct process *process_current();

@@ -62,18 +62,13 @@ void *isr80h_command7_invoke_system_command(struct interrupt_frame *frame)
     strncpy(path+3, program_name, sizeof(path) - 3);
     
     struct process *process = 0;
-    int res = process_load_switch(path, &process);
+    int res = process_load_with_arguments(path, &process, root_command_argument);
     if (res < 0)
     {
         return ERROR(res);
     }
 
-    res = process_inject_arguments(process, root_command_argument);
-    if (res < 0)
-    {
-        return ERROR(res);
-    }
-
+    process_switch(process);
     task_switch(process->task);
     task_return(&process->task->registers);
 

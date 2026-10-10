@@ -6,7 +6,8 @@
 # number of free heap blocks, so one chosen allocation fails while the kernel loads blank.elf
 # (a page table in the middle, the task, the page directory, the first page table, the paging
 # chunk, the ELF object, the ELF file, the process). It checks the syscall's result and how
-# many blocks are still taken afterwards. Then blank.elf must start from the shell.
+# many blocks are still taken afterwards. No program may start from the failed syscall, and then
+# blank.elf must start from the shell.
 # The script stops after the first failing case. bin/os.bin itself must not change.
 #
 # Env: BOOT_TIMEOUT=60 (seconds to wait for the shell)   RUN_TIMEOUT=60 (for each oomtest run)
@@ -68,6 +69,8 @@ mcopy -i "$OUT/$SUITE.bin" "$PROGRAM" ::
 # run_case <case>: one fresh boot. Adds to $failures.
 run_case() {
     local name="$1" dir="$OUT/$1" returned=0
+    mkdir -p "$dir"
+    : > "$dir/screen-before-blank.txt"
     echo "$SUITE: case $name (blank.elf is $blank_size bytes)"
     qemu_start "$OUT/$SUITE.bin" "$dir"
     if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT"; then
@@ -82,10 +85,18 @@ run_case() {
                 ! grep -qF "oomtest $name: done" "$dir/screen.txt"; then
                 qemu_cmd "sendkey r"
             fi
+            # The "arg..." cases wait for one more key after the syscall: the failed launch must
+            # leave the keyboard with oomtest.
+            if wait_lines "oomtest $name: (press a key|done)" 1 "$RUN_TIMEOUT" &&
+                ! grep -qF "oomtest $name: done" "$dir/screen.txt"; then
+                qemu_cmd "sendkey k"
+            fi
             if wait_screen "oomtest $name: done" "$RUN_TIMEOUT"; then
                 returned=1
                 if grep -qF "oomtest $name: PASS" "$dir/screen.txt" &&
                     wait_lines 'Process was terminated' 1 "$EXIT_TIMEOUT"; then
+                    # No other program may have started before the shell starts blank.elf.
+                    cp "$dir/screen.txt" "$dir/screen-before-blank.txt"
                     type_line "blank.elf after-$name"
                     if wait_screen "Blank loaded" "$EXIT_TIMEOUT"; then
                         wait_lines 'Process was terminated' 2 "$EXIT_TIMEOUT" || true
@@ -114,6 +125,10 @@ run_case() {
     check "$name: failed step gave its blocks back"            "$dir/screen.txt"     "oomtest $name: FAIL blocks kept" absent
     check "$name: oomtest passed"                              "$dir/screen.txt"     "oomtest $name: PASS"
     check "$name: oomtest finished"                            "$dir/screen.txt"     "oomtest $name: done"
+    check "$name: no program started by the failed syscall"    "$dir/screen-before-blank.txt" "Blank loaded" absent
+    case "$name" in
+        arg*) check "$name: oomtest still got the keyboard"   "$dir/screen.txt"     "oomtest $name: got the key" ;;
+    esac
     check "$name: blank.elf started from the shell afterwards" "$dir/screen.txt"     "Blank loaded"
     check "$name: blank.elf got its argument"                  "$dir/screen.txt"     "after-$name" line
     check "$name: both processes ended"                        "$dir/terminated.txt" "terminated=2" line

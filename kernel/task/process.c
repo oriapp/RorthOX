@@ -307,7 +307,7 @@ int process_inject_arguments(struct process *process, struct command_argument *r
         if (!argument_str)
         {
             res = -ENOMEM;
-            goto out;
+            goto out_free;
         }
 
         strncpy(argument_str, current->argument, sizeof(current->argument));
@@ -318,7 +318,14 @@ int process_inject_arguments(struct process *process, struct command_argument *r
 
     process->arguments.argc = argc;
     process->arguments.argv = argv;
+    goto out;
 
+out_free:
+    while (i > 0)
+    {
+        process_free(process, argv[--i]);
+    }
+    process_free(process, argv);
 out:
     return res;
 }
@@ -467,7 +474,9 @@ int process_get_free_slot()
     return -EISTKN;
 }
 
-int process_load(const char *filename, struct process **process)
+static int process_load_for_slot_with_arguments(const char *filename, struct process **process, int process_slot, struct command_argument *root_argument);
+
+int process_load_with_arguments(const char *filename, struct process **process, struct command_argument *root_argument)
 {
     int res = 0;
     int process_slot = process_get_free_slot();
@@ -477,9 +486,14 @@ int process_load(const char *filename, struct process **process)
         goto out;
     }
 
-    res = process_load_for_slot(filename, process, process_slot);
+    res = process_load_for_slot_with_arguments(filename, process, process_slot, root_argument);
 out:
     return res;
+}
+
+int process_load(const char *filename, struct process **process)
+{
+    return process_load_with_arguments(filename, process, NULL);
 }
 
 int process_load_switch(const char *filename, struct process **process)
@@ -511,6 +525,11 @@ static void process_discard(struct process *process)
 }
 
 int process_load_for_slot(const char *filename, struct process **process, int process_slot)
+{
+    return process_load_for_slot_with_arguments(filename, process, process_slot, NULL);
+}
+
+static int process_load_for_slot_with_arguments(const char *filename, struct process **process, int process_slot, struct command_argument *root_argument)
 {
     int res = 0;
     struct task *task = 0;
@@ -566,6 +585,15 @@ int process_load_for_slot(const char *filename, struct process **process, int pr
     if (res < 0)
     {
         goto out;
+    }
+
+    if (root_argument)
+    {
+        res = process_inject_arguments(_process, root_argument);
+        if (res < 0)
+        {
+            goto out;
+        }
     }
 
     // Publish only after all fallible setup succeeds (interrupts are disabled).
