@@ -1,3 +1,4 @@
+%include "rorthox-config.inc"
 [BITS 32]   ; All code from here will be 32-bit
 
 global _start
@@ -16,7 +17,7 @@ _start:
     mov fs, ax
     mov gs, ax
     mov ss, ax
-    mov ebp, 0x00200000
+    mov ebp, KERNEL_BOOT_STACK_TOP
     mov esp, ebp
     ; Set data registers - End
 

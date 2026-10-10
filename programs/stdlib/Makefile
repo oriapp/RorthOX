@@ -1,7 +1,10 @@
 FILES=./build/start.asm.o ./build/rorthox.asm.o ./build/rorthox.o ./build/stdlib.o ./build/stdio.o ./build/string.o ./build/memory.o ./build/start.o
-INCLUDES= -I ./src
+CONFIG_DIR ?= $(abspath ../../build/config)
+INCLUDES= -I ./src -I$(CONFIG_DIR)
 FLAGS= -g -ffreestanding -falign-jumps -falign-functions -falign-labels -falign-loops -fstrength-reduce -fomit-frame-pointer -finline-functions -Wno-unused-function -fno-builtin -Werror -Wno-unused-label -Wno-cpp -Wno-unused-parameter -nostdlib -nostartfiles -nodefaultlibs -Wall -O0 -Iinc -MMD -MP
-all: ${FILES}
+all: ./stdlib.elf
+
+./stdlib.elf: ${FILES}
 	i686-elf-ld -m elf_i386 -relocatable ${FILES} -o ./stdlib.elf
 
 ./build/start.asm.o: ./src/start.asm
@@ -27,6 +30,8 @@ all: ${FILES}
 
 ./build/start.o: ./src/start.c
 	i686-elf-gcc ${INCLUDES} ${FLAGS} -std=gnu99 -c ./src/start.c -o ./build/start.o
+
+.PHONY: all clean
 
 clean:
 	rm -rf ${FILES} $(FILES:.o=.d)

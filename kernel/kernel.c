@@ -87,7 +87,7 @@ void kernel_main()
 
     // Setup the TSS
     memset(&tss, 0x00, sizeof(tss)); // memse the whole tss to 0
-    tss.esp0 = 0x600000; // Where the kernel stack located
+    tss.esp0 = RORTHOX_KERNEL_TSS_STACK_TOP; // Where the kernel stack located
     tss.ss0 = KERNEL_DATA_SELECTOR;
 
     // Load the TSS

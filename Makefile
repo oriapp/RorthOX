@@ -1,7 +1,7 @@
 include config.mk
 
 # Config values must come from config.mk, not untracked make command-line overrides.
-CONFIG_KEYS := RESERVED_SECTORS SECTORS_PER_FAT SECTOR_SIZE
+CONFIG_KEYS := RESERVED_SECTORS SECTORS_PER_FAT SECTOR_SIZE KERNEL_LOAD_ADDRESS KERNEL_BOOT_STACK_TOP KERNEL_TSS_STACK_TOP PROGRAM_LOAD_ADDRESS USER_STACK_TOP USER_STACK_SIZE
 $(foreach key,$(CONFIG_KEYS),$(if $(filter command line,$(origin $(key))),$(error $(key) must be set in config.mk, not on the command line)))
 
 FILES = ./build/kernel.asm.o ./build/arch/sys.o ./build/arch/pit.o ./build/arch/sys.asm.o ./build/kernel.o ./build/arch/tty.o ./build/idt/idt.asm.o ./build/idt/idt.o ./build/memory/memory.o ./build/io/io.asm.o ./build/loader/formats/elfloader.o ./build/loader/formats/elf.o ./build/gdt/gdt.o ./build/gdt/gdt.asm.o ./build/memory/heap/heap.o ./build/memory/heap/kheap.o ./build/memory/paging/paging.o ./build/memory/paging/paging.asm.o ./build/isr80h/isr80h.o ./build/isr80h/heap.o ./build/keyboard/keyboard.o ./build/keyboard/classic.o ./build/isr80h/io.o ./build/isr80h/process.o ./build/isr80h/misc.o ./build/disk/disk.o ./build/disk/streamer.o ./build/task/process.o ./build/task/task.o ./build/task/task.asm.o ./build/task/tss.asm.o ./build/fs/pparser.o ./build/fs/file.o ./build/fs/fat/fat16.o ./build/string/string.o
@@ -25,17 +25,17 @@ CONFIG_ENV := build/config/rorthox-config.env
 
 $(CONFIG_H): config.mk Makefile
 	@mkdir -p build/config
-	@printf '%s\n' '#ifndef RORTHOX_BUILD_CONFIG_H' '#define RORTHOX_BUILD_CONFIG_H' '#define RORTHOX_SECTOR_SIZE $(SECTOR_SIZE)' '#endif' > $@.tmp
+	@printf '%s\n' '#ifndef RORTHOX_BUILD_CONFIG_H' '#define RORTHOX_BUILD_CONFIG_H' '#define RORTHOX_SECTOR_SIZE $(SECTOR_SIZE)' '#define RORTHOX_PROGRAM_VIRTUAL_ADDRESS $(PROGRAM_LOAD_ADDRESS)' '#define USER_PROGRAM_STACK_SIZE $(USER_STACK_SIZE)' '#define RORTHOX_PROGRAM_VIRTUAL_STACK_ADDRESS_START $(USER_STACK_TOP)' '#define RORTHOX_KERNEL_TSS_STACK_TOP $(KERNEL_TSS_STACK_TOP)' '#endif' > $@.tmp
 	@mv $@.tmp $@
 
 $(CONFIG_INC): config.mk Makefile
 	@mkdir -p build/config
-	@printf '%s\n' '%define RESERVED_SECTORS $(RESERVED_SECTORS)' '%define SECTORS_PER_FAT $(SECTORS_PER_FAT)' '%define KERNEL_SECTORS $(KERNEL_SECTORS)' '%define SECTOR_SIZE $(SECTOR_SIZE)' > $@.tmp
+	@printf '%s\n' '%define RESERVED_SECTORS $(RESERVED_SECTORS)' '%define SECTORS_PER_FAT $(SECTORS_PER_FAT)' '%define KERNEL_SECTORS $(KERNEL_SECTORS)' '%define SECTOR_SIZE $(SECTOR_SIZE)' '%define KERNEL_LOAD_ADDRESS $(KERNEL_LOAD_ADDRESS)' '%define KERNEL_BOOT_STACK_TOP $(KERNEL_BOOT_STACK_TOP)' > $@.tmp
 	@mv $@.tmp $@
 
 $(CONFIG_LD): config.mk Makefile
 	@mkdir -p build/config
-	@printf '%s\n' '/* Link addresses */' > $@.tmp
+	@printf '%s\n' 'KERNEL_LOAD_ADDRESS = $(KERNEL_LOAD_ADDRESS);' 'PROGRAM_LOAD_ADDRESS = $(PROGRAM_LOAD_ADDRESS);' > $@.tmp
 	@mv $@.tmp $@
 
 $(CONFIG_ENV): config.mk Makefile
@@ -66,7 +66,7 @@ $(IMAGE_FILES): | user_programs
 
 ./bin/kernel.bin: $(FILES) ./kernel/linker.ld $(CONFIG_LD) config.mk
 	i686-elf-ld -g -relocatable $(FILES) -o ./build/kernelfull.o
-	i686-elf-gcc $(FLAGS) -Wl,-Map,./build/kernel.map -T ./kernel/linker.ld -o ./bin/kernel.bin -ffreestanding -O0 -nostdlib ./build/kernelfull.o
+	i686-elf-gcc $(FLAGS) -Wl,-Map,./build/kernel.map -Wl,-L,$(CONFIG_DIR) -T ./kernel/linker.ld -o ./bin/kernel.bin -ffreestanding -O0 -nostdlib ./build/kernelfull.o
 	@size=$$(wc -c < $@); max=$$(($(KERNEL_SECTORS) * $(SECTOR_SIZE))); \
 	if [ $$size -gt $$max ]; then \
 		echo "error: kernel.bin is $$size bytes but the bootloader loads only $$max ($(KERNEL_SECTORS) sectors)"; \
@@ -76,8 +76,8 @@ $(IMAGE_FILES): | user_programs
 ./bin/boot.bin: ./kernel/boot/boot.asm $(CONFIG_INC)
 	nasm -f bin -Ibuild/config/ ./kernel/boot/boot.asm -o ./bin/boot.bin
 
-./build/kernel.asm.o: ./kernel/kernel.asm
-	nasm -f elf -g ./kernel/kernel.asm -o ./build/kernel.asm.o
+./build/kernel.asm.o: ./kernel/kernel.asm $(CONFIG_INC)
+	nasm -f elf -g -Ibuild/config/ ./kernel/kernel.asm -o ./build/kernel.asm.o
 
 ./build/kernel.o: ./kernel/kernel.c
 	i686-elf-gcc $(INCLUDES) $(FLAGS) -std=gnu99 -c ./kernel/kernel.c -o ./build/kernel.o
@@ -182,9 +182,9 @@ $(IMAGE_FILES): | user_programs
 	i686-elf-gcc $(INCLUDES) -I ./kernel/string $(FLAGS) -std=gnu99 -c ./kernel/string/string.c -o ./build/string/string.o
 
 user_programs: | $(CONFIG_H) $(CONFIG_INC) $(CONFIG_LD) $(CONFIG_ENV)
-	cd ./programs/stdlib && $(MAKE) all
-	cd ./programs/blank && $(MAKE) all
-	cd ./programs/shell && $(MAKE) all
+	cd ./programs/stdlib && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
+	cd ./programs/blank && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
+	cd ./programs/shell && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
 
 user_programs_clean:
 	cd ./programs/stdlib && $(MAKE) clean

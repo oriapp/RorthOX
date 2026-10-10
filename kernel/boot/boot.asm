@@ -131,10 +131,10 @@ gdt_descriptor:
 load32:                 ;   0 is the boot sector
     mov eax, 1          ;   Starting sector
     mov ecx, KERNEL_SECTORS ; Number of kernel sectors (ReservedSectors - 1)
-    mov edi, 0x0100000  ;   1MG (related to rep insw
+    mov edi, KERNEL_LOAD_ADDRESS  ; Kernel load destination
     call ata_lba_read
     ; call ata_lba_write
-    jmp CODE_SEG: 0x0100000
+    jmp CODE_SEG: KERNEL_LOAD_ADDRESS
 
 
 ata_lba_read:
