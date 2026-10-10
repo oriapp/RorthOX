@@ -106,6 +106,11 @@ $(CONFIG_ENV): config.mk Makefile
 		'PIC_SLAVE_VECTOR_BASE=$(PIC_SLAVE_VECTOR_BASE)' > $@.tmp
 	@mv $@.tmp $@
 
+NUMERIC_CONFIG_KEYS := $(filter-out RORTHOX_NAME RORTHOX_VERSION,$(CONFIG_KEYS))
+ifneq ($(shell printf '%s\n' $(foreach key,$(NUMERIC_CONFIG_KEYS),'$(strip $($(key)))') | LC_ALL=C grep -Ec '^(0x[0-9a-fA-F]+|0|[1-9][0-9]*)$$'),$(words $(NUMERIC_CONFIG_KEYS)))
+$(error numeric config.mk values must be hexadecimal (0x...) or decimal without leading zeros)
+endif
+
 ifneq ($(shell [ $$(( $(COMMAND_ARGUMENT_SIZE) )) -ge 2 ] && echo valid),valid)
 $(error COMMAND_ARGUMENT_SIZE must hold a character and terminator)
 endif
