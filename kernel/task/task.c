@@ -48,18 +48,6 @@ struct task *task_new(struct process *process)
     task->burstTime = burstTime;
     task->remainingTime = burstTime;
 
-    if (task_head == 0)
-    {
-        task_head = task;
-        task_tail = task;
-        current_task = task;
-        goto out;
-    }
-
-    task_tail->next = task;
-    task->prev = task_tail;
-    task_tail = task;
-
 out:
     if (ISERR(res))
     {
@@ -72,6 +60,21 @@ out:
     }
 
     return task;
+}
+
+void task_publish(struct task *task)
+{
+    if (task_head == 0)
+    {
+        task_head = task;
+        task_tail = task;
+        current_task = task;
+        return;
+    }
+
+    task_tail->next = task;
+    task->prev = task_tail;
+    task_tail = task;
 }
 
 struct task *task_get_next()
@@ -115,6 +118,22 @@ static void task_list_remove(struct task *task)
     task->next = 0;
 }
 
+void task_discard(struct task *task)
+{
+    if (!task)
+    {
+        return;
+    }
+
+    if (task->page_directory)
+    {
+        paging_free_4gb(task->page_directory);
+    }
+
+    // Finally free the task data
+    kfree(task);
+}
+
 int task_free(struct task *task)
 {
     if (!task)
@@ -122,14 +141,8 @@ int task_free(struct task *task)
         return 0;
     }
 
-    if (task->page_directory)
-    {
-        paging_free_4gb(task->page_directory);
-    }
     task_list_remove(task); // remove from the list
-
-    // Finally free the task data
-    kfree(task);
+    task_discard(task);
     return 0;
 }
 

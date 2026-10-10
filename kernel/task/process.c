@@ -397,9 +397,7 @@ static int process_load_data(const char *filename, struct process *process)
 
 int process_map_binary(struct process *process)
 {
-    int res = 0;
-    paging_map_to(process->task->page_directory, (void*) RORTHOX_PROGRAM_VIRTUAL_ADDRESS, process->ptr, paging_align_address(process->ptr + process->size), PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL | PAGING_IS_WRITEABLE);
-    return res;
+    return paging_map_to(process->task->page_directory, (void*) RORTHOX_PROGRAM_VIRTUAL_ADDRESS, process->ptr, paging_align_address(process->ptr + process->size), PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL | PAGING_IS_WRITEABLE);
 }
 
 static int process_map_elf(struct process *process)
@@ -452,7 +450,7 @@ int process_map_memory(struct process *process)
     }
 
     // Finally map the stack
-    paging_map_to(process->task->page_directory, (void*)RORTHOX_PROGRAM_VIRTUAL_STACK_ADDRESS_END, process->stack, paging_align_address(process->stack + USER_PROGRAM_STACK_SIZE), PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL | PAGING_IS_WRITEABLE);
+    res = paging_map_to(process->task->page_directory, (void*)RORTHOX_PROGRAM_VIRTUAL_STACK_ADDRESS_END, process->stack, paging_align_address(process->stack + USER_PROGRAM_STACK_SIZE), PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL | PAGING_IS_WRITEABLE);
 
 out:
     return res;
@@ -495,12 +493,34 @@ int process_load_switch(const char *filename, struct process **process)
     return res;
 }
 
+// Discard an unpublished process with no outstanding argument allocations.
+static void process_discard(struct process *process)
+{
+    if (!process)
+    {
+        return;
+    }
+
+    task_discard(process->task);
+    kfree(process->stack);
+    if (process->ptr)
+    {
+        process_free_program_data(process);
+    }
+    kfree(process);
+}
+
 int process_load_for_slot(const char *filename, struct process **process, int process_slot)
 {
     int res = 0;
     struct task *task = 0;
-    struct process *_process;
-    void *program_stack_ptr = 0;
+    struct process *_process = NULL;
+
+    if (process_slot < 0 || process_slot >= RORTHOX_MAX_PROCESSES)
+    {
+        res = -EINVARG;
+        goto out;
+    }
 
     if (process_get(process_slot) != 0)
     {
@@ -522,15 +542,14 @@ int process_load_for_slot(const char *filename, struct process **process, int pr
         goto out;
     }
 
-    program_stack_ptr = kzalloc(USER_PROGRAM_STACK_SIZE);
-    if (!program_stack_ptr)
+    _process->stack = kzalloc(USER_PROGRAM_STACK_SIZE);
+    if (!_process->stack)
     {
         res = -ENOMEM;
         goto out;
     }
 
     strncpy(_process->filename, filename, sizeof(_process->filename));
-    _process->stack = program_stack_ptr;
     _process->id = process_slot;
 
     // Create a task
@@ -549,20 +568,15 @@ int process_load_for_slot(const char *filename, struct process **process, int pr
         goto out;
     }
 
-    *process = _process;
-
-    // Add the process to the array
+    // Publish only after all fallible setup succeeds (interrupts are disabled).
     processes[process_slot] = _process;
+    task_publish(_process->task);
+    *process = _process;
 
 out:
     if (ISERR(res))
     {
-        if (_process && _process->task)
-        {
-            task_free(_process->task);
-        }
-        
-        // Free the process data
+        process_discard(_process);
     }
 
     return res;

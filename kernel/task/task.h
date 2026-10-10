@@ -75,9 +75,14 @@ struct task
    struct task *prev;
 };
 
+// Construct a detached task; publish it exactly once after setup succeeds.
 struct task *task_new(struct process *process);
+void task_publish(struct task *task);
+// Destroy a detached task whose page directory is inactive.
+void task_discard(struct task *task);
 struct task *task_current();
 struct task *task_get_next();
+// Unlink and destroy a published task.
 int task_free(struct task *task);
 
 void task_next();

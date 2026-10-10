@@ -9,9 +9,8 @@
 #    compiler, and makes the object allocation, fopen, fstat, the buffer allocation, fread and
 #    the format check fail in turn.
 # 2. QEMU: the "elfdata" case of programs/oomtest, run through heap-oom.sh: allocating the
-#    buffer for blank.elf fails, and only the command node, the process and the parsed path may
-#    stay taken (7 blocks, not 8 with the ELF object). blank.elf must start from the shell
-#    afterwards.
+#    buffer for blank.elf fails, and the ELF object must not stay taken (oomtest.c has the
+#    expected count). blank.elf must start from the shell afterwards.
 # bin/os.bin itself must not change.
 #
 # Env: HOST_CC=cc   and the heap-oom.sh variables (BOOT_TIMEOUT, RUN_TIMEOUT, EXIT_TIMEOUT)
