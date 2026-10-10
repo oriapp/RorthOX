@@ -9,9 +9,9 @@
 #    makes each allocation, each fopen/fstat/fread and each mapping of
 #    "blank.elf arg-one arg-two" fail in turn, then checks a launch where nothing fails.
 # 2. QEMU: the "arg..." cases of programs/oomtest, run through heap-oom.sh: oomtest.elf builds
-#    the command list first, then leaves room for the whole new process (1038 + E blocks) plus
+#    the command list first, then leaves room for the whole new process (1035 + E blocks) plus
 #    0 to 3 blocks, so allocating argv or one of the three argument copies fails. The syscall
-#    must return -ENOMEM and keep only the parsed path (3 blocks), blank.elf must not start,
+#    must return -ENOMEM and keep no block, blank.elf must not start,
 #    the next key must still reach oomtest, and blank.elf must start from the shell afterwards.
 # bin/os.bin itself must not change.
 #

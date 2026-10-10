@@ -20,8 +20,8 @@ OUT=build/tests/process-release
 mkdir -p "$OUT"
 
 # Blocks each launch keeps for good: the shell's two command nodes for "blank.elf tagN" (the
-# user library never frees them) and the parsed path of blank.elf (3 blocks, a known leak).
-KEPT_PER_LAUNCH=5
+# user library never frees them).
+KEPT_PER_LAUNCH=2
 
 # The heap table: one byte per block, 0 = free.
 config_value() {

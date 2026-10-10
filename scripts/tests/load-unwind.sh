@@ -12,7 +12,8 @@
 # blocks of fclose() always hold the stack, and mappings fail only for bad addresses.
 #
 # The QEMU side of the same fix is heap-oom.sh (and open-oom.sh, elf-unwind.sh): programs/oomtest
-# expects only the command node and the parsed path to stay taken after a failed load.
+# expects only the command node to stay taken after a failed load. The task, page directory and
+# first page table fit in the blocks fclose() gives back, so only this host check reaches them.
 #
 # Env: HOST_CC=cc
 

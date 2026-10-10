@@ -200,6 +200,7 @@ int fopen(const char *filename, const char *mode_str)
     res = desc->index;
 
 out:
+    pathparser_free(root_path);
     // fopen shouldnt return negative values
     if (res < 0)
         res = 0;

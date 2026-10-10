@@ -12,12 +12,12 @@
  *            with a bad FAT signature: an error, the disk left without a filesystem, nothing
  *            left allocated.
  *   open     fopen("0:/blank.elf") and fopen("0:/dir/blank.elf") with each allocation failing in
- *            turn: 0, no descriptor slot taken, and nothing left allocated except, for now, the
- *            finished parsed path. Allocations inside fat16_load_fat_directory() are skipped:
- *            its failure path is a separate known bug. Without a failure the file opens, has the
- *            right size and contents, and fclose() gives everything back.
+ *            turn: 0, no descriptor slot taken, and nothing left allocated (the parsed path
+ *            included). Allocations inside fat16_load_fat_directory() are skipped: its failure
+ *            path is a separate known bug. Without a failure the file opens, has the right size
+ *            and contents, and fclose() gives everything back.
  *   walk     "0:/blank.elf/x" (a name after a file), "0:/dir/nosuch/x" (a missing directory in
- *            the middle) and "0:/nosuch": 0, no crash, nothing left allocated but the path.
+ *            the middle) and "0:/nosuch": 0, no crash, nothing left allocated.
  *
  * Usage: open-path <image> <blank.elf>
  */
@@ -160,7 +160,7 @@ static int in_set(void **set, int n, const void *p)
 }
 
 // 1 if set[0..n) is exactly one finished parse of the given components: the root, one node per
-// component and its string. fopen() doesn't free the parsed path yet (a separate leak).
+// component and its string.
 static int is_parsed_path(void **set, int n, const char **parts, int count)
 {
     if (n != 1 + 2 * count)
@@ -377,12 +377,9 @@ static int setup_disk(void)
     return kalloc_calls();
 }
 
-static const char *blank_parts[] = { "blank.elf" };
-static const char *dir_parts[] = { "dir", "blank.elf" };
-
 // Allocation call k of fopen(path) fails (0 = none). Returns 0 pass, 1 fail, 2 pass and no failure
 // happened, 3 skipped (the failing allocation was in fat16_load_fat_directory).
-static int open_case(const char *path, const char **parts, int count, int k)
+static int open_case(const char *path, int k)
 {
     struct snapshot before;
     int base = setup_disk();
@@ -416,7 +413,7 @@ static int open_case(const char *path, const char **parts, int count, int k)
             return 1;
         }
         int n = new_allocations(&before, extra, MAX_CASE_ALLOCS);
-        if (n && !is_parsed_path(extra, n, parts, count))
+        if (n)
         {
             say("open %s, allocation %d (%s) failing: %d allocations left\n", path, k, kalloc_caller(base + k), n);
             return 1;
@@ -445,7 +442,7 @@ static int open_case(const char *path, const char **parts, int count, int k)
         return 1;
     }
     int n = new_allocations(&before, extra, MAX_CASE_ALLOCS);
-    if (n && !is_parsed_path(extra, n, parts, count))
+    if (n)
     {
         say("open %s: %d allocations left after fclose\n", path, n);
         return 1;
@@ -453,7 +450,7 @@ static int open_case(const char *path, const char **parts, int count, int k)
     return heap_clean(path) ? 2 : 1;
 }
 
-static int walk_case(const char *path, const char **parts, int count)
+static int walk_case(const char *path)
 {
     struct snapshot before;
     setup_disk();
@@ -466,7 +463,7 @@ static int walk_case(const char *path, const char **parts, int count)
     }
     void *extra[MAX_CASE_ALLOCS];
     int n = new_allocations(&before, extra, MAX_CASE_ALLOCS);
-    if (n && !is_parsed_path(extra, n, parts, count))
+    if (n)
     {
         say("open %s: %d allocations left\n", path, n);
         return 1;
@@ -497,9 +494,6 @@ enum
 
 static int dispatch(int kind, int k)
 {
-    static const char *after_file[] = { "blank.elf", "x" };
-    static const char *missing_dir[] = { "dir", "nosuch", "x" };
-    static const char *missing[] = { "nosuch" };
     switch (kind)
     {
     case PARSE_FAIL: return parse_fail_case(k);
@@ -507,11 +501,11 @@ static int dispatch(int kind, int k)
     case RESOLVE_ALLOC: return resolve_case(0, k);
     case RESOLVE_READ: return resolve_case(1, k);
     case RESOLVE_SIGNATURE: return resolve_case(2, 0);
-    case OPEN_FILE: return open_case("0:/blank.elf", blank_parts, 1, k);
-    case OPEN_DIR_FILE: return open_case("0:/dir/blank.elf", dir_parts, 2, k);
-    case WALK_AFTER_FILE: return walk_case("0:/blank.elf/x", after_file, 2);
-    case WALK_MISSING_DIR: return walk_case("0:/dir/nosuch/x", missing_dir, 3);
-    case WALK_MISSING: return walk_case("0:/nosuch", missing, 1);
+    case OPEN_FILE: return open_case("0:/blank.elf", k);
+    case OPEN_DIR_FILE: return open_case("0:/dir/blank.elf", k);
+    case WALK_AFTER_FILE: return walk_case("0:/blank.elf/x");
+    case WALK_MISSING_DIR: return walk_case("0:/dir/nosuch/x");
+    case WALK_MISSING: return walk_case("0:/nosuch");
     }
     return 1;
 }

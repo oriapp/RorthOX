@@ -2,28 +2,34 @@
  * Out-of-memory test for scripts/tests/heap-oom.sh and the tests that run their cases through it
  * (open-oom.sh, elf-unwind.sh, argument-oom.sh). Only copied into the test images.
  *
- * Leaves an exact number of free kernel heap blocks, then asks the kernel to start blank.elf
- * (syscall 7). Loading blank.elf allocates, in this order (in 4 KiB blocks, E = blocks of the
- * whole blank.elf file):
+ * Leaves an exact number of free kernel heap blocks (one free run), then asks the kernel to start
+ * blank.elf (syscall 7). Loading blank.elf allocates, in this order (in 4 KiB blocks, E = blocks
+ * of the whole blank.elf file):
  *
  *   command node 1 (user malloc before the syscall), process 3, ELF object 1, parsed path 3
- *   (root 1, name 1, path part 1), file descriptors 4 (FAT descriptor 1, FAT item 1, copy of the
- *   directory entry 1, file descriptor 1; freed again by fclose), ELF file E, stack 4, task 1,
- *   page directory 1, 1024 page tables, paging chunk 1.
+ *   (root 1, name 1, path part 1; freed when fopen returns), file descriptors 4 (FAT descriptor 1,
+ *   FAT item 1, copy of the directory entry 1, file descriptor 1; freed again by fclose),
+ *   ELF file E, stack 4, task 1, page directory 1, 1024 page tables, paging chunk 1.
+ *
+ * The ELF file doesn't fit in the 3-block hole the parsed path leaves (E >= 4), so it goes after
+ * the file descriptors. fclose then joins that hole with the descriptors' 4 blocks, and the stack,
+ * the task, the page directory and the first page table fill those 7 blocks. The other page
+ * tables and the paging chunk come after the ELF file.
  *
  * So the number of free blocks picks which allocation is the first to fail. The kernel must
  * return an error instead of crashing, and must give back everything the failed load allocated:
  * the test counts the free blocks again right after the syscall. Only the command node (the
- * caller's) and the finished parsed path (a known leak) are expected to stay taken. The
- * "open..." cases (5 to 11 free blocks) make one allocation of the file open fail, so the
- * syscall returns -EIO.
+ * caller's) is expected to stay taken. The "open..." cases (5 to 11 free blocks) make one
+ * allocation of the file open fail, so the syscall returns -EIO. The task, page directory and
+ * first page table can't be picked this way any more (they fit in the hole); the host check in
+ * scripts/tests/load-unwind.sh covers them.
  *
  * The "arg..." cases (scripts/tests/argument-oom.sh) run "blank.elf arg-one arg-two" from a command
  * list built before the heap gets full, so the syscall makes no user allocation. They leave
  * room for the whole new process but not for its arguments (argv 1, then 1 per argument
- * string), so copying the arguments fails. The new process must never start, only the finished
- * parsed path may stay taken, and the keyboard must stay with oomtest: after the results it
- * prints "press a key" and waits for one more key.
+ * string), so copying the arguments fails. The new process must never start, nothing may stay
+ * taken, and the keyboard must stay with oomtest: after the results it prints "press a key" and
+ * waits for one more key.
  *
  * The free blocks are counted straight from the kernel's heap table at RORTHOX_HEAP_TABLE_ADDRESS.
  * That only works because user programs can read all memory today; it is a test-only shortcut.
@@ -164,28 +170,26 @@ int main(int argc, char **argv)
 {
     // The order the test script runs them in: the later page table first.
     const struct oom_case cases[] = {
-        { "table",     100,  0, -EIO,     4, 0 },
-        { "task",       12,  1, -ENOMEM,  4, 0 },
-        { "directory",  13,  1, -EIO,     4, 0 },
-        { "first",      14,  1, -EIO,     4, 0 },
-        { "wrapper",  1038,  1, -EIO,     4, 0 },
+        { "table",     100,  0, -EIO,     1, 0 },
+        { "second",     12,  1, -EIO,     1, 0 },  // the second page table
+        { "wrapper",  1035,  1, -EIO,     1, 0 },
         { "elfobject",   4,  0, -ENOMEM,  1, 0 },
-        { "elfdata",    11,  1, -ENOMEM,  4, 0 },
+        { "elfdata",    11,  1, -ENOMEM,  1, 0 },
         { "process",     3,  0, -ENOMEM,  1, 0 },
         // Opening blank.elf (scripts/tests/open-oom.sh): the first allocation to fail is
         { "openroot",    5,  0, -EIO,     1, 0 },  // the parsed path's root
         { "openpart",    6,  0, -EIO,     1, 0 },  // the first name
         { "opennode",    7,  0, -EIO,     1, 0 },  // the first path part
-        { "openfat",     8,  0, -EIO,     4, 0 },  // the FAT descriptor
-        { "openitem",    9,  0, -EIO,     4, 0 },  // the FAT item
-        { "openclone",  10,  0, -EIO,     4, 0 },  // the copy of the directory entry
-        { "openvfs",    11,  0, -EIO,     4, 0 },  // the file descriptor
+        { "openfat",     8,  0, -EIO,     1, 0 },  // the FAT descriptor
+        { "openitem",    9,  0, -EIO,     1, 0 },  // the FAT item
+        { "openclone",  10,  0, -EIO,     1, 0 },  // the copy of the directory entry
+        { "openvfs",    11,  0, -EIO,     1, 0 },  // the file descriptor
         // "blank.elf arg-one arg-two" (scripts/tests/argument-oom.sh): the whole process fits
-        // (1038 + E blocks), then the first allocation to fail is
-        { "argv",     1038,  1, -ENOMEM,  3, 0, 1 },  // argv
-        { "arg1",     1039,  1, -ENOMEM,  3, 0, 1 },  // the copy of "blank.elf"
-        { "arg2",     1040,  1, -ENOMEM,  3, 0, 1 },  // the copy of "arg-one"
-        { "arg3",     1041,  1, -ENOMEM,  3, 0, 1 },  // the copy of "arg-two"
+        // (1035 + E blocks), then the first allocation to fail is
+        { "argv",     1035,  1, -ENOMEM,  0, 0, 1 },  // argv
+        { "arg1",     1036,  1, -ENOMEM,  0, 0, 1 },  // the copy of "blank.elf"
+        { "arg2",     1037,  1, -ENOMEM,  0, 0, 1 },  // the copy of "arg-one"
+        { "arg3",     1038,  1, -ENOMEM,  0, 0, 1 },  // the copy of "arg-two"
     };
     const struct oom_case *c = 0;
     void *plugs[MAX_PLUGS];
@@ -212,8 +216,9 @@ int main(int argc, char **argv)
         print("oomtest: FAIL unknown case or bad size\n");
         return 1;
     }
-    // 86 - E page tables fit in the "table" case; it must stay a table in the middle.
-    if (e < 1 || e > 85)
+    // The block counts above need the ELF file to be bigger than the 3-block hole the parsed path
+    // leaves, and to fit in one FAT cluster (64 KiB = 16 blocks).
+    if (e < 4 || e > 16)
     {
         say(c->name, "FAIL blank.elf blocks out of range: ", e, NONE);
         say(c->name, "done", NONE, NONE);

@@ -4,15 +4,15 @@
 # give back what the failed step allocated, and the system must keep working. Copy bin/os.bin,
 # add programs/oomtest to the copy only, and boot it once per case. oomtest.elf leaves an exact
 # number of free heap blocks, so one chosen allocation fails while the kernel loads blank.elf
-# (a page table in the middle, the task, the page directory, the first page table, the paging
-# chunk, the ELF object, the ELF file, the process). It checks the syscall's result and how
-# many blocks are still taken afterwards. No program may start from the failed syscall, and then
-# blank.elf must start from the shell.
+# (a page table in the middle, the second page table, the paging chunk, the ELF object, the ELF
+# file, the process). It checks the syscall's result and how many blocks are still taken
+# afterwards. No program may start from the failed syscall, and then blank.elf must start from
+# the shell.
 # The script stops after the first failing case. bin/os.bin itself must not change.
 #
 # Env: BOOT_TIMEOUT=60 (seconds to wait for the shell)   RUN_TIMEOUT=60 (for each oomtest run)
 #      EXIT_TIMEOUT=15 (for each process to end, and for blank.elf to start)
-#      OOM_CASES="table task ..." (run only these cases, in this order)
+#      OOM_CASES="table second ..." (run only these cases, in this order)
 #      OOM_SUITE=heap-oom (name used for the output directory and the messages; open-oom.sh
 #      runs the open cases through this script)
 
@@ -30,7 +30,7 @@ PROGRAM=programs/oomtest/build/oomtest.elf
 BLANK_ELF=programs/blank/build/blank.elf
 SHELL_ELF=programs/shell/build/shell.elf
 # The later page table first: it is the case that crashed before.
-CASES="${OOM_CASES:-table task directory first wrapper elfobject elfdata process}"
+CASES="${OOM_CASES:-table second wrapper elfobject elfdata process}"
 mkdir -p "$OUT"
 
 # All ELF files must fit in one FAT cluster (64 KiB). oomtest.elf works out the block budget
