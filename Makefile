@@ -1,7 +1,7 @@
 include config.mk
 
 # Config values must come from config.mk, not untracked make command-line overrides.
-CONFIG_KEYS := RESERVED_SECTORS SECTORS_PER_FAT SECTOR_SIZE KERNEL_LOAD_ADDRESS KERNEL_BOOT_STACK_TOP KERNEL_TSS_STACK_TOP PROGRAM_LOAD_ADDRESS USER_STACK_TOP USER_STACK_SIZE KERNEL_CODE_SELECTOR KERNEL_DATA_SELECTOR USER_CODE_SELECTOR USER_DATA_SELECTOR TSS_SELECTOR SYSCALL_VECTOR PIC_MASTER_VECTOR_BASE PIC_SLAVE_VECTOR_BASE RORTHOX_NAME RORTHOX_VERSION QEMU_RAM_MIB
+CONFIG_KEYS := RESERVED_SECTORS SECTORS_PER_FAT SECTOR_SIZE KERNEL_LOAD_ADDRESS KERNEL_BOOT_STACK_TOP KERNEL_TSS_STACK_TOP PROGRAM_LOAD_ADDRESS USER_STACK_TOP USER_STACK_SIZE KERNEL_CODE_SELECTOR KERNEL_DATA_SELECTOR USER_CODE_SELECTOR USER_DATA_SELECTOR TSS_SELECTOR SYSCALL_VECTOR PIC_MASTER_VECTOR_BASE PIC_SLAVE_VECTOR_BASE TOTAL_INTERRUPTS RORTHOX_NAME RORTHOX_VERSION QEMU_RAM_MIB
 $(foreach key,$(CONFIG_KEYS),$(if $(filter command line,$(origin $(key))),$(error $(key) must be set in config.mk, not on the command line)))
 
 FILES = ./build/kernel.asm.o ./build/arch/sys.o ./build/arch/pit.o ./build/arch/sys.asm.o ./build/kernel.o ./build/arch/tty.o ./build/idt/idt.asm.o ./build/idt/idt.o ./build/memory/memory.o ./build/io/io.asm.o ./build/loader/formats/elfloader.o ./build/loader/formats/elf.o ./build/gdt/gdt.o ./build/gdt/gdt.asm.o ./build/memory/heap/heap.o ./build/memory/heap/kheap.o ./build/memory/paging/paging.o ./build/memory/paging/paging.asm.o ./build/isr80h/isr80h.o ./build/isr80h/heap.o ./build/keyboard/keyboard.o ./build/keyboard/classic.o ./build/isr80h/io.o ./build/isr80h/process.o ./build/isr80h/misc.o ./build/disk/disk.o ./build/disk/streamer.o ./build/task/process.o ./build/task/task.o ./build/task/task.asm.o ./build/task/tss.asm.o ./build/fs/pparser.o ./build/fs/file.o ./build/fs/fat/fat16.o ./build/string/string.o
@@ -42,6 +42,7 @@ $(CONFIG_H): config.mk Makefile
 		'#define RORTHOX_SYSCALL_VECTOR $(SYSCALL_VECTOR)' \
 		'#define RORTHOX_PIC_MASTER_VECTOR_BASE $(PIC_MASTER_VECTOR_BASE)' \
 		'#define RORTHOX_PIC_SLAVE_VECTOR_BASE $(PIC_SLAVE_VECTOR_BASE)' \
+		'#define RORTHOX_TOTAL_INTERRUPTS $(TOTAL_INTERRUPTS)' \
 		'#define RORTHOX_NAME "$(RORTHOX_NAME)"' \
 		'#define RORTHOX_VERSION "$(RORTHOX_VERSION)"' \
 		'#endif' > $@.tmp
@@ -61,7 +62,8 @@ $(CONFIG_INC): config.mk Makefile
 		'%define USER_DATA_SELECTOR $(USER_DATA_SELECTOR)' \
 		'%define SYSCALL_VECTOR $(SYSCALL_VECTOR)' \
 		'%define PIC_MASTER_VECTOR_BASE $(PIC_MASTER_VECTOR_BASE)' \
-		'%define PIC_SLAVE_VECTOR_BASE $(PIC_SLAVE_VECTOR_BASE)' > $@.tmp
+		'%define PIC_SLAVE_VECTOR_BASE $(PIC_SLAVE_VECTOR_BASE)' \
+		'%define TOTAL_INTERRUPTS $(TOTAL_INTERRUPTS)' > $@.tmp
 	@mv $@.tmp $@
 
 $(CONFIG_LD): config.mk Makefile
@@ -80,6 +82,13 @@ $(CONFIG_ENV): config.mk Makefile
 		'PIC_MASTER_VECTOR_BASE=$(PIC_MASTER_VECTOR_BASE)' \
 		'PIC_SLAVE_VECTOR_BASE=$(PIC_SLAVE_VECTOR_BASE)' > $@.tmp
 	@mv $@.tmp $@
+
+ifneq ($(shell [ $$(( $(TOTAL_INTERRUPTS) )) -ge 256 ] && \
+	[ $$(( $(SYSCALL_VECTOR) )) -lt $$(( $(TOTAL_INTERRUPTS) )) ] && \
+	[ $$(( $(PIC_MASTER_VECTOR_BASE) + 8 )) -le $$(( $(TOTAL_INTERRUPTS) )) ] && \
+	[ $$(( $(PIC_SLAVE_VECTOR_BASE) + 8 )) -le $$(( $(TOTAL_INTERRUPTS) )) ] && echo valid),valid)
+$(error TOTAL_INTERRUPTS must cover all 256 CPU vectors, the syscall and both PIC ranges)
+endif
 
 # PIC ICW2 bases are eight-vector aligned, disjoint and outside CPU exceptions.
 ifneq ($(shell [ $$(( $(PIC_MASTER_VECTOR_BASE) % 8 )) -eq 0 ] && \
@@ -154,8 +163,8 @@ $(IMAGE_FILES): | user_programs
 ./build/arch/sys.asm.o: ./kernel/arch/i686/sys.asm
 	nasm -f elf -g ./kernel/arch/i686/sys.asm -o ./build/arch/sys.asm.o
 
-./build/idt/idt.asm.o: ./kernel/idt/idt.asm
-	nasm -f elf -g ./kernel/idt/idt.asm -o ./build/idt/idt.asm.o
+./build/idt/idt.asm.o: ./kernel/idt/idt.asm $(CONFIG_INC)
+	nasm -f elf -g -Ibuild/config/ ./kernel/idt/idt.asm -o ./build/idt/idt.asm.o
 
 ./build/loader/formats/elf.o: ./kernel/loader/formats/elf.c
 	i686-elf-gcc $(INCLUDES) -I ./kernel/loader/formats $(FLAGS) -std=gnu99 -c ./kernel/loader/formats/elf.c -o ./build/loader/formats/elf.o

@@ -6,8 +6,6 @@
 #define DEBUG true  // Debug Features
 #define IODBG false // System I/O Debug
 
-#define RORTHOX_TOTAL_INTERRUPTS 512
-
 // 100MB heap size
 #define RORTHOX_HEAP_SIZE_BYTES 104857600
 // 1024*1024 = 1048576*100 = 104857600 (100 MB)

@@ -1,3 +1,4 @@
+%include "rorthox-config.inc"
 section .asm
 
 extern int21h_handler
@@ -63,7 +64,7 @@ no_interrupt:
 %endmacro
 
 %assign i 0
-%rep 512 ; loop 512
+%rep TOTAL_INTERRUPTS
     interrupt i
 %assign i i+1
 %endrep
@@ -109,7 +110,7 @@ section .data
 
 interrupt_pointer_table:
 %assign i 0
-%rep 512
+%rep TOTAL_INTERRUPTS
     interrupt_array_entry i
 %assign i i+1
 %endrep
