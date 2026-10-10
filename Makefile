@@ -287,15 +287,18 @@ $(IMAGE_FILES): | user_programs
 ./build/string/string.o: ./kernel/string/string.c
 	i686-elf-gcc $(INCLUDES) -I ./kernel/string $(FLAGS) -std=gnu99 -c ./kernel/string/string.c -o ./build/string/string.o
 
+# heaptest.elf goes only into the test image (scripts/tests/heap.sh), not into IMAGE_FILES.
 user_programs: | $(CONFIG_H) $(CONFIG_INC) $(CONFIG_LD) $(CONFIG_ENV)
 	cd ./programs/stdlib && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
 	cd ./programs/blank && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
 	cd ./programs/shell && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
+	cd ./programs/heaptest && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
 
 user_programs_clean:
 	cd ./programs/stdlib && $(MAKE) clean
 	cd ./programs/blank && $(MAKE) clean
 	cd ./programs/shell && $(MAKE) clean
+	cd ./programs/heaptest && $(MAKE) clean
 
 # Boot the image headless in QEMU, type a command into the shell and check the output.
 smoke: all
