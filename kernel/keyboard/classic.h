@@ -2,6 +2,7 @@
 #define CLASSIC_KEYBOARD_H
 
 #include <stdint.h>
+#include "config.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -17,7 +18,7 @@ typedef struct {
 #define PS2_COMMAND_ENABLE_FIRST_PORT 0xAE
 
 #define CLASSIC_KEYBOARD_KEY_RELEASED 0x80
-#define ISR_KEYBOARD_INTERRUPT 0x21
+#define ISR_KEYBOARD_INTERRUPT (RORTHOX_PIC_MASTER_VECTOR_BASE + 1)
 #define KEYBOARD_INPUT_PORT 0x60
 
 struct keyboard *classic_init();

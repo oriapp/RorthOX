@@ -2,8 +2,8 @@
 #
 # Both 8259 PICs must be remapped and masked: boot, run blank.elf (loading it does ATA PIO
 # reads, which raise IRQ14 on the slave), then ask QEMU for the PIC state with "info pic".
-# Master: vectors 0x20-0x27, only IRQ0-2 open, nothing in service.
-# Slave:  vectors 0x28-0x2F, all masked, nothing in service.
+# Master: only IRQ0-2 open, nothing in service.
+# Slave: all masked, nothing in service.
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -35,10 +35,12 @@ for chip in pic0 pic1; do
 done
 
 check "blank.elf ran (the kernel reached user mode)" "$OUT/screen.txt" "Process was terminated"
-check "master PIC at vector 0x20"            "$OUT/state.txt" "pic0 irq_base=20" line
+printf -v master_base '%x' "$PIC_MASTER_VECTOR_BASE"
+printf -v slave_base '%x' "$PIC_SLAVE_VECTOR_BASE"
+check "master PIC at configured vector"       "$OUT/state.txt" "pic0 irq_base=$master_base" line
 check "master PIC masks all but IRQ0-2"      "$OUT/state.txt" "pic0 imr=f8" line
 check "master PIC has nothing in service"    "$OUT/state.txt" "pic0 isr=00" line
-check "slave PIC at vector 0x28"             "$OUT/state.txt" "pic1 irq_base=28" line
+check "slave PIC at configured vector"        "$OUT/state.txt" "pic1 irq_base=$slave_base" line
 check "slave PIC masks everything"           "$OUT/state.txt" "pic1 imr=ff" line
 check "slave PIC has nothing in service"     "$OUT/state.txt" "pic1 isr=00" line
 finish pic

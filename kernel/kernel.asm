@@ -26,7 +26,7 @@ _start:
     or al, 2
     out 0x92, al
 
-    ; Remap both PICs: IRQ0-7 -> 0x20-0x27, IRQ8-15 -> 0x28-0x2F
+    ; Remap both PICs to the configured vector bases.
     ; The out to 0x80 after each PIC write is a short delay for real hardware
     mov al, 00010001b   ; ICW1: init, edge, cascade, ICW4 follows
     out 0x20, al
@@ -34,10 +34,10 @@ _start:
     out 0xA0, al
     out 0x80, al
 
-    mov al, 0x20        ; ICW2 master: vectors 0x20-0x27
+    mov al, PIC_MASTER_VECTOR_BASE ; ICW2 master
     out 0x21, al
     out 0x80, al
-    mov al, 0x28        ; ICW2 slave: vectors 0x28-0x2F
+    mov al, PIC_SLAVE_VECTOR_BASE ; ICW2 slave
     out 0xA1, al
     out 0x80, al
 
