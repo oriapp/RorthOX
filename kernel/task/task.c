@@ -44,6 +44,10 @@ struct task *task_new(struct process *process)
         goto out;
     }
 
+    task->id = tasks++;
+    task->burstTime = burstTime;
+    task->remainingTime = burstTime;
+
     if (task_head == 0)
     {
         task_head = task;
@@ -55,10 +59,6 @@ struct task *task_new(struct process *process)
     task_tail->next = task;
     task->prev = task_tail;
     task_tail = task;
-
-    task->id = tasks++;
-    task->burstTime = burstTime;
-    task->remainingTime = burstTime;
 
 out:
     if (ISERR(res))
@@ -76,7 +76,7 @@ out:
 
 struct task *task_get_next()
 {
-    if (!current_task->next)
+    if (!current_task || !current_task->next)
     {
         return task_head;
     }
@@ -91,6 +91,11 @@ static void task_list_remove(struct task *task)
         task->prev->next = task->next;
     }
 
+    if (task->next)
+    {
+        task->next->prev = task->prev;
+    }
+
     if (task == task_head)
     {
         task_head = task->next;
@@ -103,8 +108,11 @@ static void task_list_remove(struct task *task)
 
     if (task == current_task)
     {
-        current_task = task_get_next();
+        current_task = task->next ? task->next : task_head;
     }
+
+    task->prev = 0;
+    task->next = 0;
 }
 
 int task_free(struct task *task)
