@@ -163,24 +163,48 @@ void heap_mark_blocks_free(struct heap *heap, int starting_block)
     }
 }
 
-int heap_address_to_block(struct heap *heap, void *address)
-{
-    return ((int)(address - heap->saddr)) / RORTHOX_HEAP_BLOCK_SIZE;
-}
-
 void *heap_malloc(struct heap *heap, size_t size)
 {
+    if (size > UINT32_MAX - (RORTHOX_HEAP_BLOCK_SIZE - 1U))
+    {
+        return NULL;
+    }
+
     size_t aligned_size = heap_align_value_to_upper(size);
     uint32_t total_blocks = aligned_size / RORTHOX_HEAP_BLOCK_SIZE;
+    if (total_blocks == 0)
+    {
+        return NULL;
+    }
+
     return heap_malloc_blocks(heap, total_blocks);
 }
 
 void heap_free(struct heap *heap, void *ptr)
 {
-    /*
-        Future Tests
-            Check is given pointer is valid
-            Asser or panic the system if its not
-    */
-    heap_mark_blocks_free(heap, heap_address_to_block(heap, ptr));
+    if (!ptr || !heap_validate_alignment(ptr))
+    {
+        return;
+    }
+
+    uintptr_t address = (uintptr_t)ptr;
+    uintptr_t start = (uintptr_t)heap->saddr;
+    if (address < start)
+    {
+        return;
+    }
+
+    uintptr_t block = (address - start) / RORTHOX_HEAP_BLOCK_SIZE;
+    if (block >= heap->table->total)
+    {
+        return;
+    }
+
+    HEAP_BLOCK_TABLE_ENTRY entry = heap->table->entries[block];
+    if (heap_get_entry_type(entry) != HEAP_BLOCK_TABLE_ENTRY_TAKEN || !(entry & HEAP_BLOCK_IS_FIRST))
+    {
+        return;
+    }
+
+    heap_mark_blocks_free(heap, block);
 }

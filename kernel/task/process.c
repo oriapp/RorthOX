@@ -130,6 +130,11 @@ static struct process_allocation *process_get_allocation_by_addr(struct process 
 
 void process_free(struct process *process, void *ptr)
 {
+    if (!ptr)
+    {
+        return;
+    }
+
     //Unlink the pages from the process for the given address
     struct process_allocation *allocation = process_get_allocation_by_addr(process, ptr);
     if (!allocation)
@@ -156,7 +161,10 @@ int process_terminate_allocation(struct process *process)
     int i;
     for (i = 0; i < RORTHOX_MAX_PROGRAM_ALLOCATIONS; i++)
     {
-        process_free(process, process->allocations[i].ptr); // or kfree?
+        if (process->allocations[i].ptr)
+        {
+            process_free(process, process->allocations[i].ptr); // or kfree?
+        }
     }
 
     return 0;
