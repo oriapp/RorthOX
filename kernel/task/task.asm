@@ -1,3 +1,4 @@
+%include "rorthox-config.inc"
 [BITS 32]
 
 section .asm
@@ -69,7 +70,7 @@ restore_general_purpose_registers:
 ; void user_registers()
 ; Change all the segment registers to the user data segment registers
 user_registers:
-    mov ax, 0x23
+    mov ax, USER_DATA_SELECTOR
     mov ds, ax
     mov es, ax
     mov fs, ax

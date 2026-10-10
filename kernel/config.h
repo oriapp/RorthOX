@@ -2,8 +2,6 @@
 #define CONFIG_H
 #include "rorthox-config.h"
 
-#define KERNEL_CODE_SELECTOR 0x08
-#define KERNEL_DATA_SELECTOR 0x10
 
 #define DEBUG true  // Debug Features
 #define IODBG false // System I/O Debug
@@ -30,8 +28,6 @@
 #define RORTHOX_MAX_PROGRAM_ALLOCATIONS 1024
 #define RORTHOX_MAX_PROCESSES 12
 
-#define USER_DATA_SEGMENT 0x23
-#define USER_CODE_SEGMENT 0x1b
 
 #define RORTHOX_MAX_ISR80H_COMMANDS 1024
 

@@ -122,6 +122,8 @@ gdt_data:       ;   DS, SS, ES, FS, GS
     db 0        ;   Base 24 - 31 bits
 
 gdt_end:
+; Reject a mismatch between the boot and kernel GDT layouts.
+times -((CODE_SEG != KERNEL_CODE_SELECTOR) || (DATA_SEG != KERNEL_DATA_SELECTOR)) db 0
 
 gdt_descriptor:
     dw gdt_end - gdt_start - 1  ;   Size of the descriptor

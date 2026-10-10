@@ -5,8 +5,8 @@ global _start
 global kernel_registers
 extern kernel_main
 extern cas
-CODE_SEG equ 0x08
-DATA_SEG equ 0x10
+CODE_SEG equ KERNEL_CODE_SELECTOR
+DATA_SEG equ KERNEL_DATA_SELECTOR
 
 
 _start:
@@ -69,7 +69,7 @@ _start:
     jmp $
 
 kernel_registers:
-    mov ax, 0x10
+    mov ax, DATA_SEG
     mov ds, ax
     mov es, ax
     mov gs, ax

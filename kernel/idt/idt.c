@@ -124,7 +124,7 @@ void idt_init()
     }
 
     // idt_set(0, idt_zero);
-    idt_set(0x80, isr80h_wrapper);
+    idt_set(RORTHOX_SYSCALL_VECTOR, isr80h_wrapper);
 
     // set PIT (Programmable Interval Timer) frequency to 1000 Hz
     // set_frequency(100);

@@ -1,3 +1,4 @@
+%include "rorthox-config.inc"
 [BITS 32]
 
 section .asm
@@ -19,7 +20,7 @@ print:
     mov ebp, esp
     push dword[ebp+8]
     mov eax, 1 ; Command print
-    int 0x80
+    int SYSCALL_VECTOR
     add esp, 4
 
     pop ebp
@@ -32,7 +33,7 @@ printc:
     push dword[ebp+8]
     push dword[ebp+8]
     mov eax, 10 ; Command printc
-    int 0x80
+    int SYSCALL_VECTOR
     add esp, 8
 
     pop ebp
@@ -43,7 +44,7 @@ rorthox_getkey:
     push ebp
     mov ebp, esp
     mov eax, 2 ; Command getkey
-    int 0x80
+    int SYSCALL_VECTOR
     pop ebp
     ret
 
@@ -53,7 +54,7 @@ rorthox_putchar:
     mov ebp, esp
     mov eax, 3 ; Command 3 putchar
     push dword[ebp+8] ; Variable "c"
-    int 0x80
+    int SYSCALL_VECTOR
     add esp, 4
     pop ebp
     ret
@@ -64,7 +65,7 @@ rorthox_malloc:
     mov ebp, esp
     mov eax, 4 ; Command malloc (Allocate memory for the process)
     push dword[ebp+8] ; Variable "size"
-    int 0x80
+    int SYSCALL_VECTOR
     add esp, 4
     pop ebp
     ret
@@ -75,7 +76,7 @@ rorthox_free:
     mov ebp, esp
     mov eax, 5 ; Command free (Frees the allocated memory for this process)
     push dword[ebp+8] ; Variable "ptr"
-    int 0x80
+    int SYSCALL_VECTOR
     add esp, 4
     pop ebp
     ret
@@ -86,7 +87,7 @@ rorthox_process_load_start:
     mov ebp, esp
     mov eax, 6 ; Command 6 process load start ( starts a process )
     push dword[ebp+8] ; Variable "filename"
-    int 0x80
+    int SYSCALL_VECTOR
     add esp, 4
     pop ebp
     ret
@@ -97,7 +98,7 @@ rorthox_system:
     mov ebp, esp
     mov eax, 7 ; Command 7 process_system (Runs a system command based on the arguments)
     push dword[ebp+8] ; Variable "arguments"
-    int 0x80
+    int SYSCALL_VECTOR
     add esp, 4
     pop ebp
     ret
@@ -108,7 +109,7 @@ rorthox_process_get_arguments:
     mov ebp, esp
     mov eax, 8 ; Command 8 Gets the process arguments
     push dword[ebp+8] ; Variable "arguments"
-    int 0x80
+    int SYSCALL_VECTOR
     add esp, 4
     pop ebp
     ret
@@ -118,6 +119,6 @@ rorthox_exit:
     push ebp
     mov ebp, esp
     mov eax, 9 ; Command process exit
-    int 0x80
+    int SYSCALL_VECTOR
     pop ebp
     ret

@@ -10,8 +10,8 @@ all: ./stdlib.elf
 ./build/start.asm.o: ./src/start.asm
 	nasm -f elf ./src/start.asm -o ./build/start.asm.o
 
-./build/rorthox.asm.o: ./src/rorthox.asm
-	nasm -f elf ./src/rorthox.asm -o ./build/rorthox.asm.o
+./build/rorthox.asm.o: ./src/rorthox.asm $(CONFIG_DIR)/rorthox-config.inc
+	nasm -f elf -I$(CONFIG_DIR)/ ./src/rorthox.asm -o ./build/rorthox.asm.o
 
 ./build/rorthox.o: ./src/rorthox.c
 	i686-elf-gcc ${INCLUDES} ${FLAGS} -std=gnu99 -c ./src/rorthox.c -o ./build/rorthox.o

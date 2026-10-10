@@ -53,6 +53,12 @@ struct gdt_structured gdt_structured[RORTHOX_TOTAL_GDT_SEGMENTS] = {
     {.base = (uint32_t)&tss, .limit = sizeof(tss), .type = 0xE9},   // TSS Segment
 };
 
+_Static_assert(KERNEL_CODE_SELECTOR == 1 * 8, "kernel code selector must match GDT slot 1");
+_Static_assert(KERNEL_DATA_SELECTOR == 2 * 8, "kernel data selector must match GDT slot 2");
+_Static_assert(USER_CODE_SEGMENT == (3 * 8 | 3), "user code selector must match GDT slot 3");
+_Static_assert(USER_DATA_SEGMENT == (4 * 8 | 3), "user data selector must match GDT slot 4");
+_Static_assert(RORTHOX_TSS_SELECTOR == 5 * 8, "TSS selector must match GDT slot 5");
+
 void cas()
 {
     kernel_main();
@@ -91,7 +97,7 @@ void kernel_main()
     tss.ss0 = KERNEL_DATA_SELECTOR;
 
     // Load the TSS
-    tss_load(0x28); // GDT real offset
+    tss_load(RORTHOX_TSS_SELECTOR); // GDT real offset
 
     // Setup paging
     kernel_chunk = paging_new_4gb(PAGING_IS_WRITEABLE | PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL);
