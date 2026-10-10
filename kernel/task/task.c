@@ -63,7 +63,11 @@ struct task *task_new(struct process *process)
 out:
     if (ISERR(res))
     {
-        task_free(task);
+        // Initialization failed before the task was linked.
+        if (task)
+        {
+            kfree(task);
+        }
         return ERROR(res);
     }
 
@@ -105,7 +109,15 @@ static void task_list_remove(struct task *task)
 
 int task_free(struct task *task)
 {
-    paging_free_4gb(task->page_directory);
+    if (!task)
+    {
+        return 0;
+    }
+
+    if (task->page_directory)
+    {
+        paging_free_4gb(task->page_directory);
+    }
     task_list_remove(task); // remove from the list
 
     // Finally free the task data

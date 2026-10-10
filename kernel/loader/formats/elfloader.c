@@ -177,9 +177,16 @@ out:
 
 int elf_load(const char *filename, struct elf_file **file_out)
 {
-    struct elf_file *elf_file = kzalloc(sizeof(struct elf_file));
     int fd = 0;
-    int res = fopen(filename, "r");
+    int res = 0;
+    struct elf_file *elf_file = kzalloc(sizeof(struct elf_file));
+    if (!elf_file)
+    {
+        res = -ENOMEM;
+        goto out;
+    }
+
+    res = fopen(filename, "r");
     if (res <= 0)
     {
         res = -EIO;
@@ -195,6 +202,12 @@ int elf_load(const char *filename, struct elf_file **file_out)
     }
 
     elf_file->elf_memory = kzalloc(stat.filesize);
+    if (!elf_file->elf_memory)
+    {
+        res = -ENOMEM;
+        goto out;
+    }
+
     res = fread(elf_file->elf_memory, stat.filesize, 1, fd);
     if (res < 0)
     {

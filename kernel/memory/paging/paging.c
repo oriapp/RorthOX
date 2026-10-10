@@ -7,21 +7,47 @@ static uint32_t *current_directory = 0;
 struct paging_4gb_chunk *paging_new_4gb(uint8_t flags)
 {
     uint32_t *directory = kzalloc(sizeof(uint32_t) * PAGING_TOTAL_ENTRIES_PER_TABLE);
+    if (!directory)
+    {
+        return NULL;
+    }
+
+    int total_tables = 0;
     int offset = 0;
     for (int i = 0; i < PAGING_TOTAL_ENTRIES_PER_TABLE; i++)
     {
         uint32_t *entry = kzalloc(sizeof(uint32_t) * PAGING_TOTAL_ENTRIES_PER_TABLE);
+        if (!entry)
+        {
+            goto out;
+        }
+
         for (int b = 0; b < PAGING_TOTAL_ENTRIES_PER_TABLE; b++)
         {
             entry[b] = (offset + (b * PAGING_PAGE_SIZE)) | flags;
         }
         offset += (PAGING_TOTAL_ENTRIES_PER_TABLE * PAGING_PAGE_SIZE);
         directory[i] = (uint32_t)entry | flags | PAGING_IS_WRITEABLE;
+        total_tables++;
     }
 
     struct paging_4gb_chunk *chunk_4gb = kzalloc(sizeof(struct paging_4gb_chunk));
+    if (!chunk_4gb)
+    {
+        goto out;
+    }
+
     chunk_4gb->directory_entry = directory;
     return chunk_4gb;
+
+out:
+    for (int i = 0; i < total_tables; i++)
+    {
+        uint32_t *table = (uint32_t*)(directory[i] & 0xfffff000);
+        kfree(table);
+    }
+    kfree(directory);
+    return NULL;
 }
 
 void paging_switch(struct paging_4gb_chunk *directory)
