@@ -251,6 +251,7 @@ int process_terminate(struct process *process)
 
     // Unlink the process from the processes array
     process_unlink(process);
+    kfree(process);
 
     print("Process was terminated\n"); // Replace with something. do something cool
 
