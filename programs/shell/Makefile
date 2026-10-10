@@ -7,7 +7,7 @@ all: ./build/shell.elf
 ./build/shell.elf: ${FILES} ../stdlib/stdlib.elf linker.ld $(CONFIG_DIR)/rorthox-config.ld
 	i686-elf-gcc -g -Wl,-L,$(CONFIG_DIR) -T ./linker.ld -o ./build/shell.elf -ffreestanding -O0 -nostdlib -fpic -g ${FILES} ../stdlib/stdlib.elf
 
-./build/shell.o: ./src/shell.c
+./build/shell.o: ./src/shell.c $(CONFIG_DIR)/rorthox-config.h
 	i686-elf-gcc ${INCLUDES} -I./ $(FLAGS) -std=gnu99 -c ./src/shell.c -o ./build/shell.o
 
 .PHONY: all clean

@@ -14,7 +14,7 @@ mkdir -p "$OUT"
 
 echo "pic: boot bin/os.bin and run blank.elf"
 qemu_start bin/os.bin "$OUT"
-if wait_screen "RorthOX v1.0.0" 60; then
+if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" 60; then
     type_line "blank.elf"
     wait_screen "Process was terminated" 30 || true
 fi

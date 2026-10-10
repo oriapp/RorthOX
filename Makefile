@@ -1,7 +1,7 @@
 include config.mk
 
 # Config values must come from config.mk, not untracked make command-line overrides.
-CONFIG_KEYS := RESERVED_SECTORS SECTORS_PER_FAT SECTOR_SIZE KERNEL_LOAD_ADDRESS KERNEL_BOOT_STACK_TOP KERNEL_TSS_STACK_TOP PROGRAM_LOAD_ADDRESS USER_STACK_TOP USER_STACK_SIZE KERNEL_CODE_SELECTOR KERNEL_DATA_SELECTOR USER_CODE_SELECTOR USER_DATA_SELECTOR TSS_SELECTOR SYSCALL_VECTOR
+CONFIG_KEYS := RESERVED_SECTORS SECTORS_PER_FAT SECTOR_SIZE KERNEL_LOAD_ADDRESS KERNEL_BOOT_STACK_TOP KERNEL_TSS_STACK_TOP PROGRAM_LOAD_ADDRESS USER_STACK_TOP USER_STACK_SIZE KERNEL_CODE_SELECTOR KERNEL_DATA_SELECTOR USER_CODE_SELECTOR USER_DATA_SELECTOR TSS_SELECTOR SYSCALL_VECTOR RORTHOX_NAME RORTHOX_VERSION QEMU_RAM_MIB
 $(foreach key,$(CONFIG_KEYS),$(if $(filter command line,$(origin $(key))),$(error $(key) must be set in config.mk, not on the command line)))
 
 FILES = ./build/kernel.asm.o ./build/arch/sys.o ./build/arch/pit.o ./build/arch/sys.asm.o ./build/kernel.o ./build/arch/tty.o ./build/idt/idt.asm.o ./build/idt/idt.o ./build/memory/memory.o ./build/io/io.asm.o ./build/loader/formats/elfloader.o ./build/loader/formats/elf.o ./build/gdt/gdt.o ./build/gdt/gdt.asm.o ./build/memory/heap/heap.o ./build/memory/heap/kheap.o ./build/memory/paging/paging.o ./build/memory/paging/paging.asm.o ./build/isr80h/isr80h.o ./build/isr80h/heap.o ./build/keyboard/keyboard.o ./build/keyboard/classic.o ./build/isr80h/io.o ./build/isr80h/process.o ./build/isr80h/misc.o ./build/disk/disk.o ./build/disk/streamer.o ./build/task/process.o ./build/task/task.o ./build/task/task.asm.o ./build/task/tss.asm.o ./build/fs/pparser.o ./build/fs/file.o ./build/fs/fat/fat16.o ./build/string/string.o
@@ -25,7 +25,7 @@ CONFIG_ENV := build/config/rorthox-config.env
 
 $(CONFIG_H): config.mk Makefile
 	@mkdir -p build/config
-	@printf '%s\n' '#ifndef RORTHOX_BUILD_CONFIG_H' '#define RORTHOX_BUILD_CONFIG_H' '#define RORTHOX_SECTOR_SIZE $(SECTOR_SIZE)' '#define RORTHOX_PROGRAM_VIRTUAL_ADDRESS $(PROGRAM_LOAD_ADDRESS)' '#define USER_PROGRAM_STACK_SIZE $(USER_STACK_SIZE)' '#define RORTHOX_PROGRAM_VIRTUAL_STACK_ADDRESS_START $(USER_STACK_TOP)' '#define RORTHOX_KERNEL_TSS_STACK_TOP $(KERNEL_TSS_STACK_TOP)' '#define KERNEL_CODE_SELECTOR $(KERNEL_CODE_SELECTOR)' '#define KERNEL_DATA_SELECTOR $(KERNEL_DATA_SELECTOR)' '#define USER_CODE_SEGMENT $(USER_CODE_SELECTOR)' '#define USER_DATA_SEGMENT $(USER_DATA_SELECTOR)' '#define RORTHOX_TSS_SELECTOR $(TSS_SELECTOR)' '#define RORTHOX_SYSCALL_VECTOR $(SYSCALL_VECTOR)' '#endif' > $@.tmp
+	@printf '%s\n' '#ifndef RORTHOX_BUILD_CONFIG_H' '#define RORTHOX_BUILD_CONFIG_H' '#define RORTHOX_SECTOR_SIZE $(SECTOR_SIZE)' '#define RORTHOX_PROGRAM_VIRTUAL_ADDRESS $(PROGRAM_LOAD_ADDRESS)' '#define USER_PROGRAM_STACK_SIZE $(USER_STACK_SIZE)' '#define RORTHOX_PROGRAM_VIRTUAL_STACK_ADDRESS_START $(USER_STACK_TOP)' '#define RORTHOX_KERNEL_TSS_STACK_TOP $(KERNEL_TSS_STACK_TOP)' '#define KERNEL_CODE_SELECTOR $(KERNEL_CODE_SELECTOR)' '#define KERNEL_DATA_SELECTOR $(KERNEL_DATA_SELECTOR)' '#define USER_CODE_SEGMENT $(USER_CODE_SELECTOR)' '#define USER_DATA_SEGMENT $(USER_DATA_SELECTOR)' '#define RORTHOX_TSS_SELECTOR $(TSS_SELECTOR)' '#define RORTHOX_SYSCALL_VECTOR $(SYSCALL_VECTOR)' '#define RORTHOX_NAME "$(RORTHOX_NAME)"' '#define RORTHOX_VERSION "$(RORTHOX_VERSION)"' '#endif' > $@.tmp
 	@mv $@.tmp $@
 
 $(CONFIG_INC): config.mk Makefile
@@ -40,11 +40,15 @@ $(CONFIG_LD): config.mk Makefile
 
 $(CONFIG_ENV): config.mk Makefile
 	@mkdir -p build/config
-	@printf '%s\n' '#!/usr/bin/env bash' > $@.tmp
+	@printf '%s\n' 'RORTHOX_NAME="$(RORTHOX_NAME)"' 'RORTHOX_VERSION="$(RORTHOX_VERSION)"' 'QEMU_RAM_MIB=$(QEMU_RAM_MIB)' > $@.tmp
 	@mv $@.tmp $@
 
 ifneq ($(SECTOR_SIZE),512)
 $(error SECTOR_SIZE must be 512: the BPB and ATA driver support only 512-byte sectors)
+endif
+# Identity values are emitted into C strings and shell assignments.
+ifneq ($(shell printf '%s\n' '$(RORTHOX_NAME)' '$(RORTHOX_VERSION)' | LC_ALL=C grep -Ec '^[A-Za-z0-9][A-Za-z0-9._-]*$$'),2)
+$(error RORTHOX_NAME and RORTHOX_VERSION must use ASCII letters, digits, dots, underscores or hyphens)
 endif
 
 $(filter-out %.asm.o,$(FILES)): | $(CONFIG_H)

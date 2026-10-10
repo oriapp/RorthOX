@@ -1,4 +1,5 @@
 #include "shell.h"
+#include "rorthox-config.h"
 #include "stdio.h"
 #include "stdlib.h"
 #include "rorthox.h"
@@ -6,7 +7,7 @@
 int main(int argc, char const *argv[])
 {
     print("Codename Spectrum\n");
-    print("RorthOX v1.0.0\n");
+    print(RORTHOX_NAME " v" RORTHOX_VERSION "\n");
     while (1) {
         print("> ");
         char buf[1024];

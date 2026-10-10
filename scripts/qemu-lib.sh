@@ -17,6 +17,10 @@
 # Env: QEMU=qemu-system-i386   QEMU_FLAGS="extra flags"   QEMU_TIMEOUT=180 (hard limit per QEMU run, seconds)
 # Needs only qemu-system-i386 and the base system tools (timeout, mkfifo, od, awk, grep, sed).
 
+CONFIG_ENV="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/build/config/rorthox-config.env"
+[ -f "$CONFIG_ENV" ] || { echo "missing $CONFIG_ENV; run make all first" >&2; exit 2; }
+. "$CONFIG_ENV"
+
 QEMU="${QEMU:-qemu-system-i386}"
 QEMU_TIMEOUT="${QEMU_TIMEOUT:-180}"
 failures=0
@@ -38,7 +42,7 @@ qemu_start() {
     # QEMU reads monitor commands from a named pipe, so this script can send them one at a time.
     Q_TMP="$(mktemp -d)"
     mkfifo "$Q_TMP/monitor"
-    timeout "$QEMU_TIMEOUT" "$QEMU" -m 128 -display none -no-reboot \
+    timeout "$QEMU_TIMEOUT" "$QEMU" -m "$QEMU_RAM_MIB" -display none -no-reboot \
         -drive "file=$Q_IMAGE,format=raw,index=0,media=disk" \
         -debugcon "file:$Q_OUT/debugcon.log" -serial none -monitor stdio \
         ${QEMU_FLAGS:-} < "$Q_TMP/monitor" > "$Q_OUT/monitor.log" 2>&1 &
