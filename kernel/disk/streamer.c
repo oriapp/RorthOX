@@ -1,7 +1,8 @@
 #include "streamer.h"
 #include "memory/heap/kheap.h"
 #include "config.h"
-# include <stdbool.h>
+#include "status.h"
+#include <limits.h>
 
 struct disk_stream *diskstreamer_new(int disk_id)
 {
@@ -23,42 +24,49 @@ struct disk_stream *diskstreamer_new(int disk_id)
 
 int diskstreamer_seek(struct disk_stream *stream, int pos)
 {
+    if (pos < 0)
+    {
+        return -EINVARG;
+    }
+
     stream->pos = pos;
     return 0;
 }
 
 int diskstreamer_read(struct disk_stream *stream, void *out, int total)
 {
-    int sector = stream->pos / RORTHOX_SECTOR_SIZE;
-    int offset = stream->pos % RORTHOX_SECTOR_SIZE;
-    int total_to_read = total;
-    bool overflow = (offset + total_to_read) >= RORTHOX_SECTOR_SIZE;
+    if (total < 0 || stream->pos < 0 || total > INT_MAX - stream->pos)
+    {
+        return -EINVARG;
+    }
+
     char buf[RORTHOX_SECTOR_SIZE];
-
-    if (overflow)
+    while (total > 0)
     {
-        total_to_read -= (offset + total_to_read) - RORTHOX_SECTOR_SIZE;
+        int sector = stream->pos / RORTHOX_SECTOR_SIZE;
+        int offset = stream->pos % RORTHOX_SECTOR_SIZE;
+        int total_to_read = RORTHOX_SECTOR_SIZE - offset;
+        if (total_to_read > total)
+        {
+            total_to_read = total;
+        }
+
+        int res = disk_read_block(stream->disk, sector, 1, buf);
+        if (res < 0)
+        {
+            return res;
+        }
+
+        for (int i = 0; i < total_to_read; i++)
+        {
+            *(char*)out++ = buf[offset+i];
+        }
+
+        stream->pos += total_to_read;
+        total -= total_to_read;
     }
 
-    int res = disk_read_block(stream->disk, sector, 1, buf);
-    if (res < 0)
-    {
-        goto out;
-    }
-
-    for (int i = 0; i < total_to_read; i++)
-    {
-        *(char*)out++ = buf[offset+i];
-    }
-
-    // Adjust the stream
-    stream->pos += total_to_read;
-    if (overflow)
-    {
-        res = diskstreamer_read(stream, out, total-total_to_read);
-    }
-out:
-    return res;
+    return 0;
 }
 
 void diskstreamer_close(struct disk_stream *stream)
