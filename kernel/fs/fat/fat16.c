@@ -90,7 +90,7 @@ struct fat_directory_item
 struct fat_directory
 {
     struct fat_directory_item *item;
-    int total;             // total items in the fat directory
+    int total;             // raw entry slots represented in item, including deleted slots
     int sector_pos;        // first sector where this fat directory data is
     int ending_sector_pos; // last secotr of where this fat directory is storing other directories and files
 };
@@ -207,12 +207,6 @@ int fat16_get_total_items_for_directory(struct disk *disk, uint32_t directory_st
             break;
         }
 
-        // Is the item unused
-        if (item.filename[0] == 0xE5)
-        {
-            continue;
-        }
-
         i++;
     }
 
@@ -238,12 +232,6 @@ int fat16_get_root_directory(struct disk *disk, struct fat_private *fat_private,
         total_sectors += 1;
     }
 
-    int total_items = fat16_get_total_items_for_directory(disk, root_dir_sector_pos); // get total items in a directory
-    if (total_items < 0)
-    {
-        res = total_items;
-        goto out;
-    }
     dir = kzalloc(root_dir_size);
     if (!dir)
     {
@@ -264,10 +252,16 @@ int fat16_get_root_directory(struct disk *disk, struct fat_private *fat_private,
         goto out;
     }
 
+    int total_items = 0;
+    while (total_items < root_dir_entries && dir[total_items].filename[0] != 0x00)
+    {
+        total_items++;
+    }
+
     directory->item = dir;
     directory->total = total_items;
     directory->sector_pos = root_dir_sector_pos;
-    directory->ending_sector_pos = root_dir_sector_pos + (root_dir_size / disk->sector_size);
+    directory->ending_sector_pos = root_dir_sector_pos + total_sectors;
 
 out:
     if (res < 0)
@@ -410,7 +404,8 @@ struct fat_directory_item *fat_16_clone_directory_item(struct fat_directory_item
 
 static uint32_t fat16_get_first_cluster(struct fat_directory_item *item)
 {
-    return item->high_16_bits_first_cluster | item->low_16_bits_first_cluster;
+    // FAT16 uses only the low word; the high cluster word belongs to FAT32.
+    return item->low_16_bits_first_cluster;
 }
 
 static int fat16_cluster_to_sector(struct fat_private *private, int cluster)
@@ -675,12 +670,20 @@ struct fat_item *fat16_find_item_in_directory(struct disk *disk, struct fat_dire
     char tmp_filename[RORTHOX_MAX_PATH];
     for (int i = 0; i < directory->total; i++)
     {
+        if (directory->item[i].filename[0] == 0x00)
+        {
+            break;
+        }
+        if (directory->item[i].filename[0] == 0xE5)
+        {
+            continue;
+        }
         // resolve the full relative filename for us
         fat16_get_full_relative_filename(&directory->item[i], tmp_filename, sizeof(tmp_filename));
         if (istrncmp(tmp_filename, name, sizeof(tmp_filename)) == 0)
         {
             // Found it let's create a new fat_item
-            f_item = fat16_new_fat_item_for_directory_item(disk, &directory->item[i]);
+            return fat16_new_fat_item_for_directory_item(disk, &directory->item[i]);
         }
     }
 
@@ -851,15 +854,14 @@ int fat16_seek(void *private, uint32_t offset, FILE_SEEK_MODE seek_mode)
     }
 
     struct fat_directory_item *ritem = desc_item->item;
-    if (offset >= ritem->filesize)
-    {
-        res = -EIO;
-        goto out;
-    }
-
     switch (seek_mode)
     {
         case SEEK_SET:
+            if (offset > ritem->filesize)
+            {
+                res = -EIO;
+                goto out;
+            }
             desc->pos = offset;
         break;
 
@@ -868,6 +870,11 @@ int fat16_seek(void *private, uint32_t offset, FILE_SEEK_MODE seek_mode)
         break;
 
         case SEEK_CUR:
+            if (desc->pos > ritem->filesize || offset > ritem->filesize - desc->pos)
+            {
+                res = -EIO;
+                goto out;
+            }
             desc->pos += offset;
         break;
 

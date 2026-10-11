@@ -34,6 +34,9 @@ int kalloc_bad_frees(void);
 int kalloc_poison_errors(void);
 // Name of the function that made allocation call n (needs -rdynamic), or "?".
 const char *kalloc_caller(int n);
+// Fill the next <bytes> bytes after the last allocation with copies of <pattern> (<size> bytes),
+// like stale data that a read past the end of an allocation would see. Call after kalloc_init().
+void kalloc_fill_unused(const void *pattern, size_t size, size_t bytes);
 
 void *kzalloc(size_t size);
 void *kmalloc(size_t size);

@@ -48,6 +48,19 @@ void kalloc_init(void)
     bad_frees = 0;
 }
 
+void kalloc_fill_unused(const void *pattern, size_t size, size_t bytes)
+{
+    if (!arena || size == 0 || arena_used + bytes > ARENA_SIZE)
+    {
+        fprintf(stderr, "kalloc: cannot fill %zu unused bytes\n", bytes);
+        exit(2);
+    }
+    for (size_t i = 0; i < bytes; i++)
+    {
+        arena[arena_used + i] = ((const unsigned char *)pattern)[i % size];
+    }
+}
+
 void kalloc_fail_at(int n)
 {
     fail_at = n;
