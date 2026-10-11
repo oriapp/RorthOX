@@ -54,6 +54,7 @@ no_interrupt:
         ; uint32_t ss; // stack segment
         ; Pushes the general purpose registers to the stack
         pushad
+        cld ; the C code expects DF clear, and the interrupt gate doesn't clear it
         ; Interrupt frame end
         push esp
         push dword %1
@@ -79,6 +80,7 @@ isr80h_wrapper:
     ; uint32_t ss; // stack segment
     ; Pushes the general purpose registers to the stack
     pushad
+    cld ; the C code expects DF clear, and the interrupt gate doesn't clear it
 
     ; INTERRUPT FRAME ENDS
     

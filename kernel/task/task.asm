@@ -24,11 +24,13 @@ task_return:
     ; Push the stack pointer
     push dword[ebx+40]
 
-    ; Push the flags
-    pushf
-    pop eax
-    or eax, 0x200
-    push eax    ; Push the flags back to the stack
+    ; Push the task's saved flags. Keep CF PF AF ZF SF TF DF OF RF AC ID,
+    ; force IF and the reserved bit 1 on, and clear IOPL, NT, VM, VIF, VIP
+    ; and the other reserved bits
+    mov eax, [ebx+36]
+    and eax, 0x00250dd5
+    or eax, 0x00000202
+    push eax
 
     ; Push the code segment
     push dword [ebx+32]

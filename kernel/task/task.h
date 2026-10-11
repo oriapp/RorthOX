@@ -1,6 +1,7 @@
 #ifndef TASK_H
 #define TASK_H
 
+#include <stddef.h>
 #include "config.h"
 #include "memory/paging/paging.h"
 #include "sched/sched.h"
@@ -29,6 +30,14 @@ struct registers
     uint32_t esp;
     uint32_t ss;
 };
+
+// task.asm (task_return, restore_general_purpose_registers) reads these by offset
+_Static_assert(offsetof(struct registers, ip) == 28, "task.asm reads ip at 28");
+_Static_assert(offsetof(struct registers, cs) == 32, "task.asm reads cs at 32");
+_Static_assert(offsetof(struct registers, flags) == 36, "task.asm reads flags at 36");
+_Static_assert(offsetof(struct registers, esp) == 40, "task.asm reads esp at 40");
+_Static_assert(offsetof(struct registers, ss) == 44, "task.asm reads ss at 44");
+_Static_assert(sizeof(struct registers) == 48, "struct registers must stay 48 bytes");
 
 struct process;
 
