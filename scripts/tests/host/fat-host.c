@@ -22,6 +22,9 @@ int read_count;
 int failed_reads;
 int failed_read_index;
 int failed_seek_count;
+int failed_alloc_calls;
+long setup_max_lba;
+void (*fat_host_before_resolve)(void);
 
 static int image_fd = -1;
 static struct disk the_disk;
@@ -39,6 +42,10 @@ static struct
 } cluster_maps[MAX_CHANGES];
 static int cluster_map_count;
 static int fail_lookup_at, fat_lookups, fail_next_read, fail_error;
+static int fail_read_at, read_calls, fail_read_error;
+static long fail_lba = -1;
+static int fail_lba_error;
+static long max_lba_seen;
 
 static unsigned int le16(const unsigned char *p) { return p[0] | (p[1] << 8); }
 
@@ -141,6 +148,19 @@ void fat_host_fail_fat_lookup(int n, int error)
     fail_next_read = 0;
 }
 
+void fat_host_fail_read(int n, int error)
+{
+    fail_read_at = n;
+    fail_read_error = error;
+    read_calls = 0;
+}
+
+void fat_host_fail_sector(long lba, int error)
+{
+    fail_lba = lba;
+    fail_lba_error = error;
+}
+
 void fat_host_clear_logs(void)
 {
     seek_count = 0;
@@ -197,9 +217,23 @@ int disk_read_block(struct disk *idisk, unsigned int lba, int total, void *buf)
     {
         return -EIO;
     }
+    int made_to_fail = 0;
     if (fail_next_read)
     {
         fail_next_read = 0;
+        made_to_fail = fail_error;
+    }
+    else if (fail_read_at && ++read_calls == fail_read_at)
+    {
+        made_to_fail = fail_read_error;
+    }
+    else if (fail_lba >= 0 && fail_lba >= lba && fail_lba < (long)lba + total)
+    {
+        made_to_fail = fail_lba_error;
+    }
+    if (made_to_fail)
+    {
+        failed_alloc_calls = kalloc_calls();
         failed_reads++;
         failed_read_index = read_count;
         failed_seek_count = seek_count;
@@ -207,7 +241,7 @@ int disk_read_block(struct disk *idisk, unsigned int lba, int total, void *buf)
         {
             read_log[read_count++] = lba;
         }
-        return fail_error;
+        return made_to_fail;
     }
     for (int i = 0; i < total; i++)
     {
@@ -215,8 +249,13 @@ int disk_read_block(struct disk *idisk, unsigned int lba, int total, void *buf)
         {
             read_log[read_count++] = (long)lba + i;
         }
+        if ((long)lba + i > max_lba_seen)
+        {
+            max_lba_seen = (long)lba + i;
+        }
         if (read_one((long)lba + i, (unsigned char *)buf + (long)i * geo.sector_size) < 0)
         {
+            failed_alloc_calls = kalloc_calls();
             return -EIO;
         }
     }
@@ -248,17 +287,27 @@ void fat_host_setup(void)
     cluster_map_count = 0;
     fail_lookup_at = 0;
     fail_next_read = 0;
+    fail_read_at = 0;
+    fail_lba = -1;
+    failed_alloc_calls = -1;
+    max_lba_seen = -1;
     memset(&the_disk, 0, sizeof(the_disk));
     the_disk.type = RORTHOX_DISK_TYPE_REAL;
     the_disk.sector_size = RORTHOX_SECTOR_SIZE;
     fs_init();
+    if (fat_host_before_resolve)
+    {
+        fat_host_before_resolve();
+    }
     the_disk.filesystem = fs_resolve(&the_disk);
     if (!the_disk.filesystem)
     {
         printf("fat-host: the test image did not resolve as FAT16\n");
         exit(2);
     }
+    setup_max_lba = max_lba_seen;
     fat_host_clear_logs();
+    failed_alloc_calls = -1;
 }
 
 int fat_host_root_entry(const char *name83, long *first_cluster, long *size)

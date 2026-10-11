@@ -13,9 +13,9 @@
  *            left allocated.
  *   open     fopen("0:/blank.elf") and fopen("0:/dir/blank.elf") with each allocation failing in
  *            turn: 0, no descriptor slot taken, and nothing left allocated (the parsed path
- *            included). Allocations inside fat16_load_fat_directory() are skipped: its failure
- *            path is a separate known bug. Without a failure the file opens, has the right size
- *            and contents, and fclose() gives everything back.
+ *            included), also when the failing allocation is inside fat16_load_fat_directory()
+ *            (those are counted). Without a failure the file opens, has the right size and
+ *            contents, and fclose() gives everything back.
  *   walk     "0:/blank.elf/x" (a name after a file), "0:/dir/nosuch/x" (a missing directory in
  *            the middle) and "0:/nosuch": 0, no crash, nothing left allocated.
  *
@@ -378,7 +378,7 @@ static int setup_disk(void)
 }
 
 // Allocation call k of fopen(path) fails (0 = none). Returns 0 pass, 1 fail, 2 pass and no failure
-// happened, 3 skipped (the failing allocation was in fat16_load_fat_directory).
+// happened, 3 pass and the failing allocation was in fat16_load_fat_directory.
 static int open_case(const char *path, int k)
 {
     struct snapshot before;
@@ -389,10 +389,6 @@ static int open_case(const char *path, int k)
         kalloc_fail_at(base + k);
     }
     int fd = fopen(path, "r");
-    if (k && kalloc_failed() && strncmp(kalloc_caller(base + k), "fat16_load_fat_directory", 30) == 0)
-    {
-        return 3;
-    }
     if (k && !kalloc_failed())
     {
         k = 0;
@@ -418,7 +414,11 @@ static int open_case(const char *path, int k)
             say("open %s, allocation %d (%s) failing: %d allocations left\n", path, k, kalloc_caller(base + k), n);
             return 1;
         }
-        return heap_clean(path) ? 0 : 1;
+        if (!heap_clean(path))
+        {
+            return 1;
+        }
+        return strncmp(kalloc_caller(base + k), "fat16_load_fat_directory", 30) == 0 ? 3 : 0;
     }
 
     // No failure: the file must open and read back.
@@ -516,10 +516,11 @@ static const char *kind_name[] = { "parse", "parse shapes", "resolve (allocation
 
 static int cases;
 static int failures;
-static int skipped;
+static int in_loader;
 static int kind_failures[WALK_MISSING + 1];
 
-// Runs one case in a child process: 0 pass, 1 fail, 2 pass without an injected failure, 3 skipped.
+// Runs one case in a child process: 0 pass, 1 fail, 2 pass without an injected failure, 3 pass with
+// the failure inside fat16_load_fat_directory.
 static int run(int kind, int k)
 {
     // Show the first two failures of each kind; the count says how many there were.
@@ -540,13 +541,9 @@ static int run(int kind, int k)
     int status;
     waitpid(pid, &status, 0);
     int rc = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-    if (rc == 3)
-    {
-        skipped++;
-        return rc;
-    }
     cases++;
-    if (rc == 0 || rc == 2)
+    in_loader += rc == 3;
+    if (rc == 0 || rc == 2 || rc == 3)
     {
         return rc;
     }
@@ -615,7 +612,7 @@ int main(int argc, char **argv)
     run(WALK_MISSING_DIR, 0);
     run(WALK_MISSING, 0);
 
-    printf("open-path host check: %d of %d cases failed (%d skipped inside fat16_load_fat_directory)\n", failures,
-           cases, skipped);
+    printf("open-path host check: %d of %d cases failed (%d allocation failures inside fat16_load_fat_directory)\n",
+           failures, cases, in_loader);
     return failures ? 1 : 0;
 }

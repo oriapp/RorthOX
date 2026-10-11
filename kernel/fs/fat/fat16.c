@@ -594,7 +594,21 @@ struct fat_directory  *fat16_load_fat_directory(struct disk *disk, struct fat_di
     int cluster = fat16_get_first_cluster(item);
     int cluster_sector = fat16_cluster_to_sector(fat_private, cluster);
     int total_items = fat16_get_total_items_for_directory(disk, cluster_sector);
+    if (total_items < 0)
+    {
+        res = total_items;
+        goto out;
+    }
+    if (total_items > 0x7FFFFFFF / (int) sizeof(struct fat_directory_item))
+    {
+        res = -EIO;
+        goto out;
+    }
     directory->total = total_items;
+    if (total_items == 0)
+    {
+        goto out;
+    }
     int directory_size = directory->total * sizeof(struct fat_directory_item);
     directory->item = kzalloc(directory_size);
     if (!directory->item)
@@ -613,6 +627,7 @@ out:
     if (res != RORTHOX_ALL_OK)
     {
         fat16_free_directory(directory);
+        directory = 0;
     }
     return directory;
 }

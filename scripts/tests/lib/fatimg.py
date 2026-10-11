@@ -10,6 +10,18 @@ Every value comes from the image's own BPB. Only short (8.3) names in the root d
                                                 free cluster after the chain that lies wholly inside
                                                 the image file; both FATs are updated the same way,
                                                 and the old cluster is freed and filled with 0xDB
+  fatimg.py fill-cluster <image> <cluster> <byte>
+                                                fill data cluster <cluster> with <byte> (e.g. a
+                                                directory with no entries at all, not even . and ..)
+  fatimg.py rename <image> <name> <new name>    give the root entry of <name> another 8.3 name; the
+                                                new name may already be taken (duplicate fixtures)
+  fatimg.py set-high <image> <name> <n>         set the high first-cluster word of <name> (always 0
+                                                on FAT16; for reserved-field fixtures)
+  fatimg.py set-size <image> <name> <n>         set the file size field of <name>
+  fatimg.py slots <image> [<dir>]               the raw 32-byte slots of the root directory (or of the
+                                                first cluster of root directory <dir>) up to the first
+                                                0x00 slot: "slot=<i> <used|deleted|lfn|label> <name>",
+                                                then "used_slots=<n>" and "end=<0x00 slot index|none>"
 
 Exits 1 with a message if anything doesn't look the way it should (bad name, missing entry,
 FAT copies that differ, a chain that doesn't match the file size).
@@ -154,6 +166,53 @@ def main(argv):
         chain[index] = new
         print('moved=%d->%d' % (old, new))
         print('chain=%s' % ','.join(str(c) for c in Image(argv[1]).chain(name)))
+    elif cmd == 'fill-cluster' and len(argv) == 4:
+        cluster, byte = int(argv[2], 0), int(argv[3], 0)
+        if not img.cluster_in_image(cluster) or not 0 <= byte <= 0xFF:
+            fail('cluster %s is not inside the image file, or %s is not a byte' % (argv[2], argv[3]))
+        o = img.cluster_offset(cluster)
+        img.data[o:o + img.cluster_bytes] = bytes([byte]) * img.cluster_bytes
+        img.save()
+        print('filled=%d' % cluster)
+    elif cmd == 'rename' and len(argv) == 4:
+        off, new = img.find(argv[2]), short_name(argv[3])
+        img.data[off:off + 11] = new
+        img.save()
+        print('entry_offset=%d' % off)
+    elif cmd in ('set-high', 'set-size') and len(argv) == 4:
+        off, value = img.find(argv[2]), int(argv[3], 0)
+        if cmd == 'set-high':
+            if not 0 <= value <= 0xFFFF:
+                fail('%s does not fit 16 bits' % argv[3])
+            struct.pack_into('<H', img.data, off + 20, value)
+        else:
+            if not 0 <= value <= 0xFFFFFFFF:
+                fail('%s does not fit 32 bits' % argv[3])
+            struct.pack_into('<I', img.data, off + 28, value)
+        img.save()
+        print('entry_offset=%d' % off)
+    elif cmd == 'slots' and len(argv) in (2, 3):
+        if len(argv) == 3:
+            off, _high, cluster, _size = img.entry(argv[2])
+            if not img.data[off + 11] & 0x10 or not img.cluster_in_image(cluster):
+                fail('%s is not a directory inside the image file' % argv[2])
+            base, count = img.cluster_offset(cluster), img.cluster_bytes // 32
+        else:
+            base, count = img.root_sector * img.bytes_per_sector, img.root_entries
+        used, end = 0, 'none'
+        for i in range(count):
+            e = img.data[base + 32 * i:base + 32 * i + 32]
+            if e[0] == 0x00:
+                end = str(i)
+                break
+            kind = 'deleted' if e[0] == 0xE5 else 'lfn' if e[11] == 0x0F else 'label' if e[11] & 0x08 else 'used'
+            used += 1
+            name = bytes(e[0:11]).decode('latin-1')
+            if e[0] == 0xE5:
+                name = '?' + name[1:]
+            print('slot=%d %s %s' % (i, kind, name.replace(' ', '_')))
+        print('used_slots=%d' % used)
+        print('end=%s' % end)
     else:
         fail('usage: see the top of this file')
 

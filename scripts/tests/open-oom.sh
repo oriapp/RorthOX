@@ -6,7 +6,9 @@
 # 1. Host check (scripts/tests/host/open-path.c): builds the real path parser, VFS, FAT16 and
 #    disk streamer code with the host C compiler, reads a copy of bin/os.bin (with a directory
 #    "dir" holding a second blank.elf added), and makes each allocation, then each disk read, of
-#    path parsing, FAT16 setup and fopen fail in turn. See that file for the cases.
+#    path parsing, FAT16 setup and fopen fail in turn. See that file for the cases. Allocations
+#    inside fat16_load_fat_directory() are not skipped: at least two of them (the directory and
+#    its entries) must fail and unwind cleanly.
 # 2. QEMU: the "open..." cases of programs/oomtest, run through heap-oom.sh: oomtest.elf leaves
 #    5 to 11 free heap blocks, so one allocation of opening blank.elf fails (the path root, the
 #    first name, the first path part, the FAT descriptor, the FAT item, the copy of the directory
@@ -57,6 +59,13 @@ if grep -qF "open-path host check: 0 of" "$OUT/host-check.log" 2> /dev/null; the
     echo "  ok   host check: every open path case passed"
 else
     echo "  FAIL host check: every open path case passed"
+    host_failed=1
+fi
+if grep -qE "open-path host check: .* \(([2-9]|[1-9][0-9]+) allocation failures inside fat16_load_fat_directory\)" \
+        "$OUT/host-check.log" 2> /dev/null; then
+    echo "  ok   host check: allocations inside fat16_load_fat_directory failed and unwound"
+else
+    echo "  FAIL host check: allocations inside fat16_load_fat_directory failed and unwound"
     host_failed=1
 fi
 

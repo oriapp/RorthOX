@@ -1,9 +1,10 @@
 /*
- * Shared part of the FAT16 host checks (fat-chain.c, fat-entry.c): disk 0 is a copy of the
- * RorthOX image, read through the real kernel/fs and kernel/disk/streamer.c code. The model disk
- * can change FAT entries on the way (in both FAT copies), serve a cluster number past the end of
- * the image file from a real cluster, and fail a chosen read. It records every sector read and,
- * through the linker option --wrap=diskstreamer_seek, every position fat16.c seeks a stream to.
+ * Shared part of the FAT16 host checks (fat-*.c and file-*.c in this directory): disk 0 is a
+ * copy of the RorthOX image, read through the real kernel/fs and kernel/disk/streamer.c code. The
+ * model disk can change FAT entries on the way (in both FAT copies), serve a cluster number past
+ * the end of the image file from a real cluster, and fail a chosen read. It records every sector
+ * read and, through the linker option --wrap=diskstreamer_seek, every position fat16.c seeks a
+ * stream to.
  */
 #ifndef HOST_FAT_HOST_H
 #define HOST_FAT_HOST_H
@@ -35,6 +36,12 @@ extern int read_count;
 extern int failed_reads;
 extern int failed_read_index;
 extern int failed_seek_count;
+// kalloc_calls() when the last read failed (made to fail, or past the end of the image file).
+extern int failed_alloc_calls;
+// Highest sector read while fat_host_setup() resolved the disk.
+extern long setup_max_lba;
+// If set, fat_host_setup() calls it on the fresh heap right before it resolves the disk.
+extern void (*fat_host_before_resolve)(void);
 
 // Open the image and read its BPB. Exits on failure.
 void fat_host_open_image(const char *path);
@@ -52,6 +59,11 @@ void fat_host_map_cluster(long virt, long real);
 // Fail the disk read that follows the <n>-th seek into the first FAT from now (n counts from 1),
 // i.e. the <n>-th FAT entry lookup, with the status <error> (e.g. -ENOMEM).
 void fat_host_fail_fat_lookup(int n, int error);
+
+// Fail the <n>-th disk read from now (n counts from 1) with <error>. 0 = no such failure.
+void fat_host_fail_read(int n, int error);
+// Fail every read of sector <lba> with <error>. -1 = no such failure.
+void fat_host_fail_sector(long lba, int error);
 
 // Byte positions the FAT16 code should use.
 long fat_entry_pos(long cluster);    // entry <cluster> in the first FAT
