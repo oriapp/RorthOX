@@ -93,7 +93,7 @@ static int file_new_descriptor(struct file_descriptor **desc_out)
 // Return the filedescriptor for the given file descriptor id
 static struct file_descriptor *file_get_descriptor(int fd)
 {
-    if (fd <= 0 || fd >= RORTHOX_MAX_FILE_DESCRIPTORS)
+    if (fd <= 0 || fd > RORTHOX_MAX_FILE_DESCRIPTORS)
     {
         return 0; // invalid fs passed
     }
