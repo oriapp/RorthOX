@@ -42,6 +42,11 @@ no_interrupt:
     popad
     iret 
 
+; Vectors where the CPU pushes an error code after EIP (Intel SDM Vol 3A, Table 6-1:
+; #DF 8, #TS 10, #NP 11, #SS 12, #GP 13, #PF 14, #AC 17, #CP 21; AMD APM Vol 2: #VC 29, #SX 30).
+; A software int never pushes one, so idt.c gives these gates DPL 0.
+%define error_code_vector(n) ((n) == 8 || ((n) >= 10 && (n) <= 14) || (n) == 17 || (n) == 21 || (n) == 29 || (n) == 30)
+
 %macro interrupt 1
     global int%1
     int%1:
@@ -50,18 +55,41 @@ no_interrupt:
         ; uint32_t ip;
         ; uint32_t cs;
         ; uint32_t flags;
-        ; uint32_t sp; // stack pointer
-        ; uint32_t ss; // stack segment
+        ; uint32_t sp; // stack pointer, only when coming from ring 3
+        ; uint32_t ss; // stack segment, only when coming from ring 3
+%if error_code_vector(%1)
+        ; the CPU pushed the error code below ip
+%else
+        push dword 0 ; no CPU error code: push 0 so every frame looks the same
+%endif
         ; Pushes the general purpose registers to the stack
         pushad
         cld ; the C code expects DF clear, and the interrupt gate doesn't clear it
         ; Interrupt frame end
-        push esp
+        mov ebx, esp ; the frame
+        mov eax, cr2 ; read before any C code, a later page fault would change it
+%if %1 == 2
+        ; An NMI can come in while the kernel runs with other segments loaded, and the
+        ; handler returns to it. Keep its segments outside the frame.
+        push ds
+        push es
+        push fs
+        push gs
+%endif
+        push eax
+        push ebx
         push dword %1
         call interrupt_handler
-        add esp, 8 ; pop the two added values
+        add esp, 12 ; pop the three added values
+%if %1 == 2
+        pop gs
+        pop fs
+        pop es
+        pop ds
+%endif
         popad
-        iret
+        add esp, 4 ; drop the error code
+        iretd
 %endmacro
 
 %assign i 0
@@ -78,6 +106,7 @@ isr80h_wrapper:
     ; uint32_t flags;
     ; uint32_t sp; // stack pointer
     ; uint32_t ss; // stack segment
+    push dword 0 ; no error code, same frame as the interrupt stubs
     ; Pushes the general purpose registers to the stack
     pushad
     cld ; the C code expects DF clear, and the interrupt gate doesn't clear it
@@ -99,6 +128,7 @@ isr80h_wrapper:
     popad ; Pops all pushad
     ; Mov the result into the eax register
     mov eax, [tmp_res]
+    add esp, 4 ; drop the error code
     iretd
 
 section .data

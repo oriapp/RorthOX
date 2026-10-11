@@ -8,6 +8,7 @@
 #include "task/process.h"
 #include "include/kernel/sys.h"
 #include "include/kernel/time/pit.h"
+#include "include/kernel/tty.h"
 
 struct idt_desc idt_descriptors[RORTHOX_TOTAL_INTERRUPTS];
 struct idtr_desc idtr_descriptor;
@@ -43,8 +44,105 @@ static void pic_send_eoi(int interrupt)
     }
 }
 
-void interrupt_handler(int interrupt, struct interrupt_frame *frame)
+// Vectors where the CPU pushes an error code. idt.asm has the same list.
+static int idt_has_error_code(int interrupt)
 {
+    switch (interrupt)
+    {
+        case 8: case 10: case 11: case 12: case 13: case 14: case 17: case 21: case 29: case 30:
+            return 1;
+    }
+
+    return 0;
+}
+
+// Set once a fatal exception is being reported. Anything that comes in after that just halts.
+static volatile int exception_fatal = 0;
+
+static void exception_put_hex(uint32_t value)
+{
+    for (int shift = 28; shift >= 0; shift -= 4)
+    {
+        dbg_putc("0123456789abcdef"[(value >> shift) & 0xf]);
+    }
+}
+
+static void __attribute__((noreturn)) exception_fatal_stop(int interrupt, struct interrupt_frame *frame, uint32_t cr2, const char *msg)
+{
+    exception_fatal = 1;
+    dbg_puts("exception: vector=0x");
+    exception_put_hex(interrupt);
+    dbg_puts(" error=0x");
+    exception_put_hex(frame->error_code);
+    if (interrupt == 14)
+    {
+        dbg_puts(" cr2=0x");
+        exception_put_hex(cr2);
+    }
+    dbg_puts("\n");
+    PANIC(msg, __FILE__, __LINE__);
+}
+
+// CPU exceptions (vectors below 0x20). A fault in ring 3 ends the process of the task that
+// was running, the same way as an exit. A fault in the kernel and a double fault halt.
+// Only a ring 0 NMI returns.
+static void idt_handle_exception(int interrupt, struct interrupt_frame *frame, uint32_t cr2)
+{
+    // The interrupted code may have had user segments loaded. Don't touch CR3 here: the
+    // IDT is live before the kernel page directory exists.
+    kernel_registers();
+    if (exception_fatal)
+    {
+        PAUSE();
+    }
+
+    int from_user = (frame->cs & 3) == 3;
+    if (interrupt == 2)
+    {
+        // An NMI is not the task's fault. From ring 3, switch tasks as before. From ring 0,
+        // go back to the kernel (the stub restores its segments).
+        if (from_user)
+        {
+            kernel_page();
+            task_current_save_state(frame);
+            task_next();
+        }
+        return;
+    }
+
+    // #MC (18) is not special: CR4.MCE is clear, so a real machine check shuts the CPU down
+    // and vector 18 only comes from a software int.
+    if (interrupt == 8 || !from_user)
+    {
+        exception_fatal_stop(interrupt, frame, cr2, "Kernel exception");
+    }
+
+    // The task that was running, not process_current() (that is the keyboard owner).
+    struct task *task = task_current();
+    if (!task || !task->process || task->process->task != task ||
+        process_get(task->process->id) != task->process)
+    {
+        exception_fatal_stop(interrupt, frame, cr2, "Invalid faulting task");
+    }
+
+    // Leave the task's page directory before process_terminate frees it
+    kernel_page();
+    if (process_terminate(task->process) < 0)
+    {
+        exception_fatal_stop(interrupt, frame, cr2, "Failed to terminate faulting process");
+    }
+
+    task_next();
+}
+
+void interrupt_handler(int interrupt, struct interrupt_frame *frame, uint32_t cr2)
+{
+    if (interrupt < 0x20)
+    {
+        idt_handle_exception(interrupt, frame, cr2);
+        return;
+    }
+
     kernel_page();
     if (interrupt_callbacks[interrupt] != 0)
     {
@@ -68,15 +166,10 @@ void idt_set(int interrupt_no, void *address)
     desc->offset_1 = (uint32_t) address & 0x0000ffff;
     desc->selector = KERNEL_CODE_SELECTOR;
     desc->zero = 0x00;
-    desc->type_attr = 0xEE;
+    // 0xEE: present, DPL 3, 32-bit interrupt gate. Error code vectors get DPL 0 (0x8E):
+    // a software int from ring 3 pushes no error code, so it gets #GP instead.
+    desc->type_attr = idt_has_error_code(interrupt_no) ? 0x8E : 0xEE;
     desc->offset_2 = (uint32_t) address >> 16;
-}
-
-void idt_handle_exception()
-{
-    //// AHHH NOT LINE THIS
-    /// process_terminate(task_current()->process);
-    task_next();
 }
 
 static uint32_t jiffies = 0;
@@ -130,12 +223,6 @@ void idt_init()
     // set_frequency(100);
     // pit_configure(1000);
     // pit_init();
-
-    int i;
-    for (i = 0; i < 0x20; i++)
-    {
-        idt_register_interrupt_callback(i, idt_handle_exception);
-    }
 
     idt_register_interrupt_callback(RORTHOX_PIC_MASTER_VECTOR_BASE, idt_clock); // timer interrupt
 
