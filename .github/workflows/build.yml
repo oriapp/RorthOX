@@ -21,7 +21,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bison flex libgmp3-dev libmpc-dev \
-            libmpfr-dev texinfo curl xz-utils nasm qemu-system-x86 mtools
+            libmpfr-dev texinfo curl xz-utils nasm qemu-system-x86 mtools python3
 
       # Building binutils + GCC takes a while, so keep ~/opt/cross between runs.
       # A change to configure.sh (versions, options) builds a new one.

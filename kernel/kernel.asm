@@ -4,6 +4,8 @@
 global _start
 global kernel_registers
 extern kernel_main
+extern __bss_start
+extern __bss_end
 extern cas
 CODE_SEG equ KERNEL_CODE_SELECTOR
 DATA_SEG equ KERNEL_DATA_SELECTOR
@@ -25,6 +27,15 @@ _start:
     in al, 0x92
     or al, 2
     out 0x92, al
+
+    ; Clear .bss before any C code runs. kernel.bin has no bytes for it,
+    ; so it holds whatever was in memory after the kernel load
+    mov edi, __bss_start
+    mov ecx, __bss_end
+    sub ecx, edi        ; byte count, may be odd or zero
+    xor eax, eax
+    cld                 ; rep stosb counts up only with DF clear
+    rep stosb
 
     ; Remap both PICs to the configured vector bases.
     ; The out to 0x80 after each PIC write is a short delay for real hardware

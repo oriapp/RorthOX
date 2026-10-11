@@ -28,9 +28,12 @@ SECTIONS
         *(.data)
     }
 
+    /* _start clears [__bss_start, __bss_end) before any C code runs */
     .bss : ALIGN(4096) /* Aligned to 4096 bytes */
     {
+        __bss_start = .;
         *(COMMON)
-        *(.bss)
+        *(.bss .bss.*)
+        __bss_end = .;
     }
 }
