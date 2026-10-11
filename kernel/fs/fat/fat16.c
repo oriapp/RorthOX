@@ -10,7 +10,9 @@
 
 #define RORTHOX_FAT16_SIGNATURE 0x29
 #define RORTHOX_FAT16_FAT_ENTRY_SIZE 0x02
-#define RORTHOX_FAT16_BAD_SECTOR 0xFF7
+#define RORTHOX_FAT16_BAD_SECTOR 0xFFF7
+#define RORTHOX_FAT16_RESERVED_START 0xFFF0
+#define RORTHOX_FAT16_EOC_START 0xFFF8
 #define RORTHOX_FAT16_UNUSED 0x00
 
 // Will be internally (data structure) used
@@ -461,32 +463,25 @@ static int fat16_get_cluster_for_offset(struct disk *disk, int starting_cluster,
     struct fat_private *private = disk->fs_private;
     int size_of_cluster_bytes = private->header.primary_header.sectors_per_cluster * disk->sector_size;
     int cluster_to_use = starting_cluster;
+    if (cluster_to_use < 2 || cluster_to_use >= RORTHOX_FAT16_RESERVED_START)
+    {
+        res = -EIO;
+        goto out;
+    }
+
     int clusters_ahead = offset / size_of_cluster_bytes;
     for (int i = 0; i < clusters_ahead; i++)
     {
         int entry = fat16_get_fat_entry(disk, cluster_to_use);
-        if (entry == 0xFF8 || entry == 0xFFF)
+        if (entry < 0)
         {
-            // We are at the last entry of the file
-            res = -EIO;
+            res = entry;
             goto out;
         }
 
-        // Sector is marked as bad?
-        if (entry == RORTHOX_FAT16_BAD_SECTOR)
-        {
-            res = -EIO;
-            goto out;
-        }
-
-        // Reserved sector?
-        if (entry == 0xFF0 || entry == 0xFF6)
-        {
-            res = -EIO;
-            goto out;
-        }
-
-        if (entry == 0x00)
+        if (entry < 2 ||
+            (entry >= RORTHOX_FAT16_RESERVED_START && entry < RORTHOX_FAT16_BAD_SECTOR) ||
+            entry == RORTHOX_FAT16_BAD_SECTOR || entry >= RORTHOX_FAT16_EOC_START)
         {
             res = -EIO;
             goto out;
