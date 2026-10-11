@@ -26,10 +26,10 @@ idt_load:
     mov ebp, esp
 
     ; Our function
-    mov ebx, [ebp+8] ; ebp = stack pointer
+    mov eax, [ebp+8] ; ebp = stack pointer
                      ; ebp+4 = return addressof the function caller
                      ; ebp+8 = first argument passed to this function, that we're creating
-    lidt [ebx]
+    lidt [eax]       ; eax, not ebx: cdecl callers expect ebx to be preserved
     ; Our function
 
     pop ebp
