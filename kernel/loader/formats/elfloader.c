@@ -213,6 +213,11 @@ int elf_load(const char *filename, struct elf_file **file_out)
     {
         goto out;
     }
+    if (res != 1)
+    {
+        res = -EIO;
+        goto out;
+    }
 
     res = elf_process_loaded(elf_file);
     if (res < 0)

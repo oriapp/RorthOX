@@ -7,7 +7,9 @@
  * Every failing elf_load() must return an error, leave *file_out alone, close the file and leave
  * nothing allocated. A file that is not an ELF file must be gone from the heap before
  * process_load_data() falls back to loading it as a flat binary. A good ELF file keeps its
- * object and its buffer until elf_close(). Each case runs in its own process.
+ * object and its buffer until elf_close(). A short fread (0 items, with nothing or all but the
+ * last byte copied) is -EIO before any header is read, and is not tried as a flat binary. Each
+ * case runs in its own process.
  *
  * Usage: elf-load <blank.elf>
  */
@@ -32,6 +34,8 @@ static int blank_size;
 static int fail_open;
 static int fail_stat;
 static int fail_read;
+// 1: fread returns 0 items and copies nothing; 2: it copies all but the last byte and returns 0.
+static int short_read;
 static int is_open;
 static int opens;
 
@@ -65,6 +69,14 @@ int fread(void *ptr, uint32_t size, uint32_t nmemb, int fd)
     if (fd != FD || !is_open || fail_read)
     {
         return -EIO;
+    }
+    if (short_read)
+    {
+        if (short_read == 2 && size * nmemb > 1)
+        {
+            memcpy(ptr, content, size * nmemb - 1 < (uint32_t)content_size ? (int)(size * nmemb - 1) : content_size);
+        }
+        return 0;
     }
     memcpy(ptr, content, size * nmemb < (uint32_t)content_size ? (int)(size * nmemb) : content_size);
     return nmemb;
@@ -141,18 +153,23 @@ enum
     STAT,
     BUFFER_ALLOC,
     READ,
+    SHORT_READ,
+    SHORT_TAIL,
     NOT_ELF,
     BAD_CLASS,
     GOOD,
     FALLBACK,
     NO_FALLBACK,
+    NO_FALLBACK_SHORT,
     CASE_COUNT
 };
 
 static const char *case_name[] = { "ELF object allocation fails", "fopen fails", "fstat fails",
-                                   "file buffer allocation fails", "fread fails", "not an ELF file",
+                                   "file buffer allocation fails", "fread fails",
+                                   "fread reads 0 items and nothing", "fread reads 0 items, all but the last byte",
+                                   "not an ELF file",
                                    "64-bit ELF file", "good ELF file", "fallback to a flat binary",
-                                   "no fallback after fopen fails" };
+                                   "no fallback after fopen fails", "no fallback after a short fread" };
 
 static int run_case(int which)
 {
@@ -179,6 +196,12 @@ static int run_case(int which)
     case READ:
         fail_read = 1;
         return clean_failure(what, elf_load("0:/blank.elf", &out), 0, out);
+    case SHORT_READ:
+        short_read = 1;
+        return clean_failure(what, elf_load("0:/blank.elf", &out), -EIO, out);
+    case SHORT_TAIL:
+        short_read = 2;
+        return clean_failure(what, elf_load("0:/blank.elf", &out), -EIO, out);
     case NOT_ELF:
         serve(not_elf, sizeof(not_elf));
         return clean_failure(what, elf_load("0:/blank.elf", &out), -EINFORMAT, out);
@@ -237,6 +260,18 @@ static int run_case(int which)
             return 1;
         }
         return kalloc_live() == 0 ? 0 : (say("%s: %d allocations left\n", what, kalloc_live()), 1);
+    }
+    case NO_FALLBACK_SHORT:
+    {
+        static struct process process;
+        short_read = 1;
+        int res = process_load_data("0:/blank.elf", &process);
+        if (res != -EIO || binary_calls != 0)
+        {
+            say("%s: returned %d, flat binary loader called %d times\n", what, res, binary_calls);
+            return 1;
+        }
+        return kalloc_live() == 0 && !is_open ? 0 : (say("%s: %d allocations left\n", what, kalloc_live()), 1);
     }
     }
     return 1;

@@ -510,9 +510,15 @@ static int fat16_read_internal_from_stream(struct disk *disk, struct disk_stream
     int offset_from_cluster = offset % size_of_cluster_bytes;
 
     int starting_sector = fat16_cluster_to_sector(private, cluster_to_use);
-    int starting_pos = (starting_sector * disk->sector_size) + offset_from_cluster;
-    int total_to_read = total > size_of_cluster_bytes ? size_of_cluster_bytes : total; // we can only read one sector at the time
-    res = diskstreamer_seek(stream, starting_pos);
+    uint64_t starting_pos = ((uint64_t) starting_sector * disk->sector_size) + offset_from_cluster;
+    if (starting_pos > 0x7FFFFFFF)
+    {
+        res = -EIO;
+        goto out;
+    }
+    int left_in_cluster = size_of_cluster_bytes - offset_from_cluster;
+    int total_to_read = total > left_in_cluster ? left_in_cluster : total;
+    res = diskstreamer_seek(stream, (int) starting_pos);
     if (res != RORTHOX_ALL_OK)
     {
         goto out;
@@ -790,25 +796,47 @@ out:
 // Return the amount of nmemb's that where successfully read
 int fat16_read(struct disk *disk, void *descriptor, uint32_t size, uint32_t nmemb, char *out_ptr)
 {
-    int res = 0;
     struct fat_file_descriptor *fat_desc = descriptor;
-    struct fat_directory_item *item = fat_desc->item->item;
-    int offset = fat_desc->pos;
-    for (uint32_t i = 0; i < nmemb; i++)
+    if (fat_desc->item->type != FAT_ITEM_TYPE_FILE)
     {
-        res = fat16_read_internal(disk, fat16_get_first_cluster(item), offset, size, out_ptr);
-        if (ISERR(res))
-        {
-            goto out;
-        }
-
-        out_ptr += size;
-        offset += size;
+        return -EINVARG;
+    }
+    struct fat_directory_item *item = fat_desc->item->item;
+    if (fat_desc->pos > item->filesize)
+    {
+        return -EIO;
     }
 
-    res = nmemb;
-out:
-    return res;
+    int count = 0;
+    for (uint32_t i = 0; i < nmemb; i++)
+    {
+        uint32_t left = item->filesize - fat_desc->pos;
+        if (left == 0)
+        {
+            break;
+        }
+        uint32_t bytes = size < left ? size : left;
+        if (fat_desc->pos > 0x7FFFFFFF || bytes > 0x7FFFFFFF - fat_desc->pos)
+        {
+            return -EIO;
+        }
+        int res = fat16_read_internal(disk, fat16_get_first_cluster(item), fat_desc->pos, bytes, out_ptr);
+        if (res < 0)
+        {
+            // A failed internal read may have copied a prefix; the destination is not rolled back.
+            return res;
+        }
+
+        fat_desc->pos += bytes;
+        out_ptr += bytes;
+        if (bytes != size)
+        {
+            break;
+        }
+        count++;
+    }
+
+    return count;
 }
 
 int fat16_seek(void *private, uint32_t offset, FILE_SEEK_MODE seek_mode)
