@@ -29,7 +29,8 @@ void terminal_putchar(int x, int y, char c, char colour)
     update_cursor(x, y);
 }
 
-/// @brief Simulates delete key
+/// @brief Simulates delete key: moves back one cell (to the last column of the row above at
+/// column 0) and erases that cell
 void terminal_backspace()
 {
     if (terminal_row == 0 && terminal_col == 0)
@@ -40,12 +41,15 @@ void terminal_backspace()
     if (terminal_col == 0)
     {
         terminal_row--;
-        terminal_col = VGA_WIDTH;
+        terminal_col = VGA_WIDTH - 1;
+    }
+    else
+    {
+        terminal_col--;
     }
 
-    terminal_col--;
-    terminal_writechar(' ', terminal_color); // terminal_color?
-    terminal_col--;
+    // Store the blank directly: writing it with terminal_writechar would move the cursor on again
+    terminal_putchar(terminal_col, terminal_row, ' ', terminal_color);
     update_cursor(terminal_col, terminal_row);
 }
 
