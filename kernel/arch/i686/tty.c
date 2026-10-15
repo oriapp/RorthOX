@@ -16,6 +16,8 @@
 int terminal_count = 0;
 static int cursor_pos;
 
+void checkIndent();
+
 /// @brief Puts a char into video memory
 /// @param x pos
 /// @param y pos
@@ -23,6 +25,12 @@ static int cursor_pos;
 /// @param colour VGA color
 void terminal_putchar(int x, int y, char c, char colour)
 {
+    // Only cells of the visible screen: anything else would land outside the text page
+    if (x < 0 || x >= VGA_WIDTH || y < 0 || y >= VGA_HEIGHT)
+    {
+        return;
+    }
+
     const size_t index = (y * VGA_WIDTH) + x;
     video_mem[index] = vga_entry(c, vga_entry_color(colour, termianl_background_color));
     // Whats the math for background color and text color?
@@ -62,6 +70,7 @@ void terminal_writechar(char c, char colour)
     {
         terminal_row++;
         terminal_col = 0;
+        checkIndent();
         update_cursor(terminal_col, terminal_row);
         return;
     }
@@ -74,11 +83,7 @@ void terminal_writechar(char c, char colour)
 
     terminal_putchar(terminal_col, terminal_row, c, colour);
     terminal_col++;
-    if (terminal_col >= VGA_WIDTH)
-    {
-        terminal_col = 0;
-        terminal_row++;
-    }
+    checkIndent();
     update_cursor(terminal_col, terminal_row);
 }
 
@@ -149,7 +154,7 @@ void terminal_panic(vga_color_t bg_colour)
 void terminal_initialize(vga_color_t bg_colour)
 {
     // Clear the BIOS stuff
-    video_mem = (uint16_t *)(0xB8000);
+    video_mem = (volatile uint16_t *)(0xB8000);
     int x, y;
     terminal_row = 0;
     terminal_col = 0;
@@ -230,13 +235,35 @@ void printc(const char *str, unsigned int color)
     }
 }
 
-/// @brief call when using video memory directly, avoid overflowing a row
+/// @brief Moves every row up by one, clears the last row and puts the cursor row on it
+static void terminal_scroll(void)
+{
+    size_t i;
+
+    // Whole 16-bit cells, so every character keeps its colour
+    for (i = 0; i < (VGA_HEIGHT - 1) * VGA_WIDTH; i++)
+    {
+        video_mem[i] = video_mem[i + VGA_WIDTH];
+    }
+    for (; i < VGA_HEIGHT * VGA_WIDTH; i++)
+    {
+        video_mem[i] = vga_entry(' ', terminal_color);
+    }
+    terminal_row = VGA_HEIGHT - 1;
+}
+
+/// @brief call when using video memory directly, avoid overflowing a row or the screen
 void checkIndent()
 {
     if (terminal_col >= VGA_WIDTH)
     {
         terminal_col = 0;
         terminal_row++;
+    }
+
+    if (terminal_row >= VGA_HEIGHT)
+    {
+        terminal_scroll();
     }
 }
 
@@ -326,6 +353,7 @@ int vprintf(const char *format, va_list args)
             {
                 terminal_row++;
                 terminal_col = 0;
+                checkIndent();
             }
             else
             {

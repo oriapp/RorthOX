@@ -12,7 +12,7 @@ extern "C" {
 
 
 #pragma GCC diagnostic ignored "-Wunused-variable" // Ignore unused vars
-static uint16_t *video_mem = 0;
+static volatile uint16_t *video_mem = 0;
 static uint16_t terminal_row = 0;
 static uint16_t terminal_col = 0;
 static uint8_t terminal_color = 0;

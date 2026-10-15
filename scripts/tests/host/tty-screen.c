@@ -1,5 +1,5 @@
 /*
- * Host check for scripts/tests/tty-backspace.sh: the real
+ * Host check for scripts/tests/tty-backspace.sh and scripts/tests/tty-scroll.sh: the real
  * kernel/arch/i686/tty.c, built with the host C compiler, writing to a VGA text page mapped at
  * its real address 0xB8000 (one 4 KiB page; the pages below and above are not mapped, so a store
  * outside the page stops the case with SIGSEGV). The 96 bytes after the 80 x 25 screen
@@ -14,7 +14,13 @@
  * (goes to column 79 of the row above), many times across rows, on the last row, through
  * terminal_backspace() and through print("\b"), and the next character lands on the erased cell.
  *
- * Usage: tty-screen backspace
+ * Group "scroll" (K7): the screen is 80 x 25; print, printc, terminal_writechar and printf
+ * (literal text, newlines, %i, an unknown format character) scroll at the bottom instead of
+ * writing below row 24; scrolled rows keep both bytes of every cell and the new bottom row is
+ * cleared to spaces in the terminal colour; terminal_putchar ignores coordinates off the screen;
+ * a long mixed run of output never leaves the screen page.
+ *
+ * Usage: tty-screen backspace|scroll
  * Prints "tty-screen <group> host check: <failed> of <cases> cases failed".
  */
 #include <stdint.h>
@@ -40,6 +46,7 @@ int strcmp(const char *a, const char *b);
 #define SCREEN_BYTES (CELLS * 2)
 #define GUARD 0xCC
 #define WHITE 0x0F
+#define CLEAR (0x20 | (WHITE << 8))
 
 static volatile uint16_t *const vga = (volatile uint16_t *)VGA_ADDRESS;
 static volatile uint8_t *const vga_bytes = (volatile uint8_t *)VGA_ADDRESS;
@@ -80,10 +87,27 @@ unsigned char insb(unsigned short port)
 static uint16_t want[CELLS];
 static int want_row, want_col, height;
 
+static void model_scroll(void)
+{
+    for (int i = 0; i < CELLS - COLS; i++)
+    {
+        want[i] = want[i + COLS];
+    }
+    for (int i = CELLS - COLS; i < CELLS; i++)
+    {
+        want[i] = CLEAR;
+    }
+    want_row = 24;
+}
+
 static void model_newline(void)
 {
     want_col = 0;
     want_row++;
+    if (want_row >= 25)
+    {
+        model_scroll();
+    }
 }
 
 static void model_put(char c, int attr)
@@ -319,6 +343,256 @@ static void bs_last_row(void)
     verify("character after backspace on the last row", 1);
 }
 
+// --- group scroll (K7) ---
+
+static void sc_size(void)
+{
+    if (VGA_WIDTH != 80 || VGA_HEIGHT != 25)
+    {
+        BAD("the terminal is %d x %d, expected the full 80 x 25 text screen", VGA_WIDTH, VGA_HEIGHT);
+    }
+}
+
+static int numbered(char *out, const char *what, int n, int len)
+{
+    int k = 0;
+    for (const char *p = what; *p; p++)
+    {
+        out[k++] = *p;
+    }
+    out[k++] = '0' + n / 100 % 10;
+    out[k++] = '0' + n / 10 % 10;
+    out[k++] = '0' + n % 10;
+    while (k < len)
+    {
+        out[k++] = 'a' + (n + k) % 26;
+    }
+    out[k] = 0;
+    return k;
+}
+
+static void sc_print_lines(void)
+{
+    setup();
+    char line[100];
+    for (int n = 1; n <= 64; n++)
+    {
+        numbered(line, "line ", n, 10 + n % 50);
+        line[10 + n % 50] = '\n';
+        line[11 + n % 50] = 0;
+        print(line);
+        model_print(line, WHITE);
+        verify("print, 64 lines", 1);
+        if (problems)
+        {
+            printf("  (after line %d)\n", n);
+            return;
+        }
+    }
+    print("end");
+    model_print("end", WHITE);
+    verify("print, 64 lines and an end marker", 1);
+    if (want_row != 24 || want_col != 3)
+    {
+        BAD("model: end marker not on row 24");
+    }
+}
+
+static void sc_wrap(void)
+{
+    setup();
+    char block[COLS + 1];
+    for (int n = 1; n <= 40; n++)
+    {
+        numbered(block, "block ", n, COLS);
+        print(block);
+        model_print(block, WHITE);
+        verify("print, 40 blocks of 80 characters", 1);
+        if (problems)
+        {
+            printf("  (after block %d)\n", n);
+            return;
+        }
+    }
+}
+
+static void sc_colours(void)
+{
+    // Both bytes of every cell move: each line has its own colour.
+    setup();
+    char line[100];
+    for (int n = 1; n <= 40; n++)
+    {
+        numbered(line, "colour ", n, 20 + n);
+        line[20 + n] = '\n';
+        line[21 + n] = 0;
+        printc(line, 1 + n % 15);
+        model_print(line, 1 + n % 15);
+        verify("printc, 40 lines in 15 colours", 1);
+        if (problems)
+        {
+            printf("  (after line %d)\n", n);
+            return;
+        }
+    }
+}
+
+static void sc_putchar(void)
+{
+    // The putchar syscall calls terminal_writechar for each character.
+    setup();
+    for (int i = 0; i < 30 * COLS + 7; i++)
+    {
+        char c = i % 97 == 96 ? '\n' : 'A' + i % 26;
+        terminal_writechar(c, WHITE);
+        if (c == '\n')
+        {
+            model_newline();
+        }
+        else
+        {
+            model_put(c, WHITE);
+        }
+        verify("terminal_writechar, 2407 characters", 1);
+        if (problems)
+        {
+            printf("  (after character %d)\n", i + 1);
+            return;
+        }
+    }
+}
+
+static void sc_printf(void)
+{
+    // Kernel printf writes literal text and newlines itself, %i through print. Its VGA cursor
+    // stays on the last cell it wrote (unchanged by K7), so only cells and position are compared.
+    setup();
+    char text[100];
+    for (int n = 1; n <= 40; n++)
+    {
+        int count = kernel_printf("printf line %i of 40 with some text\n", n);
+        int k = 0;
+        for (const char *p = "printf line "; *p; p++)
+        {
+            text[k++] = *p;
+        }
+        const char *digits = itoa(n);
+        for (const char *p = digits; *p; p++)
+        {
+            text[k++] = *p;
+        }
+        for (const char *p = " of 40 with some text\n"; *p; p++)
+        {
+            text[k++] = *p;
+        }
+        text[k] = 0;
+        model_print(text, WHITE);
+        verify("printf with %i and newline, 40 lines", 0);
+        if (count != k - 1)
+        {
+            BAD("printf line %d returned %d, expected %d", n, count, k - 1);
+        }
+        if (problems)
+        {
+            printf("  (after line %d)\n", n);
+            return;
+        }
+    }
+}
+
+static void sc_printf_wrap(void)
+{
+    // Literal text without newlines and the unknown-format path ("%q" prints q) wrap and scroll too.
+    setup();
+    for (int n = 0; n < 30; n++)
+    {
+        kernel_printf("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcd%q%q");
+        model_print("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdqq", WHITE);
+        verify("printf, 30 rows of literal text and %q", 0);
+        if (problems)
+        {
+            printf("  (after row %d)\n", n + 1);
+            return;
+        }
+    }
+    kernel_printf("%q");
+    model_print("q", WHITE);
+    verify("printf, 30 rows of literal text and %q", 0);
+}
+
+static void sc_putchar_bounds(void)
+{
+    // terminal_putchar must not touch memory for a position off the screen.
+    static const int pos[][2] = { { 80, 0 }, { 0, 25 }, { 79, 25 }, { 80, 24 }, { 1000, 1000 }, { -1, 0 }, { 0, -1 }, { -80, 1 } };
+    for (unsigned i = 0; i < sizeof(pos) / sizeof(pos[0]); i++)
+    {
+        setup();
+        set_position(4, 4);
+        terminal_putchar(pos[i][0], pos[i][1], '!', 0x4E);
+        verify("terminal_putchar off the screen", 0);
+        if (problems)
+        {
+            printf("  (position %d,%d)\n", pos[i][0], pos[i][1]);
+            return;
+        }
+    }
+}
+
+static void sc_stress(void)
+{
+    // A long mixed run: every path, every line length, thousands of scrolls.
+    setup();
+    unsigned seed = 12345;
+    char text[300];
+    for (int op = 0; op < 4000; op++)
+    {
+        seed = seed * 1103515245 + 12345;
+        int len = (seed >> 8) % 230;
+        for (int i = 0; i < len; i++)
+        {
+            seed = seed * 1103515245 + 12345;
+            text[i] = (seed >> 16) % 9 == 0 ? '\n' : ' ' + 1 + (seed >> 16) % 90;
+            if (text[i] == '%')
+            {
+                text[i] = '+';
+            }
+        }
+        text[len] = 0;
+        int how = op % 4;
+        if (how == 0)
+        {
+            print(text);
+            model_print(text, WHITE);
+        }
+        else if (how == 1)
+        {
+            printc(text, 2 + op % 13);
+            model_print(text, 2 + op % 13);
+        }
+        else if (how == 2)
+        {
+            kernel_printf(text);
+            model_print(text, WHITE);
+        }
+        else
+        {
+            for (int i = 0; i < len; i++)
+            {
+                terminal_writechar(text[i], WHITE);
+            }
+            model_print(text, WHITE);
+        }
+        // Kernel printf leaves the VGA cursor on the last cell it wrote (as before), so the cursor
+        // is only compared after the other paths when they printed something.
+        verify("mixed output, 4000 calls", how != 2 && len > 0);
+        if (problems)
+        {
+            printf("  (after call %d)\n", op + 1);
+            return;
+        }
+    }
+}
+
 struct test_case
 {
     const char *group;
@@ -336,13 +610,22 @@ static const struct test_case cases[] = {
     { "backspace", "84 backspaces across two rows", bs_across_rows },
     { "backspace", "backspaces past (0,0) stop there", bs_to_origin },
     { "backspace", "backspace on the last row", bs_last_row },
+    { "scroll", "the screen is 80 x 25", sc_size },
+    { "scroll", "print of 64 lines scrolls", sc_print_lines },
+    { "scroll", "80-character blocks wrap and scroll", sc_wrap },
+    { "scroll", "printc colours move with the text", sc_colours },
+    { "scroll", "terminal_writechar scrolls", sc_putchar },
+    { "scroll", "printf literal text, newline and %i scroll", sc_printf },
+    { "scroll", "printf literal text and unknown format wrap and scroll", sc_printf_wrap },
+    { "scroll", "terminal_putchar ignores positions off the screen", sc_putchar_bounds },
+    { "scroll", "4000 mixed output calls stay on the screen", sc_stress },
 };
 
 int main(int argc, char **argv)
 {
-    if (argc != 2 || strcmp(argv[1], "backspace") != 0)
+    if (argc != 2 || (strcmp(argv[1], "backspace") != 0 && strcmp(argv[1], "scroll") != 0))
     {
-        printf("usage: tty-screen backspace\n");
+        printf("usage: tty-screen backspace|scroll\n");
         return 2;
     }
     const char *group = argv[1];
