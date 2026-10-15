@@ -70,6 +70,13 @@ void rorthox_terminal_readline(char *out, int max, bool output_while_typing)
             break;
         }
 
+        // Nothing to erase at the start of the line
+        if (key == 0x08 && i == 0)
+        {
+            i--;
+            continue;
+        }
+
         if (output_while_typing)
         {
             rorthox_putchar(key);
