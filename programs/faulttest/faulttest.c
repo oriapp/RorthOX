@@ -2,10 +2,13 @@
  * Exception test for scripts/tests/exceptions.sh and kernel-exceptions.sh (only copied into
  * the test images, as fault.elf: the FAT16 driver has no long names).
  *
- *   fault.elf ud2|int3|cli|pf|int14|int18
+ *   fault.elf ud2|int3|cli|pf|int14|int18|in|out|in21|out20|inffff
  *                                     prints "faulttest: armed", waits for a key, then raises
  *                                     the CPU exception named by the argument (pf: allocate a
- *                                     page, free it and read it). The kernel must end the
+ *                                     page, free it and read it; in/out: read or write one
+ *                                     byte at port 0x80, which ring 3 may not use: #GP;
+ *                                     in21/out20/inffff: the same at ports 0x21, 0x20, 0xffff).
+ *                                     The kernel must end the
  *                                     program, so "faulttest: survived" must never show.
  *   fault.elf kcopy                   the same, but passes a freed (unmapped) pointer to print,
  *                                     so the page fault happens in the kernel's copy.
@@ -28,6 +31,11 @@ void fault_cli(void);
 uint32_t fault_read(void *ptr);
 void fault_int14(void);
 void fault_int18(void);
+void fault_in(void);
+void fault_out(void);
+void fault_in_pic(void);
+void fault_out_pic(void);
+void fault_in_high(void);
 
 static int is(const char *arg, const char *name)
 {
@@ -38,7 +46,7 @@ int main(int argc, char **argv)
 {
     if (argc != 2)
     {
-        print("faulttest: usage: fault.elf ud2|int3|cli|pf|int14|int18|kcopy|parent|child\n");
+        print("faulttest: usage: fault.elf ud2|int3|cli|pf|int14|int18|in|out|in21|out20|inffff|kcopy|parent|child\n");
         return 1;
     }
 
@@ -84,6 +92,26 @@ int main(int argc, char **argv)
     else if (is(mode, "int18"))
     {
         fault_int18();
+    }
+    else if (is(mode, "in"))
+    {
+        fault_in();
+    }
+    else if (is(mode, "out"))
+    {
+        fault_out();
+    }
+    else if (is(mode, "in21"))
+    {
+        fault_in_pic();
+    }
+    else if (is(mode, "out20"))
+    {
+        fault_out_pic();
+    }
+    else if (is(mode, "inffff"))
+    {
+        fault_in_high();
     }
     else if (is(mode, "pf"))
     {

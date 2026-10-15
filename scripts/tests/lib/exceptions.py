@@ -112,6 +112,11 @@ CASES = {
     "pf":    ([14],          14,   0x4,    3,   b"\x8b\x00"),
     "int14": ([13, 14],      13,   0x72,   3,   b"\xcd\x0e"),
     "int18": ([18],          18,   None,   3,   b"\xcd\x12"),
+    "in":    ([13],          13,   0,      3,   b"\xe4\x80"),   # in al, 0x80
+    "out":   ([13],          13,   0,      3,   b"\xe6\x80"),   # out 0x80, al
+    "in21":  ([13],          13,   0,      3,   b"\xe4\x21"),   # in al, 0x21
+    "out20": ([13],          13,   0,      3,   b"\xe6\x20"),   # out 0x20, al
+    "inffff": ([13],         13,   0,      3,   b"\xec"),       # in al, dx (dx = 0xffff)
     "df":    ([8, 11, 13],   8,    0,      3,   None),
     "kcopy": ([14],          14,   0x0,    0,   None),
 }
@@ -172,6 +177,10 @@ def catch_mode(sock, map_path, result_path, ready_path, case):
             else:
                 at = r.read(f_eip, len(insn))
             RES.add("faulting_instruction", at == insn, "bytes %s at eip %#x, expected %s" % (at.hex(), f_eip, insn.hex()))
+        if case == "inffff":
+            # The stub has not run yet: edx still holds the port the program used.
+            dx = r.reg("edx") & 0xFFFF
+            RES.add("io_port", dx == 0xFFFF, "dx %#x, expected 0xffff" % dx)
         want_cr2 = None
         if case == "pf":
             want_cr2 = r.reg("eax")      # fault_read keeps the pointer in eax

@@ -16,6 +16,8 @@ struct gdt
     uint8_t base_24_31_bits;
 } __attribute__((packed));
 
+_Static_assert(sizeof(struct gdt) == 8, "a GDT descriptor is 8 bytes");
+
 struct gdt_structured
 {
     uint32_t base;
@@ -23,7 +25,8 @@ struct gdt_structured
     uint8_t type;
 };
 
-void gdt_load(struct gdt *gdt, int size);
+// limit is the GDTR limit: the offset of the last byte of the table (its size - 1)
+void gdt_load(struct gdt *gdt, int limit);
 void gdt_structured_to_gdt(struct gdt *gdt, struct gdt_structured *structured_gdt, int total_entires);
 
 #ifdef __cplusplus

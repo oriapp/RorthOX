@@ -30,6 +30,12 @@ void encodeGdtEntry(uint8_t *targer, struct gdt_structured source)
     // Set the type
     targer[5] = source.type;
 
+    // A 32-bit TSS (system descriptor, type 9) has no D/B flag: bit 54 is reserved and must be 0
+    if ((source.type & 0x1F) == 0x09)
+    {
+        targer[6] &= ~0x40;
+    }
+
 }
 
 // Converts gdt structured into gdt real

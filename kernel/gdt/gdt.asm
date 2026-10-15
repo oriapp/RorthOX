@@ -11,5 +11,5 @@ gdt_load:
 
 section .data
 gdt_descriptor:
-    dw 0x00 ; Size
+    dw 0x00 ; Limit (size - 1)
     dd 0x00 ; GDT Start Address

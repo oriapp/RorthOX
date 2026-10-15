@@ -50,7 +50,7 @@ struct gdt_structured gdt_structured[RORTHOX_TOTAL_GDT_SEGMENTS] = {
     {.base = 0x00, .limit = 0xffffffff, .type = 0x92},              // Kernel Data Segment
     {.base = 0x00, .limit = 0xffffffff, .type = 0xF8},              // User Code Segment
     {.base = 0x00, .limit = 0xffffffff, .type = 0xF2},              // User Data Segment
-    {.base = (uint32_t)&tss, .limit = sizeof(tss), .type = 0xE9},   // TSS Segment
+    {.base = (uint32_t)&tss, .limit = sizeof(tss) - 1, .type = 0xE9},   // TSS Segment
 };
 
 _Static_assert(KERNEL_CODE_SELECTOR == 1 * 8, "kernel code selector must match GDT slot 1");
@@ -76,7 +76,7 @@ void kernel_main()
     gdt_structured_to_gdt(gdt_real, gdt_structured, RORTHOX_TOTAL_GDT_SEGMENTS);
 
     // Load the gdt
-    gdt_load(gdt_real, sizeof(gdt_real));
+    gdt_load(gdt_real, sizeof(gdt_real) - 1);
 
     // Initialize the heap
     kheap_init();
@@ -95,6 +95,8 @@ void kernel_main()
     memset(&tss, 0x00, sizeof(tss)); // memse the whole tss to 0
     tss.esp0 = RORTHOX_KERNEL_TSS_STACK_TOP; // Where the kernel stack located
     tss.ss0 = KERNEL_DATA_SELECTOR;
+    // No I/O permission bitmap: the map base is past the TSS limit, so ring 3 port I/O faults
+    tss.iomap_base = sizeof(tss);
 
     // Load the TSS
     tss_load(RORTHOX_TSS_SELECTOR); // GDT real offset

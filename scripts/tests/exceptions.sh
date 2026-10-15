@@ -10,6 +10,10 @@
 #   int14  software "int 14" from ring 3: the gate is DPL 0, so #GP with error 0x72
 #   int18  software "int 18" from ring 3: the #MC gate is DPL 3 and only a software int reaches
 #          it (CR4.MCE is clear), so it must end the program like any other ring-3 exception
+#   in     "in al, 0x80" and "out 0x80, al" from ring 3: IOPL is 0 and the TSS has no I/O
+#   out    permission bitmap, so #GP with error 0 (not in the default cases: tss-io.sh runs them)
+#   in21 out20 inffff   the same for "in al, 0x21", "out 0x20, al" and "in al, dx" with dx 0xffff
+#          (tss-io.sh too)
 # fault.elf prints "faulttest: armed" and waits for a key. scripts/tests/lib/exceptions.py catch
 # then breaks at the exception stubs and the test sends the key. It checks the CPU's frame at the
 # stub, the frame interrupt_handler gets and that process_terminate gets the faulting task's process.
@@ -22,20 +26,22 @@
 # Needs python3 and i686-elf-ld (an ELF copy of the kernel gives the address of the process slots).
 # Env: BOOT_TIMEOUT=60 (seconds to wait for the shell)  STEP_TIMEOUT=20 (each step after)
 #      EXCEPTION_CASES="ud2 int3 cli pf int14 int18 owner"
+#      EXCEPTIONS_NAME=exceptions (test name and build/tests/<name> output directory)
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 STEP_TIMEOUT="${STEP_TIMEOUT:-20}"
 CASES="${EXCEPTION_CASES:-ud2 int3 cli pf int14 int18 owner}"
+NAME="${EXCEPTIONS_NAME:-exceptions}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/exceptions
+OUT=build/tests/$NAME
 PROGRAM=programs/faulttest/build/faulttest.elf
 rm -rf "$OUT"
 mkdir -p "$OUT"
-command -v python3 > /dev/null || { echo "exceptions: python3 not found" >&2; exit 1; }
-[ -f "$PROGRAM" ] || { echo "exceptions: $PROGRAM not found, run 'make all' first" >&2; exit 1; }
+command -v python3 > /dev/null || { echo "$NAME: python3 not found" >&2; exit 1; }
+[ -f "$PROGRAM" ] || { echo "$NAME: $PROGRAM not found, run 'make all' first" >&2; exit 1; }
 i686-elf-ld -L build/config -T kernel/linker.ld --oformat elf32-i386 build/kernelfull.o -o "$OUT/kernel.elf"
 
 # The kernel heap table: one byte per block, 0 = free.
@@ -140,7 +146,7 @@ run_fault() {
     local c="$1" before= after= status="not run"
     D="$OUT/$c"
     mkdir -p "$D"
-    echo "exceptions: $c"
+    echo "$NAME: $c"
     rm -f "$SOCK" "$D/ready"
     QEMU_FLAGS="-gdb unix:$SOCK,server=on,wait=off" qemu_start "$OUT/exceptions.bin" "$D"
     if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" && wait_prompts 1 &&
@@ -185,9 +191,10 @@ run_fault() {
         *)     check "$c: entered the expected exception stub"         "$r" "PASS stub_vector" line ;;
     esac
     case "$c" in
-        cli | pf | int14) check "$c: CPU error code as expected"     "$r" "PASS cpu_error_code" line ;;
+        cli | pf | int14 | in | out | in21 | out20 | inffff) check "$c: CPU error code as expected"     "$r" "PASS cpu_error_code" line ;;
     esac
     [ "$c" = pf ] && check "$c: CR2 is the freed pointer"             "$r" "PASS cpu_cr2" line
+    [ "$c" = inffff ] && check "$c: DX held port 0xffff at the fault"   "$r" "PASS io_port" line
     check "$c: fault came from ring 3"                              "$r" "PASS cpu_ring3" line
     check "$c: at the fault.elf instruction for this case"          "$r" "PASS faulting_instruction" line
     check "$c: interrupt_handler got the right vector and frame"    "$r" "PASS handler_frame" line
@@ -211,7 +218,7 @@ run_owner() {
     local before= after=
     D="$OUT/owner"
     mkdir -p "$D"
-    echo "exceptions: owner"
+    echo "$NAME: owner"
     rm -f "$SOCK"
     QEMU_FLAGS="-gdb unix:$SOCK,server=on,wait=off" qemu_start "$OUT/exceptions.bin" "$D"
     if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" && wait_prompts 1 &&
@@ -275,4 +282,4 @@ rm -rf "$GDB_DIR"
 hash_after=$(image_hash)
 [ "$hash_before" = "$hash_after" ] && echo "unchanged" > "$OUT/image.txt" || echo "changed" > "$OUT/image.txt"
 check "bin/os.bin not changed by the test" "$OUT/image.txt" "unchanged" line
-finish exceptions
+finish "$NAME"
