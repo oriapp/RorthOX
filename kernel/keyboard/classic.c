@@ -113,7 +113,7 @@ int classic_keyboard_init()
 uint8_t classic_keyboard_scancode_to_char(uint8_t scancode)
 {
     size_t size_of_keyboard_set_one = sizeof(keyboard_scan_set_one) / sizeof(uint8_t);
-    if (scancode > size_of_keyboard_set_one)
+    if (scancode >= size_of_keyboard_set_one)
     {
         return 0;
     }
