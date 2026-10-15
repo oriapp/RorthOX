@@ -2,9 +2,6 @@
 #include <stddef.h>
 #include <limits.h>
 
-int vsnprintf(char *str, size_t size, const char *format, va_list args);
-int vsprintf(char *str, const char *format, va_list args);
-
 char tolower(char s1)
 {
     if (s1 >= 65 && s1 <= 90)
@@ -223,23 +220,27 @@ char *itoa_hex(int value, char *str, int base)
 {
     char *p = str;
     char *p1, *p2;
-    int tmp_value;
+    unsigned int tmp_value = (unsigned int)value;
+
+    if (base < 2 || base > 36)
+    {
+        *str = 0;
+        return str;
+    }
 
     if (value < 0)
     {
         *p++ = '-';
-        value = -value;
+        tmp_value = 0u - tmp_value;
     }
 
-    tmp_value = value;
-
+    p1 = p;
     do {
         int remainder = tmp_value % base;
         *p++ = (remainder < 10) ? remainder + '0' : remainder + 'A' - 10;
     } while (tmp_value /= base);
 
     *p = 0;
-    p1 = str;
     p2 = p - 1;
     while (p1 < p2)
     {
@@ -247,7 +248,7 @@ char *itoa_hex(int value, char *str, int base)
         *p1 = *p2;
         *p2 = tmp;
         p1++;
-        p2++;
+        p2--;
     }
 
     return str;
@@ -287,17 +288,135 @@ int sprintf(char *str, const char *format, ...) {
 }
 
 
-int vsnprintf(char *str, size_t size, const char *format, va_list args) {
-    int count;
-    if (size == 0) {
-        return 0;
+static int format_putc(char *str, size_t size, int *count, char c)
+{
+    if (*count == INT_MAX)
+    {
+        return -1;
     }
-    count = vsprintf(str, format, args);
-    if (count < size) {
-        return count;
+    if (size && (size_t)*count < size - 1)
+    {
+        str[*count] = c;
     }
-    str[size - 1] = '\0';
-    return size - 1;
+    (*count)++;
+    return 0;
+}
+
+int vsnprintf(char *str, size_t size, const char *format, va_list args)
+{
+    int count = 0;
+    int result = -1;
+    if (size && !str)
+    {
+        return -1;
+    }
+    if (!format)
+    {
+        goto out;
+    }
+
+    for (const char *p = format; *p; p++)
+    {
+        if (*p != '%')
+        {
+            if (format_putc(str, size, &count, *p) < 0)
+                goto out;
+            continue;
+        }
+        p++;
+        if (!*p)
+        {
+            if (format_putc(str, size, &count, '%') < 0)
+                goto out;
+            break;
+        }
+
+        int width = 0;
+        if (*p == '0')
+        {
+            if (p[1] != '2' || p[2] != 'd')
+                goto out;
+            width = 2;
+            p += 2;
+        }
+
+        switch (*p)
+        {
+        case '%':
+            if (format_putc(str, size, &count, '%') < 0)
+                goto out;
+            break;
+        case 'c':
+            if (format_putc(str, size, &count, (char)va_arg(args, int)) < 0)
+                goto out;
+            break;
+        case 's':
+        {
+            const char *s = va_arg(args, const char *);
+            if (!s)
+                s = "(null)";
+            while (*s)
+            {
+                if (format_putc(str, size, &count, *s++) < 0)
+                    goto out;
+            }
+            break;
+        }
+        case 'd':
+        case 'i':
+        case 'u':
+        case 'x':
+        case 'X':
+        {
+            unsigned int value;
+            int negative = 0;
+            if (*p == 'd' || *p == 'i')
+            {
+                int signed_value = va_arg(args, int);
+                negative = signed_value < 0;
+                value = (unsigned int)signed_value;
+                if (negative)
+                    value = 0u - value;
+            }
+            else
+            {
+                value = va_arg(args, unsigned int);
+            }
+            unsigned int base = (*p == 'x' || *p == 'X') ? 16 : 10;
+            const char *digits = (*p == 'X') ? "0123456789ABCDEF" : "0123456789abcdef";
+            char number[sizeof(unsigned int) * CHAR_BIT];
+            int length = 0;
+            do {
+                number[length++] = digits[value % base];
+                value /= base;
+            } while (value);
+
+            if (negative && format_putc(str, size, &count, '-') < 0)
+                goto out;
+            while (length + negative < width)
+            {
+                if (format_putc(str, size, &count, '0') < 0)
+                    goto out;
+                width--;
+            }
+            while (length)
+            {
+                if (format_putc(str, size, &count, number[--length]) < 0)
+                    goto out;
+            }
+            break;
+        }
+        default:
+            goto out;
+        }
+    }
+    result = count;
+out:
+    if (size)
+    {
+        str[(size_t)count < size ? (size_t)count : size - 1] = '\0';
+    }
+    return result;
 }
 
 int vsprintf(char *str, const char *format, va_list args) {

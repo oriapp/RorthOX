@@ -25,8 +25,14 @@ char tolower(char s1);
 char *itoa(int i);
 char *itoa_hex(int value, char *str, int base);
 int atoi(char* str);
+// Buffer formats: %d %i %u %x %X %c %s %% and %02d; NULL %s prints (null).
+// Return the required length, or -1 for unsupported formats/count overflow.
+// Nonzero sizes retain a terminated prefix; size zero permits a NULL destination.
 int snprintf(char *str, size_t size, const char *format, ...);
+int vsnprintf(char *str, size_t size, const char *format, va_list args);
+// These unbounded wrappers require enough destination space from the caller.
 int sprintf(char *str, const char *format, ...);
+int vsprintf(char *str, const char *format, va_list args);
 
 #ifdef __cplusplus
 }

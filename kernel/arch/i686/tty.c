@@ -312,7 +312,7 @@ void print_hex(unsigned int x)
     for (i = 7; i >= 0; i--)
     {
         buf[i] = "0123456789ABCDEF"[x & 0xF];
-        // x >> 4;
+        x >>= 4;
     }
     print(buf);
 }
@@ -347,7 +347,8 @@ int vprintf(const char *format, va_list args)
     int count = 0;
     for (const char *p = format; *p; p++)
     {
-        if (*p != '%')
+        int trailing_percent = (*p == '%' && !p[1]);
+        if (*p != '%' || trailing_percent)
         {
             if (*p == '\n')
             {
@@ -362,6 +363,8 @@ int vprintf(const char *format, va_list args)
                 checkIndent();
                 count++;
             }
+            if (trailing_percent)
+                break;
             continue;
         }
 
@@ -391,8 +394,7 @@ int vprintf(const char *format, va_list args)
             // count += strlen(hexstr);
             unsigned int xval = va_arg(args, unsigned int);
             print_hex(xval);
-            char x[100];
-            count += strlen(itoa_hex(xval, x, 16));
+            count += 10;
             break;
         case 'B': // Binary value
             unsigned int bival = va_arg(args, unsigned int);
