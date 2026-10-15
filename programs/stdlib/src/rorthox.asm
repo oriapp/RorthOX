@@ -30,8 +30,8 @@ print:
 printc:
     push ebp
     mov ebp, esp
-    push dword[ebp+8]
-    push dword[ebp+8]
+    push dword[ebp+12] ; Variable "color"
+    push dword[ebp+8] ; Variable "str"
     mov eax, SYSCALL_PRINTC ; Command printc
     int SYSCALL_VECTOR
     add esp, 8

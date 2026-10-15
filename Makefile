@@ -305,7 +305,7 @@ $(IMAGE_FILES): | user_programs
 ./build/string/string.o: ./kernel/string/string.c
 	i686-elf-gcc $(INCLUDES) -I ./kernel/string $(FLAGS) -std=gnu99 -c ./kernel/string/string.c -o ./build/string/string.o
 
-# Test programs (heaptest.elf, heapfree.elf, oomtest.elf, pathtest.elf, printoom.elf, tasktest.elf, flagstest.elf, faulttest.elf, disktest.elf, fatchain.elf, elftest.elf, ttytest.elf) go only into the test images that scripts/tests/ build, not into IMAGE_FILES.
+# Test programs (heaptest.elf, heapfree.elf, oomtest.elf, pathtest.elf, printoom.elf, tasktest.elf, flagstest.elf, faulttest.elf, disktest.elf, fatchain.elf, elftest.elf, ttytest.elf, libtest.elf) go only into the test images that scripts/tests/ build, not into IMAGE_FILES.
 user_programs: | $(CONFIG_H) $(CONFIG_INC) $(CONFIG_LD) $(CONFIG_ENV)
 	cd ./programs/stdlib && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
 	cd ./programs/blank && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
@@ -322,6 +322,7 @@ user_programs: | $(CONFIG_H) $(CONFIG_INC) $(CONFIG_LD) $(CONFIG_ENV)
 	cd ./programs/fatchain && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
 	cd ./programs/elftest && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
 	cd ./programs/ttytest && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
+	cd ./programs/libtest && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
 
 user_programs_clean:
 	cd ./programs/stdlib && $(MAKE) clean
@@ -339,6 +340,7 @@ user_programs_clean:
 	cd ./programs/fatchain && $(MAKE) clean
 	cd ./programs/elftest && $(MAKE) clean
 	cd ./programs/ttytest && $(MAKE) clean
+	cd ./programs/libtest && $(MAKE) clean
 
 # Boot the image headless in QEMU, type a command into the shell and check the output.
 smoke: all

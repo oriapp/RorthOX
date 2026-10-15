@@ -23,29 +23,23 @@ void *isr80h_command1_print(struct interrupt_frame *frame)
 
 void *isr80h_command11_printc(struct interrupt_frame *frame)
 {
-    void *user_space_color_buffer = task_get_stack_item(task_current(), 1);
+    // The colour is an integer (stack item 1). Only the 16 foreground colours are valid.
+    uint32_t color = (uint32_t)task_get_stack_item(task_current(), 1);
+    if (color > VGA_COLOR_WHITE)
+    {
+        return ERROR(-EINVARG);
+    }
+
     void *user_space_msg_buffer = task_get_stack_item(task_current(), 0);
     char buf[1024]; // this is also the max
-    char color[2];
     buf[0] = 0;
-    color[0] = 0;
-    int res = copy_string_from_task(task_current(), user_space_color_buffer, color, sizeof(color));
+    int res = copy_string_from_task(task_current(), user_space_msg_buffer, buf, sizeof(buf));
     if (res < 0)
     {
         return ERROR(res);
     }
 
-    res = copy_string_from_task(task_current(), user_space_msg_buffer, buf, sizeof(buf));
-    if (res < 0)
-    {
-        return ERROR(res);
-    }
-
-    // printc(buf, atoi(color) - 16); // Brown
-
-    printc(buf, atoi(color));
-    
-
+    printc(buf, color);
     return 0;
 }
 
