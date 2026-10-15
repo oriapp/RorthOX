@@ -11,13 +11,13 @@ extern "C" {
 #endif
 
 
-#pragma GCC diagnostic ignored "-Wunused-variable" // Ignore unused vars
-static volatile uint16_t *video_mem = 0;
-static uint16_t terminal_row = 0;
-static uint16_t terminal_col = 0;
-static uint8_t terminal_color = 0;
-static uint8_t termianl_background_color = 0;
-#pragma GCC diagnostic pop // POP ignore unused vars
+// Per-translation-unit copies retained for the unfinished libc dependency.
+// The active terminal uses the copy included by tty.c.
+static volatile uint16_t *video_mem __attribute__((unused)) = 0;
+static uint16_t terminal_row __attribute__((unused)) = 0;
+static uint16_t terminal_col __attribute__((unused)) = 0;
+static uint8_t terminal_color __attribute__((unused)) = 0;
+static uint8_t termianl_background_color __attribute__((unused)) = 0;
 
 void terminal_putchar(int x, int y, char c, char colour);
 void terminal_backspace();
