@@ -6,10 +6,12 @@
  * are stubs that serve one file from memory and can fail; the heap is scripts/tests/host/kalloc.c.
  * Every failing elf_load() must return an error, leave *file_out alone, close the file and leave
  * nothing allocated. A file that is not an ELF file must be gone from the heap before
- * process_load_data() falls back to loading it as a flat binary. A good ELF file keeps its
- * object and its buffer until elf_close(). A short fread (0 items, with nothing or all but the
- * last byte copied) is -EIO before any header is read, and is not tried as a flat binary. Each
- * case runs in its own process.
+ * process_load_data() falls back to loading it as a flat binary; a file with the ELF magic that
+ * is not a supported ELF file (here a 64-bit one) is -EINVARG and is never tried as a flat binary. A good ELF file keeps
+ * its object, its buffer, the pointer array and one zeroed allocation per loaded segment (and
+ * nothing else) until elf_close(). A short fread (0 items, with nothing or all but the last byte
+ * copied) is -EIO before any header is read, and is not tried as a flat binary. Each case runs in
+ * its own process.
  *
  * Usage: elf-load <blank.elf>
  */
@@ -110,6 +112,69 @@ static int process_load_binary(const char *filename, struct process *process)
 
 static struct elf_file *const untouched = (struct elf_file *)0x1234;
 
+// After a good load exactly these are live: the ELF object, the file buffer, the pointer array,
+// and for each PT_LOAD with p_memsz > 0 one allocation of its whole pages (from the page of
+// p_vaddr) holding p_filesz bytes of the file at p_vaddr % 4096 and zeroes everywhere else.
+static int owned_allocations(const char *what, struct elf_file *out)
+{
+    const struct elf_header *header = (const struct elf_header *)blank;
+    const struct elf32_phdr *phdrs = (const struct elf32_phdr *)(blank + header->e_phoff);
+    int loads = 0;
+    char used[64] = {};
+    int live = kalloc_live();
+    if (live > (int)sizeof(used))
+    {
+        say("%s: %d allocations live\n", what, live);
+        return 1;
+    }
+    for (int i = 0; i < header->e_phnum; i++)
+    {
+        const struct elf32_phdr *phdr = &phdrs[i];
+        if (phdr->p_type != PT_LOAD || phdr->p_memsz == 0)
+        {
+            continue;
+        }
+        loads++;
+        uint32_t offset = phdr->p_vaddr % 4096;
+        long span = (long)((offset + phdr->p_memsz + 4095) / 4096 * 4096);
+        int found = -1;
+        for (int j = 0; j < live && found < 0; j++)
+        {
+            unsigned char *base = kalloc_live_at(j);
+            if (used[j] || base == (unsigned char *)out || base == out->elf_memory || kalloc_size(base) != span)
+            {
+                continue;
+            }
+            int same = memcmp(base + offset, blank + phdr->p_offset, phdr->p_filesz) == 0;
+            for (long k = 0; same && k < span; k++)
+            {
+                if ((k < offset || k >= offset + phdr->p_filesz) && base[k] != 0)
+                {
+                    same = 0;
+                }
+            }
+            if (same)
+            {
+                found = j;
+            }
+        }
+        if (found < 0)
+        {
+            say("%s: no live %ld-byte allocation holds program header %d's segment (file bytes, then zeroes)\n",
+                what, span, i);
+            return 1;
+        }
+        used[found] = 1;
+    }
+    if (live != 3 + loads)
+    {
+        say("%s: %d allocations live, expected %d (ELF object, file buffer, pointer array, %d segments)\n", what,
+            live, 3 + loads, loads);
+        return 1;
+    }
+    return 0;
+}
+
 static void serve(const void *data, int size)
 {
     memcpy(content, (void *)data, size);
@@ -161,6 +226,7 @@ enum
     FALLBACK,
     NO_FALLBACK,
     NO_FALLBACK_SHORT,
+    NO_FALLBACK_CLASS,
     CASE_COUNT
 };
 
@@ -169,7 +235,8 @@ static const char *case_name[] = { "ELF object allocation fails", "fopen fails",
                                    "fread reads 0 items and nothing", "fread reads 0 items, all but the last byte",
                                    "not an ELF file",
                                    "64-bit ELF file", "good ELF file", "fallback to a flat binary",
-                                   "no fallback after fopen fails", "no fallback after a short fread" };
+                                   "no fallback after fopen fails", "no fallback after a short fread",
+                                   "no fallback for a 64-bit ELF file" };
 
 static int run_case(int which)
 {
@@ -207,7 +274,7 @@ static int run_case(int which)
         return clean_failure(what, elf_load("0:/blank.elf", &out), -EINFORMAT, out);
     case BAD_CLASS:
         content[EI_CLASS] = ELFCLASS64;
-        return clean_failure(what, elf_load("0:/blank.elf", &out), -EINFORMAT, out);
+        return clean_failure(what, elf_load("0:/blank.elf", &out), -EINVARG, out);
     case GOOD:
     {
         int res = elf_load("0:/blank.elf", &out);
@@ -216,11 +283,14 @@ static int run_case(int which)
             say("%s: elf_load returned %d\n", what, res);
             return 1;
         }
-        if (is_open || kalloc_live() != 2 || !kalloc_is_live(out) || !kalloc_is_live(out->elf_memory) ||
+        if (is_open || !kalloc_is_live(out) || !kalloc_is_live(out->elf_memory) ||
             memcmp(out->elf_memory, blank, blank_size) != 0)
         {
-            say("%s: expected the file closed and the ELF object and its buffer kept (%d allocations)\n", what,
-                kalloc_live());
+            say("%s: expected the file closed and the ELF object and its buffer kept\n", what);
+            return 1;
+        }
+        if (owned_allocations(what, out))
+        {
             return 1;
         }
         elf_close(out);
@@ -260,6 +330,18 @@ static int run_case(int which)
             return 1;
         }
         return kalloc_live() == 0 ? 0 : (say("%s: %d allocations left\n", what, kalloc_live()), 1);
+    }
+    case NO_FALLBACK_CLASS:
+    {
+        static struct process process;
+        content[EI_CLASS] = ELFCLASS64;
+        int res = process_load_data("0:/blank.elf", &process);
+        if (res != -EINVARG || binary_calls != 0)
+        {
+            say("%s: returned %d, flat binary loader called %d times\n", what, res, binary_calls);
+            return 1;
+        }
+        return kalloc_live() == 0 && !is_open ? 0 : (say("%s: %d allocations left\n", what, kalloc_live()), 1);
     }
     case NO_FALLBACK_SHORT:
     {

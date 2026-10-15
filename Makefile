@@ -1,7 +1,7 @@
 include config.mk
 
 # Config values must come from config.mk, not untracked make command-line overrides.
-CONFIG_KEYS := RESERVED_SECTORS SECTORS_PER_FAT SECTOR_SIZE KERNEL_LOAD_ADDRESS KERNEL_BOOT_STACK_TOP KERNEL_TSS_STACK_TOP PROGRAM_LOAD_ADDRESS USER_STACK_TOP USER_STACK_SIZE KERNEL_CODE_SELECTOR KERNEL_DATA_SELECTOR USER_CODE_SELECTOR USER_DATA_SELECTOR TSS_SELECTOR SYSCALL_VECTOR PIC_MASTER_VECTOR_BASE PIC_SLAVE_VECTOR_BASE TOTAL_INTERRUPTS SYSCALL_SUM SYSCALL_PRINT SYSCALL_GETKEY SYSCALL_PUTCHAR SYSCALL_MALLOC SYSCALL_FREE SYSCALL_PROCESS_LOAD_START SYSCALL_INVOKE_SYSTEM_COMMAND SYSCALL_GET_PROGRAM_ARGUMENTS SYSCALL_EXIT SYSCALL_PRINTC COMMAND_ARGUMENT_SIZE RORTHOX_NAME RORTHOX_VERSION QEMU_RAM_MIB
+CONFIG_KEYS := RESERVED_SECTORS SECTORS_PER_FAT SECTOR_SIZE KERNEL_LOAD_ADDRESS KERNEL_BOOT_STACK_TOP KERNEL_TSS_STACK_TOP KERNEL_TSS_STACK_SIZE PROGRAM_LOAD_ADDRESS PROGRAM_LOAD_LIMIT USER_STACK_TOP USER_STACK_SIZE KERNEL_CODE_SELECTOR KERNEL_DATA_SELECTOR USER_CODE_SELECTOR USER_DATA_SELECTOR TSS_SELECTOR SYSCALL_VECTOR PIC_MASTER_VECTOR_BASE PIC_SLAVE_VECTOR_BASE TOTAL_INTERRUPTS SYSCALL_SUM SYSCALL_PRINT SYSCALL_GETKEY SYSCALL_PUTCHAR SYSCALL_MALLOC SYSCALL_FREE SYSCALL_PROCESS_LOAD_START SYSCALL_INVOKE_SYSTEM_COMMAND SYSCALL_GET_PROGRAM_ARGUMENTS SYSCALL_EXIT SYSCALL_PRINTC COMMAND_ARGUMENT_SIZE RORTHOX_NAME RORTHOX_VERSION QEMU_RAM_MIB
 $(foreach key,$(CONFIG_KEYS),$(if $(filter command line,$(origin $(key))),$(error $(key) must be set in config.mk, not on the command line)))
 
 FILES = ./build/kernel.asm.o ./build/arch/sys.o ./build/arch/pit.o ./build/arch/sys.asm.o ./build/kernel.o ./build/arch/tty.o ./build/idt/idt.asm.o ./build/idt/idt.o ./build/memory/memory.o ./build/io/io.asm.o ./build/loader/formats/elfloader.o ./build/loader/formats/elf.o ./build/gdt/gdt.o ./build/gdt/gdt.asm.o ./build/memory/heap/heap.o ./build/memory/heap/kheap.o ./build/memory/paging/paging.o ./build/memory/paging/paging.asm.o ./build/isr80h/isr80h.o ./build/isr80h/heap.o ./build/keyboard/keyboard.o ./build/keyboard/classic.o ./build/isr80h/io.o ./build/isr80h/process.o ./build/isr80h/misc.o ./build/disk/disk.o ./build/disk/streamer.o ./build/task/process.o ./build/task/task.o ./build/task/task.asm.o ./build/task/tss.asm.o ./build/fs/pparser.o ./build/fs/file.o ./build/fs/fat/fat16.o ./build/string/string.o
@@ -31,6 +31,7 @@ $(CONFIG_H): config.mk Makefile
 		'#define RORTHOX_BUILD_CONFIG_H' \
 		'#define RORTHOX_SECTOR_SIZE $(SECTOR_SIZE)' \
 		'#define RORTHOX_PROGRAM_VIRTUAL_ADDRESS $(PROGRAM_LOAD_ADDRESS)' \
+		'#define RORTHOX_PROGRAM_VIRTUAL_ADDRESS_LIMIT $(PROGRAM_LOAD_LIMIT)' \
 		'#define USER_PROGRAM_STACK_SIZE $(USER_STACK_SIZE)' \
 		'#define RORTHOX_PROGRAM_VIRTUAL_STACK_ADDRESS_START $(USER_STACK_TOP)' \
 		'#define RORTHOX_KERNEL_TSS_STACK_TOP $(KERNEL_TSS_STACK_TOP)' \
@@ -109,6 +110,23 @@ $(CONFIG_ENV): config.mk Makefile
 NUMERIC_CONFIG_KEYS := $(filter-out RORTHOX_NAME RORTHOX_VERSION,$(CONFIG_KEYS))
 ifneq ($(shell printf '%s\n' $(foreach key,$(NUMERIC_CONFIG_KEYS),'$(strip $($(key)))') | LC_ALL=C grep -Ec '^(0x[0-9a-fA-F]+|0|[1-9][0-9]*)$$'),$(words $(NUMERIC_CONFIG_KEYS)))
 $(error numeric config.mk values must be hexadecimal (0x...) or decimal without leading zeros)
+endif
+
+ELF_ADDRESS_KEYS := PROGRAM_LOAD_ADDRESS PROGRAM_LOAD_LIMIT KERNEL_TSS_STACK_TOP KERNEL_TSS_STACK_SIZE KERNEL_BOOT_STACK_TOP USER_STACK_TOP
+ifneq ($(shell for n in $(foreach key,$(ELF_ADDRESS_KEYS),$(strip $($(key)))); do \
+	[ $${#n} -le 10 ] || exit 1; \
+	[ $$((n)) -le 4294967295 ] && [ $$((n % 4096)) -eq 0 ] || exit 1; \
+	done; echo valid),valid)
+$(error ELF window and stack boundaries must be page-aligned 32-bit values)
+endif
+
+ifneq ($(shell [ $$(( $(strip $(KERNEL_TSS_STACK_SIZE)) )) -gt 0 ] && \
+	[ $$(( $(strip $(KERNEL_TSS_STACK_SIZE)) )) -le $$(( $(strip $(KERNEL_TSS_STACK_TOP)) )) ] && \
+	[ $$(( $(strip $(PROGRAM_LOAD_LIMIT)) )) -gt $$(( $(strip $(PROGRAM_LOAD_ADDRESS)) )) ] && \
+	[ $$(( $(strip $(PROGRAM_LOAD_LIMIT)) )) -le $$(( $(strip $(KERNEL_TSS_STACK_TOP)) - $(strip $(KERNEL_TSS_STACK_SIZE)) )) ] && \
+	[ $$(( $(strip $(PROGRAM_LOAD_ADDRESS)) )) -ge $$(( $(strip $(USER_STACK_TOP)) )) ] && \
+	[ $$(( $(strip $(PROGRAM_LOAD_ADDRESS)) )) -ge $$(( $(strip $(KERNEL_BOOT_STACK_TOP)) )) ] && echo valid),valid)
+$(error ELF window must be above user/boot stacks and below the nonempty kernel entry-stack reservation)
 endif
 
 ifneq ($(shell [ $$(( $(COMMAND_ARGUMENT_SIZE) )) -ge 2 ] && echo valid),valid)
@@ -287,7 +305,7 @@ $(IMAGE_FILES): | user_programs
 ./build/string/string.o: ./kernel/string/string.c
 	i686-elf-gcc $(INCLUDES) -I ./kernel/string $(FLAGS) -std=gnu99 -c ./kernel/string/string.c -o ./build/string/string.o
 
-# Test programs (heaptest.elf, heapfree.elf, oomtest.elf, pathtest.elf, printoom.elf, tasktest.elf, flagstest.elf, faulttest.elf, disktest.elf, fatchain.elf) go only into the test images that scripts/tests/ build, not into IMAGE_FILES.
+# Test programs (heaptest.elf, heapfree.elf, oomtest.elf, pathtest.elf, printoom.elf, tasktest.elf, flagstest.elf, faulttest.elf, disktest.elf, fatchain.elf, elftest.elf) go only into the test images that scripts/tests/ build, not into IMAGE_FILES.
 user_programs: | $(CONFIG_H) $(CONFIG_INC) $(CONFIG_LD) $(CONFIG_ENV)
 	cd ./programs/stdlib && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
 	cd ./programs/blank && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
@@ -302,6 +320,7 @@ user_programs: | $(CONFIG_H) $(CONFIG_INC) $(CONFIG_LD) $(CONFIG_ENV)
 	cd ./programs/faulttest && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
 	cd ./programs/disktest && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
 	cd ./programs/fatchain && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
+	cd ./programs/elftest && $(MAKE) CONFIG_DIR="$(CONFIG_DIR)" all
 
 user_programs_clean:
 	cd ./programs/stdlib && $(MAKE) clean
@@ -317,6 +336,7 @@ user_programs_clean:
 	cd ./programs/faulttest && $(MAKE) clean
 	cd ./programs/disktest && $(MAKE) clean
 	cd ./programs/fatchain && $(MAKE) clean
+	cd ./programs/elftest && $(MAKE) clean
 
 # Boot the image headless in QEMU, type a command into the shell and check the output.
 smoke: all

@@ -4,17 +4,24 @@
  *
  * Leaves an exact number of free kernel heap blocks (one free run), then asks the kernel to start
  * blank.elf (syscall 7). Loading blank.elf allocates, in this order (in 4 KiB blocks, E = blocks
- * of the whole blank.elf file):
+ * of the whole blank.elf file, D = blocks of its segment memory):
  *
  *   command node 1 (user malloc before the syscall), process 3, ELF object 1, parsed path 3
  *   (root 1, name 1, path part 1; freed when fopen returns), file descriptors 4 (FAT descriptor 1,
  *   FAT item 1, copy of the directory entry 1, file descriptor 1; freed again by fclose),
- *   ELF file E, stack 4, task 1, page directory 1, 1024 page tables, paging chunk 1.
+ *   ELF file E, segment memory D (the pointer array, then one zeroed allocation per loaded
+ *   segment, in program header order), stack 4, task 1, page directory 1, 1024 page tables,
+ *   paging chunk 1.
  *
  * The ELF file doesn't fit in the 3-block hole the parsed path leaves (E >= 4), so it goes after
- * the file descriptors. fclose then joins that hole with the descriptors' 4 blocks, and the stack,
- * the task, the page directory and the first page table fill those 7 blocks. The other page
- * tables and the paging chunk come after the ELF file.
+ * the file descriptors. Of the segment memory, H blocks fit in that hole and D - H go after the
+ * ELF file. fclose then joins what is left of the hole with the descriptors' 4 blocks (7 - H
+ * blocks): the stack and the task fill them, then the page directory and the first page table
+ * while there is room. The other page tables and the paging chunk come after. With H <= 2 (for
+ * blank.elf the array and its 1-block data segment go into the hole, the 3-block code segment
+ * after the file) no block of the run stays free, so the second page table is the first
+ * allocation past 12 + E + D blocks. The test script works out E, D and H from the program
+ * headers of blank.elf (scripts/tests/lib/elfblocks.py) and stops if H > 2.
  *
  * So the number of free blocks picks which allocation is the first to fail. The kernel must
  * return an error instead of crashing, and must give back everything the failed load allocated:
@@ -34,14 +41,12 @@
  * The free blocks are counted straight from the kernel's heap table at RORTHOX_HEAP_TABLE_ADDRESS.
  * That only works because user programs can read all memory today; it is a test-only shortcut.
  *
- * Usage: oomtest.elf <case> <size of blank.elf in bytes>. The program prints
+ * Usage: oomtest.elf <case> <size of blank.elf in bytes> <D>. The program prints
  * "oomtest <case>: ready" and waits for a key, so the test script can make sure the shell is idle
  * first. While the heap is nearly full nothing else must allocate, so the only line printed then
  * is "armed" (print borrows one block and gives it back). After "armed" it waits for a second
  * key before the syscall. Every run ends with "oomtest <case>: done"; the result is
  * "oomtest <case>: PASS" or "oomtest <case>: FAIL ..." lines.
- *
- * No globals: the loader doesn't map .bss.
  */
 #include "rorthox.h"
 #include "stdlib.h"
@@ -66,9 +71,10 @@ _Static_assert(sizeof(struct command_argument) <= RORTHOX_HEAP_BLOCK_SIZE, "oomt
 struct oom_case
 {
     const char *name;
-    // Free blocks before the syscall: free_base + free_per_e * E
+    // Free blocks before the syscall: free_base + free_per_e * E + free_per_d * D
     int free_base;
     int free_per_e;
+    int free_per_d;
     int result;
     // Blocks still taken after the syscall returns: kept_base + kept_per_e * E
     int kept_base;
@@ -170,26 +176,26 @@ int main(int argc, char **argv)
 {
     // The order the test script runs them in: the later page table first.
     const struct oom_case cases[] = {
-        { "table",     100,  0, -EIO,     1, 0 },
-        { "second",     12,  1, -EIO,     1, 0 },  // the second page table
-        { "wrapper",  1035,  1, -EIO,     1, 0 },
-        { "elfobject",   4,  0, -ENOMEM,  1, 0 },
-        { "elfdata",    11,  1, -ENOMEM,  1, 0 },
-        { "process",     3,  0, -ENOMEM,  1, 0 },
+        { "table",     100,  0, 0, -EIO,     1, 0 },
+        { "second",     12,  1, 1, -EIO,     1, 0 },  // the second page table
+        { "wrapper",  1035,  1, 1, -EIO,     1, 0 },
+        { "elfobject",   4,  0, 0, -ENOMEM,  1, 0 },
+        { "elfdata",    11,  1, 0, -ENOMEM,  1, 0 },
+        { "process",     3,  0, 0, -ENOMEM,  1, 0 },
         // Opening blank.elf (scripts/tests/open-oom.sh): the first allocation to fail is
-        { "openroot",    5,  0, -EIO,     1, 0 },  // the parsed path's root
-        { "openpart",    6,  0, -EIO,     1, 0 },  // the first name
-        { "opennode",    7,  0, -EIO,     1, 0 },  // the first path part
-        { "openfat",     8,  0, -EIO,     1, 0 },  // the FAT descriptor
-        { "openitem",    9,  0, -EIO,     1, 0 },  // the FAT item
-        { "openclone",  10,  0, -EIO,     1, 0 },  // the copy of the directory entry
-        { "openvfs",    11,  0, -EIO,     1, 0 },  // the file descriptor
+        { "openroot",    5,  0, 0, -EIO,     1, 0 },  // the parsed path's root
+        { "openpart",    6,  0, 0, -EIO,     1, 0 },  // the first name
+        { "opennode",    7,  0, 0, -EIO,     1, 0 },  // the first path part
+        { "openfat",     8,  0, 0, -EIO,     1, 0 },  // the FAT descriptor
+        { "openitem",    9,  0, 0, -EIO,     1, 0 },  // the FAT item
+        { "openclone",  10,  0, 0, -EIO,     1, 0 },  // the copy of the directory entry
+        { "openvfs",    11,  0, 0, -EIO,     1, 0 },  // the file descriptor
         // "blank.elf arg-one arg-two" (scripts/tests/argument-oom.sh): the whole process fits
-        // (1035 + E blocks), then the first allocation to fail is
-        { "argv",     1035,  1, -ENOMEM,  0, 0, 1 },  // argv
-        { "arg1",     1036,  1, -ENOMEM,  0, 0, 1 },  // the copy of "blank.elf"
-        { "arg2",     1037,  1, -ENOMEM,  0, 0, 1 },  // the copy of "arg-one"
-        { "arg3",     1038,  1, -ENOMEM,  0, 0, 1 },  // the copy of "arg-two"
+        // (1035 + E + D blocks), then the first allocation to fail is
+        { "argv",     1035,  1, 1, -ENOMEM,  0, 0, 1 },  // argv
+        { "arg1",     1036,  1, 1, -ENOMEM,  0, 0, 1 },  // the copy of "blank.elf"
+        { "arg2",     1037,  1, 1, -ENOMEM,  0, 0, 1 },  // the copy of "arg-one"
+        { "arg3",     1038,  1, 1, -ENOMEM,  0, 0, 1 },  // the copy of "arg-two"
     };
     const struct oom_case *c = 0;
     void *plugs[MAX_PLUGS];
@@ -197,9 +203,9 @@ int main(int argc, char **argv)
     void *filler = 0;
     int failed = 0;
 
-    if (argc != 3)
+    if (argc != 4)
     {
-        print("oomtest: FAIL usage: oomtest.elf <case> <blank.elf size>\n");
+        print("oomtest: FAIL usage: oomtest.elf <case> <blank.elf size> <segment blocks>\n");
         return 1;
     }
     for (int i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++)
@@ -211,9 +217,10 @@ int main(int argc, char **argv)
     }
     int size = number(argv[2]);
     int e = (size + BLOCK - 1) / BLOCK;
-    if (!c || size <= 0)
+    int d = number(argv[3]);
+    if (!c || size <= 0 || d <= 0)
     {
-        print("oomtest: FAIL unknown case or bad size\n");
+        print("oomtest: FAIL unknown case, bad size or bad segment blocks\n");
         return 1;
     }
     // The block counts above need the ELF file to be bigger than the 3-block hole the parsed path
@@ -224,7 +231,14 @@ int main(int argc, char **argv)
         say(c->name, "done", NONE, NONE);
         return 1;
     }
-    int want_free = c->free_base + c->free_per_e * e;
+    // Leave the "table" case (100 free blocks) room to fail in the page tables.
+    if (d > 32)
+    {
+        say(c->name, "FAIL segment blocks out of range: ", d, NONE);
+        say(c->name, "done", NONE, NONE);
+        return 1;
+    }
+    int want_free = c->free_base + c->free_per_e * e + c->free_per_d * d;
     int want_kept = c->kept_base + c->kept_per_e * e;
 
     struct command_argument *command = 0;

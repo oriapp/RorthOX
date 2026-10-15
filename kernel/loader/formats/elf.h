@@ -46,6 +46,9 @@ extern "C" {
 #define EI_NIDENT 16
 #define EI_CLASS 4
 #define EI_DATA 5
+#define EI_VERSION 6
+#define EV_CURRENT 1
+#define EM_386 3
 
 #define ELFCLASSNONE 0
 #define ELFCLASS32 1 // 32 BIT PROG
@@ -62,7 +65,7 @@ typedef uint16_t elf32_half;
 typedef uint32_t elf32_word;
 typedef int32_t elf32_sword;
 typedef uint32_t elf32_addr;
-typedef int32_t elf32_off;
+typedef uint32_t elf32_off;
 
 
 struct elf32_phdr // Program header
@@ -108,6 +111,9 @@ struct elf_header
     elf32_half e_shnum;
     elf32_half e_shstrndx;
 } __attribute__((packed));
+
+_Static_assert(sizeof(struct elf_header) == 52, "ELF32 header size");
+_Static_assert(sizeof(struct elf32_phdr) == 32, "ELF32 program header size");
 
 struct elf32_dyn
 {

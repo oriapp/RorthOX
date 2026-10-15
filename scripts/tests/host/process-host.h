@@ -38,6 +38,19 @@ extern int host_failed;
 // Files open right now.
 extern int host_open_files;
 
+// Every mapping paging_map_to() made since the last host_reset (not the unmappings), in order.
+#define HOST_MAX_MAP_LOG 64
+struct host_map_record
+{
+    struct paging_4gb_chunk *directory;
+    void *virt;
+    void *phys;
+    void *phys_end;
+    int flags;
+};
+extern struct host_map_record host_map_log[HOST_MAX_MAP_LOG];
+extern int host_map_log_count;
+
 // Problems found by the paging stand-ins (0 = none); host_paging_problem says which.
 extern int host_paging_problems;
 extern char host_paging_problem[160];

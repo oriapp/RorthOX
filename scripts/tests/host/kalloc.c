@@ -27,6 +27,10 @@ static int call_count;
 static int fail_at;
 static int fail_happened;
 static int bad_frees;
+static size_t alignment = 16;
+static size_t guard_size;
+static int guard_where;
+static int guard_call;
 
 void kalloc_init(void)
 {
@@ -46,6 +50,20 @@ void kalloc_init(void)
     fail_at = 0;
     fail_happened = 0;
     bad_frees = 0;
+    alignment = 16;
+    guard_size = 0;
+    guard_where = KALLOC_GUARD_NONE;
+    guard_call = 0;
+}
+
+void kalloc_set_alignment(size_t align)
+{
+    if (align < 16 || (align & (align - 1)))
+    {
+        fprintf(stderr, "kalloc: bad alignment %zu\n", align);
+        exit(2);
+    }
+    alignment = align;
 }
 
 void kalloc_fill_unused(const void *pattern, size_t size, size_t bytes)
@@ -59,6 +77,32 @@ void kalloc_fill_unused(const void *pattern, size_t size, size_t bytes)
     {
         arena[arena_used + i] = ((const unsigned char *)pattern)[i % size];
     }
+}
+
+void kalloc_guard_next(size_t size, int where)
+{
+    guard_size = size;
+    guard_where = where;
+    guard_call = 0;
+}
+
+int kalloc_guard_call(void)
+{
+    return guard_call;
+}
+
+// size bytes on pages of their own between two PROT_NONE pages, below 2 GiB like the arena.
+static unsigned char *guarded(size_t size)
+{
+    size_t pages = (size + 4095) / 4096;
+    unsigned char *base = mmap(NULL, (pages + 2) * 4096, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
+    if (base == MAP_FAILED || (uintptr_t)base + (pages + 2) * 4096 > 0x7fffffffu ||
+        mprotect(base + 4096, pages * 4096, PROT_READ | PROT_WRITE) != 0)
+    {
+        fprintf(stderr, "kalloc: no guarded memory below 2 GiB\n");
+        exit(2);
+    }
+    return guard_where == KALLOC_GUARD_BELOW ? base + 4096 : base + 4096 + pages * 4096 - size;
 }
 
 void kalloc_fail_at(int n)
@@ -180,17 +224,26 @@ static void *allocate(size_t size, const void *caller)
     {
         return NULL;
     }
+    size_t start = (arena_used + alignment - 1) & ~(alignment - 1);
     size_t rounded = (size + 15) & ~(size_t)15;
-    if (alloc_count == MAX_ALLOCS || arena_used + rounded > ARENA_SIZE)
+    if (alloc_count == MAX_ALLOCS || start + rounded > ARENA_SIZE)
     {
         fprintf(stderr, "kalloc: test arena full\n");
         exit(2);
     }
     struct allocation *a = &allocs[alloc_count++];
-    a->ptr = arena + arena_used;
     a->size = size;
     a->live = 1;
-    arena_used += rounded;
+    if (guard_where != KALLOC_GUARD_NONE && !guard_call && size == guard_size)
+    {
+        a->ptr = guarded(size);
+        guard_call = call_count;
+    }
+    else
+    {
+        a->ptr = arena + start;
+        arena_used = start + rounded;
+    }
     // Not zeroed for kmalloc: fill with a pattern that is neither 0 nor the poison.
     memset(a->ptr, 0x5A, size);
     return a->ptr;

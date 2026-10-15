@@ -38,6 +38,8 @@ int host_task_return_armed;
 jmp_buf host_task_return_jump;
 struct registers *host_task_return_regs;
 int host_terminated_prints;
+struct host_map_record host_map_log[HOST_MAX_MAP_LOG];
+int host_map_log_count;
 
 static unsigned char content[MAX_FILE];
 static int content_size;
@@ -72,6 +74,7 @@ void host_reset(void)
     host_fail_open_at = host_fail_stat_at = host_fail_read_at = host_fail_map_at = 0;
     host_open_calls = host_stat_calls = host_read_calls = host_map_calls = 0;
     host_failed = 0;
+    host_map_log_count = 0;
     host_switch_count = 0;
     host_task_return_armed = 0;
     host_task_return_regs = 0;
@@ -244,6 +247,16 @@ int paging_map_to(struct paging_4gb_chunk *directory, void *virt, void *phys, vo
         printf("paging_map_to: too many mappings\n");
         exit(2);
     }
+    if (host_map_log_count < HOST_MAX_MAP_LOG)
+    {
+        struct host_map_record *r = &host_map_log[host_map_log_count];
+        r->directory = directory;
+        r->virt = virt;
+        r->phys = phys;
+        r->phys_end = phys_end;
+        r->flags = flags;
+    }
+    host_map_log_count++;
     struct mapping *m = &mappings[mapping_count++];
     m->directory = directory;
     m->virt = virt;

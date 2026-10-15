@@ -14,6 +14,9 @@
 #define KALLOC_POISON 0xA5
 
 void kalloc_init(void);
+// Start every later allocation on a multiple of align bytes (a power of two; kalloc_init sets 16).
+// 4096 gives page-aligned blocks like the kernel heap.
+void kalloc_set_alignment(size_t align);
 // Make allocation call number n (counted from 1 since kalloc_init) return NULL. 0 = never.
 void kalloc_fail_at(int n);
 // 1 if the chosen allocation call happened (and returned NULL).
@@ -37,6 +40,17 @@ const char *kalloc_caller(int n);
 // Fill the next <bytes> bytes after the last allocation with copies of <pattern> (<size> bytes),
 // like stale data that a read past the end of an allocation would see. Call after kalloc_init().
 void kalloc_fill_unused(const void *pattern, size_t size, size_t bytes);
+
+// Guarded allocation: the next allocation of exactly <size> bytes gets pages of its own outside
+// the arena, between two unreadable pages, starting right after the lower one
+// (KALLOC_GUARD_BELOW) or ending right before the upper one (KALLOC_GUARD_ABOVE). Any access
+// just before or past it is a SIGSEGV. Call after kalloc_init(); KALLOC_GUARD_NONE turns it off.
+#define KALLOC_GUARD_NONE 0
+#define KALLOC_GUARD_BELOW 1
+#define KALLOC_GUARD_ABOVE 2
+void kalloc_guard_next(size_t size, int where);
+// The allocation call number (as for kalloc_caller) that got the guard pages, 0 if none did.
+int kalloc_guard_call(void);
 
 void *kzalloc(size_t size);
 void *kmalloc(size_t size);

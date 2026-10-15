@@ -395,6 +395,7 @@ static int process_load_data(const char *filename, struct process *process)
 {
     int res = 0;
     res = process_load_elf(filename, process);
+    // Only missing ELF magic permits fallback; malformed ELF must stay an error.
     if (res == -EINFORMAT)
     {
         res = process_load_binary(filename, process);
@@ -418,6 +419,10 @@ static int process_map_elf(struct process *process)
     for (int i = 0; i < header->e_phnum; i++)
     {
         struct elf32_phdr *phdr = &phdrs[i];
+        if (phdr->p_type != PT_LOAD || !phdr->p_memsz)
+        {
+            continue;
+        }
         void *phdr_phys_address = elf_phdr_phys_address(elf_file, phdr);
         int flags = PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL;
         if (phdr->p_flags & PF_W)

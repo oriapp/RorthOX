@@ -14,7 +14,9 @@ struct elf_file
 {
     char filename[RORTHOX_MAX_PATH];
 
-    int in_memory_size;
+    uint32_t in_memory_size;
+    void **segment_memory;
+    unsigned int segment_count;
 
     // The physical memory address that this elf file loaded at
     void *elf_memory;
@@ -25,10 +27,10 @@ struct elf_file
     // The ending virtual address
     void *virtual_end_address;
 
-    // The physical base address of this binary
+    // Physical start of the lowest virtual segment
     void *physical_base_address;
 
-    // The physical end address of this binary
+    // Physical end of the highest virtual segment (not contiguous backing)
     void *physical_end_address;
 };
 

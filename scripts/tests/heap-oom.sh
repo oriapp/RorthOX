@@ -34,7 +34,7 @@ CASES="${OOM_CASES:-table second wrapper elfobject elfdata process}"
 mkdir -p "$OUT"
 
 # All ELF files must fit in one FAT cluster (64 KiB). oomtest.elf works out the block budget
-# from the real size of blank.elf.
+# from the real size of blank.elf and the blocks of its segment memory (D).
 [ -f "$PROGRAM" ] || { echo "$SUITE: $PROGRAM not found, run 'make all' first" >&2; exit 1; }
 for elf in "$SHELL_ELF" "$BLANK_ELF" "$PROGRAM"; do
     size=$(wc -c < "$elf")
@@ -42,6 +42,22 @@ for elf in "$SHELL_ELF" "$BLANK_ELF" "$PROGRAM"; do
     [ "$size" -le 65536 ] || { echo "$SUITE: $elf is bigger than 64 KiB" >&2; exit 1; }
 done
 blank_size=$(wc -c < "$BLANK_ELF")
+# E, D and H as the comment at the top of programs/oomtest/oomtest.c defines them.
+blank_blocks=$(python3 -B scripts/tests/lib/elfblocks.py "$BLANK_ELF") ||
+    { echo "$SUITE: cannot read the program headers of $BLANK_ELF" >&2; exit 1; }
+echo "  $BLANK_ELF: $blank_blocks"
+blank_d=""
+blank_h=""
+for field in $blank_blocks; do
+    case "$field" in
+        D=*) blank_d="${field#D=}" ;;
+        H=*) blank_h="${field#H=}" ;;
+    esac
+done
+[ -n "$blank_d" ] && [ -n "$blank_h" ] || { echo "$SUITE: bad elfblocks.py output" >&2; exit 1; }
+# The counts in oomtest.c assume the stack and the task still fit in the hole fclose leaves.
+[ "$blank_h" -le 2 ] ||
+    { echo "$SUITE: $BLANK_ELF puts $blank_h blocks in the parsed path's hole; oomtest.c counts need H <= 2" >&2; exit 1; }
 [ "$QEMU_RAM_MIB" -ge 128 ] || { echo "$SUITE: needs QEMU_RAM_MIB >= 128 (is $QEMU_RAM_MIB)" >&2; exit 1; }
 
 # wait_lines <regex> <count> <seconds>: wait until <count> screen lines match <regex>.
@@ -71,10 +87,10 @@ run_case() {
     local name="$1" dir="$OUT/$1" returned=0
     mkdir -p "$dir"
     : > "$dir/screen-before-blank.txt"
-    echo "$SUITE: case $name (blank.elf is $blank_size bytes)"
+    echo "$SUITE: case $name (blank.elf is $blank_size bytes, $blank_d blocks of segment memory)"
     qemu_start "$OUT/$SUITE.bin" "$dir"
     if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT"; then
-        type_line "oomtest.elf $name $blank_size"
+        type_line "oomtest.elf $name $blank_size $blank_d"
         # The heap gets nearly full only after a key, once the shell is back at its prompt
         # (a second line starting with ">", the first one is the typed command) and idle.
         if wait_screen "oomtest $name: ready" "$RUN_TIMEOUT" && wait_lines '^>' 2 "$EXIT_TIMEOUT"; then
@@ -117,7 +133,7 @@ run_case() {
     check "$name: kernel reached the end of init (debugcon)"  "$dir/debugcon.log"   "Thats cool"
     check "$name: no kernel panic (debugcon)"                  "$dir/debugcon.log"   "PANIC" absent
     check "$name: shell started (banner on screen)"            "$dir/screen.txt"     "${RORTHOX_NAME} v${RORTHOX_VERSION}"
-    check "$name: command echoed by the shell"                 "$dir/screen.txt"     "> oomtest.elf $name $blank_size"
+    check "$name: command echoed by the shell"                 "$dir/screen.txt"     "> oomtest.elf $name $blank_size $blank_d"
     check "$name: oomtest waited for the key"                  "$dir/screen.txt"     "oomtest $name: ready"
     check "$name: free blocks set up exactly"                  "$dir/screen.txt"     "oomtest $name: armed with free blocks"
     check "$name: no setup failure"                            "$dir/screen.txt"     "oomtest $name: FAIL setup" absent

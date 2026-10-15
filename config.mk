@@ -13,9 +13,12 @@ SECTOR_SIZE = 512
 KERNEL_LOAD_ADDRESS = 0x100000
 KERNEL_BOOT_STACK_TOP = 0x200000
 KERNEL_TSS_STACK_TOP = 0x600000
+KERNEL_TSS_STACK_SIZE = 0x100000
 
 # User virtual addresses and stack extent (bytes)
 PROGRAM_LOAD_ADDRESS = 0x400000
+# Exclusive ELF limit; keep mappings below the kernel entry-stack reservation.
+PROGRAM_LOAD_LIMIT = 0x500000
 USER_STACK_TOP = 0x3FF000
 USER_STACK_SIZE = 16384
 
