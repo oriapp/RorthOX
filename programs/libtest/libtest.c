@@ -1,5 +1,6 @@
 /*
- * User library test program for scripts/tests/printc.sh. Only copied into that test's image.
+ * User library test program for scripts/tests/printc.sh and scripts/tests/strtok.sh. Only
+ * copied into those tests' images.
  *
  * libtest.elf printc
  *     Prints "libtest printc: armed" and waits for a key. Then prints a newline (the shell's
@@ -12,6 +13,12 @@
  *     printc result that is wrong ("libtest printc: FAIL ..."), "libtest printc: FAIL registers
  *     changed ..." or "libtest printc: ebx esi edi ebp kept", "libtest printc: results checked",
  *     and "libtest printc: done"; waits for a key and ends.
+ *
+ * libtest.elf strtok
+ *     Runs strtok on a few strings, starting a new string while the last one isn't finished
+ *     (that must start over), and checks where every token starts and what it reads. Prints
+ *     "libtest strtok: start", a FAIL line for every wrong step and
+ *     "libtest strtok: <failed> of <checks> checks failed", and ends.
  */
 #include "rorthox.h"
 #include "stdlib.h"
@@ -141,6 +148,80 @@ static int colours(void)
     return failed;
 }
 
+static int token_checks;
+static int token_failed;
+
+// One strtok call: the token must start at want (0: no token) and read want_text.
+static void token(int step, char *got, char *want, const char *want_text)
+{
+    token_checks++;
+    if (got == want && (!want || strncmp(got, want_text, 32) == 0))
+    {
+        return;
+    }
+    token_failed++;
+    // got: the token's distance from want, -1 for no token, 1000 for a token where none was expected
+    fail("strtok", "step", step, !got ? -1 : want ? (int)(got - want) : 1000, 0);
+}
+
+static int tokens(void)
+{
+    char old[] = "old tail";
+    char words[] = "new words";
+    char single[] = "single";
+    char next[] = "next one";
+    char empty[] = "";
+    char after_empty[] = "x y";
+    char unfinished[] = "aa bb";
+    char spaced[] = "  lead  and   repeat ";
+    char mixed[] = ",a,;b;;c;";
+    char again[] = "again";
+
+    print("libtest strtok: start\n");
+    // A new string while the last one isn't finished starts over.
+    token(1, strtok(old, " "), old, "old");
+    token(2, strtok(words, " "), words, "new");
+    token(3, strtok(0, " "), words + 4, "words");
+    token(4, strtok(0, " "), 0, 0);
+    // The same after a string with one token.
+    token(5, strtok(single, " "), single, "single");
+    token(6, strtok(next, " "), next, "next");
+    token(7, strtok(0, " "), next + 5, "one");
+    token(8, strtok(0, " "), 0, 0);
+    // Empty input, then a new string.
+    token(9, strtok(empty, " "), 0, 0);
+    token(10, strtok(0, " "), 0, 0);
+    token(11, strtok(after_empty, " "), after_empty, "x");
+    token(12, strtok(0, " "), after_empty + 2, "y");
+    token(13, strtok(0, " "), 0, 0);
+    // An empty string while another one isn't finished.
+    token(14, strtok(unfinished, " "), unfinished, "aa");
+    token(15, strtok(empty, " "), 0, 0);
+    token(16, strtok(0, " "), 0, 0);
+    // Leading, repeated and trailing delimiters, two delimiter characters.
+    token(17, strtok(spaced, " "), spaced + 2, "lead");
+    token(18, strtok(0, " "), spaced + 8, "and");
+    token(19, strtok(0, " "), spaced + 14, "repeat");
+    token(20, strtok(0, " "), 0, 0);
+    token(21, strtok(mixed, ",;"), mixed + 1, "a");
+    token(22, strtok(0, ",;"), mixed + 4, "b");
+    token(23, strtok(0, ",;"), mixed + 7, "c");
+    token(24, strtok(0, ",;"), 0, 0);
+    // After the end, more calls give nothing until a new string comes.
+    token(25, strtok(0, ",;"), 0, 0);
+    token(26, strtok(again, " "), again, "again");
+    token(27, strtok(0, " "), 0, 0);
+
+    char line[80];
+    strcpy(line, "libtest strtok: ");
+    strcpy(line + strlen(line), itoa(token_failed));
+    strcpy(line + strlen(line), " of ");
+    strcpy(line + strlen(line), itoa(token_checks));
+    strcpy(line + strlen(line), " checks failed\n");
+    print(line);
+    return token_failed != 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *mode = argc > 1 ? argv[1] : "";
@@ -148,6 +229,10 @@ int main(int argc, char **argv)
     {
         return colours();
     }
-    print("libtest: usage libtest.elf printc\n");
+    if (strncmp(mode, "strtok", 7) == 0)
+    {
+        return tokens();
+    }
+    print("libtest: usage libtest.elf printc|strtok\n");
     return 1;
 }

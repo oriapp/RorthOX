@@ -130,7 +130,7 @@ char *strtok(char *str, const char *delimiters)
         return 0;
     }
 
-    if (str && !sp)
+    if (str)
     {
         sp = str;
     }
