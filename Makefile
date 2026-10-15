@@ -138,11 +138,13 @@ ifneq ($(words $(sort $(SYSCALL_NUMBERS))),11)
 $(error syscall numbers must be distinct)
 endif
 
-ifneq ($(shell [ $$(( $(TOTAL_INTERRUPTS) )) -ge 256 ] && \
+# x86 has 256 interrupt vectors (0 to 255). The length check comes first so a long number can't
+# wrap around to 256 in the shell's 64-bit arithmetic.
+ifneq ($(shell n=$(strip $(TOTAL_INTERRUPTS)); [ $${#n} -le 10 ] && [ $$((n)) -eq 256 ] && \
 	[ $$(( $(SYSCALL_VECTOR) )) -lt $$(( $(TOTAL_INTERRUPTS) )) ] && \
 	[ $$(( $(PIC_MASTER_VECTOR_BASE) + 8 )) -le $$(( $(TOTAL_INTERRUPTS) )) ] && \
 	[ $$(( $(PIC_SLAVE_VECTOR_BASE) + 8 )) -le $$(( $(TOTAL_INTERRUPTS) )) ] && echo valid),valid)
-$(error TOTAL_INTERRUPTS must cover all 256 CPU vectors, the syscall and both PIC ranges)
+$(error TOTAL_INTERRUPTS must be exactly 256, the number of x86 interrupt vectors, and cover the syscall and both PIC ranges)
 endif
 
 # PIC ICW2 bases are eight-vector aligned, disjoint and outside CPU exceptions.

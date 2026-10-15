@@ -13,6 +13,8 @@
 struct idt_desc idt_descriptors[RORTHOX_TOTAL_INTERRUPTS];
 struct idtr_desc idtr_descriptor;
 
+_Static_assert(RORTHOX_TOTAL_INTERRUPTS == 256, "x86 has 256 interrupt vectors");
+
 extern void *interrupt_pointer_table[RORTHOX_TOTAL_INTERRUPTS];
 
 static INTERRUPT_CALLBACK_FUNCTION interrupt_callbacks[RORTHOX_TOTAL_INTERRUPTS];

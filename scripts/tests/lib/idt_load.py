@@ -3,8 +3,9 @@
 QEMU waits at reset. Break at idt_load when kernel_main calls it, record the return address and the
 idtr descriptor it was passed, put sentinels in EBX, ESI, EDI and EBP, break at the return address
 and let the real function run. All four sentinels must survive, ESP must be back above the return
-address, and the CPU's IDTR must hold the base and limit from the descriptor. Then the caller's
-registers are put back and the debugger detaches so the OS boots on.
+address, and the CPU's IDTR must hold the base and limit from the descriptor, with the limit of the
+256 x86 vectors (0x7ff). Then the caller's registers are put back and the debugger detaches so the
+OS boots on.
 
 Usage: idt_load.py <gdb socket> <kernel.map> <results file>
 """
@@ -63,6 +64,10 @@ def main():
     cr = r.control_registers()
     res.add("idtr_loaded", (cr["idt_base"], cr["idt_limit"]) == (base, limit),
             "IDTR %#x/%#x, expected %#x/%#x" % (cr["idt_base"], cr["idt_limit"], base, limit))
+    # x86 has 256 vectors: the loaded limit must be 256 * 8 - 1, whatever the build config says.
+    res.add("idtr_limit_256_vectors", cr["idt_limit"] == 256 * 8 - 1 and config["RORTHOX_TOTAL_INTERRUPTS"] == 256,
+            "IDTR limit %#x (expected 0x7ff), TOTAL_INTERRUPTS %d (expected 256)" %
+            (cr["idt_limit"], config["RORTHOX_TOTAL_INTERRUPTS"]))
 
     # Give the caller back its own registers before it runs on.
     r.set_regs({name: caller[name] for name in SENTINELS})

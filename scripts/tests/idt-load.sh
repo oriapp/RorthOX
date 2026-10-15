@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # idt_load must follow cdecl: keep EBX, ESI, EDI and EBP, return with the stack balanced, and load
-# the IDTR from the descriptor it is given.
+# the IDTR from the descriptor it is given. The IDT covers the 256 x86 vectors: limit 0x7ff.
 #
 # QEMU starts stopped with its gdbstub on a Unix socket. scripts/tests/lib/idt_load.py breaks at
 # idt_load when kernel_main calls it, puts sentinels in the four callee-saved registers, runs the
@@ -53,6 +53,7 @@ check "EDI preserved"                                 "$r" "PASS edi_preserved" 
 check "EBP preserved"                                 "$r" "PASS ebp_preserved" line
 check "stack balanced (ESP past the return address)"  "$r" "PASS stack_balanced" line
 check "IDTR holds the descriptor's base and limit"    "$r" "PASS idtr_loaded" line
+check "IDTR limit covers the 256 vectors (0x7ff)"     "$r" "PASS idtr_limit_256_vectors" line
 check "kernel reached the end of init (debugcon)"     "$OUT/debugcon.log" "Thats cool"
 check "shell started after the debugger left"         "$OUT/screen.txt" "${RORTHOX_NAME} v${RORTHOX_VERSION}"
 check "bin/os.bin not changed by the test"            "$OUT/image.txt" "unchanged" line

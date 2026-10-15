@@ -7,7 +7,7 @@
 # error code); every other gate stays DPL 3.
 #
 # QEMU starts stopped with its gdbstub on a Unix socket, on a copy of bin/os.bin. At the first
-# task_return, scripts/tests/lib/exceptions.py layout reads the IDT, then enters each of the 512
+# task_return, scripts/tests/lib/exceptions.py layout reads the IDT, then enters each of the 256
 # stubs and the syscall stub with a frame laid out like the CPU's (same privilege, error code only
 # for the error-code vectors) and checks the vector, frame and CR2 that interrupt_handler (or
 # isr80h_handler) gets. It also runs the syscall stub, an unused vector and the NMI stub (ring 0:
@@ -74,7 +74,7 @@ r="$OUT/layout.txt"
 check "debugger session finished without errors"                 "$OUT/status.txt" "exit=0" line
 check "every IDT gate points at its stub, kernel code selector"  "$r" "PASS idt_targets" line
 check "DPL 0 only on gates 8, 10-14, 17, 21, 29, 30"             "$r" "PASS idt_gate_dpl" line
-check "all 512 stubs: vector, frame, error code, cr2 for C"      "$r" "PASS stub_frames" line
+check "all 256 stubs: vector, frame, error code, cr2 for C"      "$r" "PASS stub_frames" line
 check "syscall stub: command and frame (error code 0) for C"     "$r" "PASS syscall_frame" line
 check "syscall stub returns with the error code popped"          "$r" "PASS syscall_return" line
 check "unused vector returns with the error code popped"         "$r" "PASS unused_vector_return" line

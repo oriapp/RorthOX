@@ -17,11 +17,15 @@ struct idt_desc
     uint16_t offset_2;  // Offset bits 16-31
 } __attribute__((packed));
 
+_Static_assert(sizeof(struct idt_desc) == 8, "an IDT gate is 8 bytes");
+
 struct idtr_desc
 {
     uint16_t limit;     // Size of descriptor table -1
     uint32_t base;      // Base address of the start of the interrupt descriptor table
 } __attribute__((packed));
+
+_Static_assert(sizeof(struct idtr_desc) == 6, "the IDTR operand is a 16-bit limit and a 32-bit base");
 
 // What the stubs in idt.asm leave on the stack: pushad, the error code (the CPU's, or 0 from the
 // stub), then the CPU's frame. esp and ss are only there when the interrupt came from ring 3; a

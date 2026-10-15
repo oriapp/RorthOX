@@ -18,7 +18,7 @@ list <socket> <map> <kernel elf> <results> <tag> <tasks> [save=<file>|shell=<fil
     Walk the task list and the process slots and check that they are consistent.
 layout <socket> <map> <results>
     QEMU waits at reset. At the first task_return, check every IDT gate, then enter each of the
-    512 stubs and the syscall stub with a frame laid out like the CPU's (error code only for the
+    256 stubs and the syscall stub with a frame laid out like the CPU's (error code only for the
     error-code vectors) and check what the C code gets. Three entries also run back out (iretd).
 early <socket> <map> <results> [nested]
     QEMU waits at reset. Right after idt_load, put a ud2 in the kernel's path (ring 0, no task yet):

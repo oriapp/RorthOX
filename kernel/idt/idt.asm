@@ -1,4 +1,7 @@
 %include "rorthox-config.inc"
+%if TOTAL_INTERRUPTS != 256
+%fatal "TOTAL_INTERRUPTS must be 256: x86 has 256 interrupt vectors"
+%endif
 section .asm
 
 extern int21h_handler

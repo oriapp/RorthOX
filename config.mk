@@ -32,7 +32,8 @@ TSS_SELECTOR = 0x28
 SYSCALL_VECTOR = 0x80
 PIC_MASTER_VECTOR_BASE = 0x20
 PIC_SLAVE_VECTOR_BASE = 0x28
-TOTAL_INTERRUPTS = 512
+# x86 has 256 interrupt vectors; the build rejects any other count.
+TOTAL_INTERRUPTS = 256
 
 # Kernel/user syscall ABI numbers
 SYSCALL_SUM = 0
