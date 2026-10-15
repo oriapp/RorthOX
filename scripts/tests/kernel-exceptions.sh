@@ -18,6 +18,8 @@
 #   df      the debugger clears the present bit of the #GP gate, then fault.elf runs "cli" in
 #           ring 3: #GP can't be delivered, which makes a double fault from ring 3
 #
+# The panic screen must show the reason and where PANIC was called (exception_fatal_stop in idt.c).
+#
 # Needs python3. Env: BOOT_TIMEOUT=60 (seconds to wait for the shell)  STEP_TIMEOUT=20
 #      KERNEL_EXCEPTION_CASES="early nested kcopy df"
 
@@ -97,6 +99,17 @@ hash_before=$(image_hash)
 cp bin/os.bin "$OUT/kernel-exceptions.bin"
 mcopy -i "$OUT/kernel-exceptions.bin" "$PROGRAM" ::fault.elf
 GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+# exception_fatal_stop calls PANIC(msg, __FILE__, __LINE__): the location the panic screen shows.
+panic_line=$(grep -n 'PANIC(msg, __FILE__, __LINE__);' kernel/idt/idt.c | cut -d: -f1)
+[ "$(echo "$panic_line" | wc -w)" = 1 ] || { echo "kernel-exceptions: no single PANIC(msg, ...) in idt.c" >&2; exit 1; }
+
+# panic_screen <case>: the reason and location on the panic screen, no placeholder.
+panic_screen() {
+    check "$1: screen shows the reason"            "$D/screen.txt" "Reason: Kernel exception" line
+    check "$1: screen shows file and line"         "$D/screen.txt" "at ./kernel/idt/idt.c:$panic_line" line
+    check "$1: screen has no placeholder"          "$D/screen.txt" "Reason!" absent
+    check "$1: screen keeps its final text"        "$D/screen.txt" ".More Information" line
+}
 SOCK="$GDB_DIR/gdb"
 
 case_start() {
@@ -136,6 +149,7 @@ run_early() {
         check "$c: panic message on debugcon"      "$D/debugcon.log" "[PANIC]: Kernel exception at ./kernel/idt/idt.c:"
         check "$c: one panic"                      "$D/counts.txt" "panics=1" line
         check "$c: panic screen shown"             "$D/screen.txt" "A problem has been detected"
+        panic_screen "$c"
         check "$c: halted in PAUSE"                "$r" "PASS halted_in_pause" line
     else
         check "$c: second ud2 (at PANIC) entered the #UD stub"         "$r" "PASS nested_stub" line
@@ -188,6 +202,7 @@ run_kcopy() {
         "exception: vector=0x0000000e error=0x00000000 cr2=${cpu_cr2:-unknown}" line
     check "kcopy: panic message on debugcon"                        "$D/debugcon.log" "[PANIC]: Kernel exception at ./kernel/idt/idt.c:"
     check "kcopy: panic screen shown"                               "$D/screen.txt" "A problem has been detected"
+    panic_screen kcopy
     check "kcopy: program not ended"                                "$D/counts.txt" "terminated=0" line
     check "kcopy: program not resumed"                              "$D/screen.txt" "faulttest: survived" absent
     check "kcopy: CPU halted"                                       "$D/halt.txt" "halted" line
@@ -237,6 +252,8 @@ run_df() {
     check "df: one exception line"                  "$D/counts.txt" "exceptions=1" line
     check "df: panic message on debugcon"           "$D/debugcon.log" "[PANIC]: Kernel exception at ./kernel/idt/idt.c:"
     check "df: one panic"                           "$D/counts.txt" "panics=1" line
+    check "df: panic screen shown"                  "$D/screen.txt" "A problem has been detected"
+    panic_screen df
     check "df: program not ended"                   "$D/counts.txt" "terminated=0" line
     check "df: CPU halted"                          "$D/halt.txt" "halted" line
     check "df: interrupts off"                      "$D/halt.txt" "interrupts off" line
