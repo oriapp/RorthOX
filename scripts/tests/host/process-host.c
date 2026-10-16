@@ -15,7 +15,7 @@
 
 
 #define FD 3
-#define MAX_FILE (64 * 1024)
+#define MAX_FILE (3 * 1024 * 1024)
 #define MAX_MAPPINGS 256
 #define MAX_BASES 4
 #define MAX_DIRECTORIES 64
@@ -43,6 +43,13 @@ int host_map_log_count;
 
 static unsigned char content[MAX_FILE];
 static int content_size;
+static uint32_t advertised_size;
+static uint32_t file_position;
+int host_short_read_at;
+int host_read_error;
+uint32_t host_read_bytes;
+
+void host_file_size(uint32_t size) { advertised_size = size; }
 
 // One mapping made with paging_map_to(): the live allocations it covered at the time.
 struct mapping
@@ -67,6 +74,7 @@ void host_file_serve(const void *data, int size)
     }
     memcpy(content, (void *)data, size);
     content_size = size;
+    advertised_size = size;
 }
 
 void host_reset(void)
@@ -74,6 +82,9 @@ void host_reset(void)
     host_fail_open_at = host_fail_stat_at = host_fail_read_at = host_fail_map_at = 0;
     host_open_calls = host_stat_calls = host_read_calls = host_map_calls = 0;
     host_failed = 0;
+    host_short_read_at = 0;
+    host_read_error = -EIO;
+    host_read_bytes = 0;
     host_map_log_count = 0;
     host_switch_count = 0;
     host_task_return_armed = 0;
@@ -97,6 +108,7 @@ int fopen(const char *filename, const char *mode_str)
         return 0;
     }
     host_open_files++;
+    file_position = 0;
     return FD;
 }
 
@@ -111,7 +123,7 @@ int fstat(int fd, struct file_stat *stat)
         host_failed = 1;
         return -EIO;
     }
-    stat->filesize = content_size;
+    stat->filesize = advertised_size;
     stat->flags = 0;
     return 0;
 }
@@ -125,10 +137,22 @@ int fread(void *ptr, uint32_t size, uint32_t nmemb, int fd)
     if (++host_read_calls == host_fail_read_at)
     {
         host_failed = 1;
-        return -EIO;
+        return host_read_error;
     }
-    memcpy(ptr, content, size * nmemb < (uint32_t)content_size ? (int)(size * nmemb) : content_size);
+    if (host_read_calls == host_short_read_at) { host_failed = 1; return 0; }
+    if (!size || nmemb > ((uint32_t)content_size - file_position) / size) return 0;
+    memcpy(ptr, content + file_position, size * nmemb);
+    file_position += size * nmemb;
+    host_read_bytes += size * nmemb;
     return nmemb;
+}
+
+int fseek(int fd, int offset, FILE_SEEK_MODE mode)
+{
+    if (fd != FD || host_open_files <= 0 || mode != SEEK_SET || offset < 0 || offset > content_size)
+        return -EINVARG;
+    file_position = offset;
+    return 0;
 }
 
 int fclose(int fd)

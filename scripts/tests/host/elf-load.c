@@ -40,6 +40,7 @@ static int fail_read;
 static int short_read;
 static int is_open;
 static int opens;
+static uint32_t position;
 
 #define say printf
 
@@ -52,6 +53,7 @@ int fopen(const char *filename, const char *mode_str)
     }
     opens++;
     is_open = 1;
+    position = 0;
     return FD;
 }
 
@@ -80,7 +82,9 @@ int fread(void *ptr, uint32_t size, uint32_t nmemb, int fd)
         }
         return 0;
     }
-    memcpy(ptr, content, size * nmemb < (uint32_t)content_size ? (int)(size * nmemb) : content_size);
+    if (!size || nmemb > ((uint32_t)content_size - position) / size) return 0;
+    memcpy(ptr, content + position, size * nmemb);
+    position += size * nmemb;
     return nmemb;
 }
 

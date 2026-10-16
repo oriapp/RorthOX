@@ -280,15 +280,15 @@ int elf_load(const char *filename, struct elf_file **file_out)
         goto out;
     }
 
-    elf_file->in_memory_size = stat.filesize;
-    elf_file->elf_memory = kzalloc(stat.filesize);
-    if (!elf_file->elf_memory)
+    // Classify before allocating the payload: raw files have their own size bound.
+    char signature[sizeof(elf_signature)];
+    if (stat.filesize < sizeof(signature))
     {
-        res = -ENOMEM;
+        res = -EINFORMAT;
         goto out;
     }
 
-    res = fread(elf_file->elf_memory, stat.filesize, 1, fd);
+    res = fread(signature, sizeof(signature), 1, fd);
     if (res < 0)
     {
         goto out;
@@ -297,6 +297,34 @@ int elf_load(const char *filename, struct elf_file **file_out)
     {
         res = -EIO;
         goto out;
+    }
+    if (!elf_valid_signature(signature))
+    {
+        res = -EINFORMAT;
+        goto out;
+    }
+
+    elf_file->in_memory_size = stat.filesize;
+    elf_file->elf_memory = kzalloc(stat.filesize);
+    if (!elf_file->elf_memory)
+    {
+        res = -ENOMEM;
+        goto out;
+    }
+
+    memcpy(elf_file->elf_memory, signature, sizeof(signature));
+    if (stat.filesize > sizeof(signature))
+    {
+        res = fread(elf_file->elf_memory + sizeof(signature), stat.filesize - sizeof(signature), 1, fd);
+        if (res < 0)
+        {
+            goto out;
+        }
+        if (res != 1)
+        {
+            res = -EIO;
+            goto out;
+        }
     }
 
     res = elf_process_loaded(elf_file);

@@ -13,6 +13,7 @@
 #define HOST_PROCESS_HOST_H
 
 #include <setjmp.h>
+#include <stdint.h>
 
 // kernel/string/string.c brings its own snprintf (which calls itself through vsprintf), so the
 // checks format with the C library's checked variant instead.
@@ -73,6 +74,11 @@ void host_reset(void);
 // What a failed load must leave as it was: the task list (in order, both ways), the current
 // task, the process with the keyboard (current_process), the process slots, the live heap
 // allocations and the open files.
+void host_file_size(uint32_t size);
+extern int host_short_read_at;
+extern int host_read_error;
+extern uint32_t host_read_bytes;
+
 #define HOST_MAX_TASKS 16
 struct host_snapshot
 {

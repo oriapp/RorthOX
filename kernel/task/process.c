@@ -349,6 +349,13 @@ static int process_load_binary(const char *filename, struct process *process)
         goto out;
     }
 
+    if (!stat.filesize || stat.filesize >
+        (uint32_t)(RORTHOX_PROGRAM_VIRTUAL_ADDRESS_LIMIT - RORTHOX_PROGRAM_VIRTUAL_ADDRESS))
+    {
+        res = -EINVARG;
+        goto out;
+    }
+
     program_data_ptr = kzalloc(stat.filesize);
     if (!program_data_ptr)
     {
