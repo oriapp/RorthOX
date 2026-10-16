@@ -36,8 +36,8 @@ Everything in this list is checked by `make test` or was run in QEMU.
 - **Tasks:** 12 process slots, a round-robin task switch on every timer tick, command-line arguments passed to
   `main(argc, argv)`.
 - **Syscalls:** 11 calls through `int 0x80` (table below). Every argument and every string or list a syscall reads
-  from user memory goes through a checked copy: only memory the program owns and has mapped, so a bad pointer gives
-  the program an error instead of crashing the kernel.
+  from user memory goes through a checked copy: only memory the program owns and has mapped, so a bad pointer can't
+  crash the kernel. The call fails instead and the program carries on.
 - **Console:** 80x25 VGA text with colours, scrolling and backspace across rows, and a kernel `printf`. Kernel debug
   output also goes to port 0xE9 (QEMU's `debugcon`).
 - **Keyboard:** PS/2 scancode set 1 with Shift symbols, Caps Lock and the keypad.
@@ -301,7 +301,8 @@ program and the kernel.
 - **No process isolation.** Every task's page tables start with a read-only, user-readable identity map of all
   4 GiB, so a program can read kernel memory and other programs' memory. CR0.WP is off, and turning it on needs a
   change to how the interrupt stack is mapped. (The IDT gates and the TSS descriptor are DPL 0, except the syscall
-  and the `int3`/`into` debugging traps, so a program can't fake an IRQ or an exception.)
+  and the `int3`/`into` debugging traps, so a program can't raise an IRQ or another exception vector with `int`:
+  it gets a #GP instead.)
 - **Command length.** A command with more than 32 words (program name included) is refused. The shell doesn't print
   errors, so it just shows a new prompt.
 - **Resources.** There's no per-process memory limit: one program can take most of the kernel heap. Raw programs
