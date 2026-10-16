@@ -192,7 +192,8 @@ static int pointer_test(void)
     int bad = 0;
     char *freed = malloc(4096);
     char *end = malloc(4096);
-    if (!freed || !end) return 1;
+    char *two = malloc(8192);
+    if (!freed || !end || !two) return 1;
     strcpy(freed, "syscheck: stale\n");
     free(freed);
     /* ESP in the freed page (not present any more): every syscall must refuse its arguments.
@@ -202,9 +203,22 @@ static int pointer_test(void)
     int pr = bad_stack(SYSCALL_PRINT, sp), prc = bad_stack(SYSCALL_PRINTC, sp);
     int fr = bad_stack(SYSCALL_FREE, sp), ma = bad_stack(SYSCALL_MALLOC, sp);
     int ld = bad_stack(SYSCALL_PROCESS_LOAD_START, sp);
-    printf("syscheck: freed stack %i %i %i %i %i %i %i\n", sum, put, pr, prc, fr, ma, ld);
     bad |= sum != -2 || put != -2 || pr != -2 || prc != -2 || fr != -2 || ma != 0 || ld != 0;
-    int rc = print_result(freed);
+    /* 1100 bytes that cross a page edge: print copies at most 1023 of them, so the screen
+       shows "...TRUN|" and never the X. */
+    char *s = two + 4096 - 600;
+    memset(s, '-', 1100);
+    memcpy(s + 1019, "TRUNX", 5);
+    s[1100] = 0;
+    int rc = print_result(s);
+    print("|\n");
+    printf("syscheck: long print %i\n", rc);
+    /* Printed after the long string, which pushes earlier lines off the screen. */
+    printf("syscheck: freed stack %i %i %i %i %i %i %i\n", sum, put, pr, prc, fr, ma, ld);
+    bad |= rc != 0;
+    /* Freed now, so nothing the program owns follows end (the unterminated case below). */
+    free(two);
+    rc = print_result(freed);
     printf("syscheck: freed print %i\n", rc);
     bad |= rc >= 0;
     rc = print_result((void *)0x800000);
