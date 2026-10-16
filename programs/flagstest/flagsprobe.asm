@@ -23,10 +23,12 @@ wait_for_debugger:
     ret
 
 ; uint32_t flags_after_timer(uint32_t flags, uint32_t *before)
-; Sets the tested flags to <flags> and waits in a loop for a real timer interrupt (ring 3 can't
-; raise the timer vector with "int": its gate is DPL 0), which saves this task, switches to the
-; next one and later comes back through task_return. Returns EFLAGS as they were right after the
-; wait. *before gets EFLAGS as they were just before it. "loop" changes no flags.
+; Sets the tested flags to <flags> and waits for a real timer interrupt (ring 3 can't raise the
+; timer vector with "int": its gate is DPL 0), which saves this task, switches to the next one and
+; later comes back through task_return. The wait loads the null selector into GS and spins until
+; GS is non-zero again: only the kernel's way back to ring 3 reloads it, so the loop can't end
+; before an interrupt. Returns EFLAGS as they were right after the wait. *before gets EFLAGS as
+; they were just before it. Nothing in the wait changes a flag.
 flags_after_timer:
     push ebp
     mov ebp, esp
@@ -40,9 +42,12 @@ flags_after_timer:
     popfd
     pushfd                      ; what popfd really set
     pop edx
-    mov ecx, 0x2000000          ; many timer ticks long under QEMU; mov changes no flags
+    push dword 0                ; GS = null selector. Only the kernel loads it again, on the
+    pop gs                      ; way back to ring 3 (task_return or task_page)
 .wait_tick:
-    loop .wait_tick
+    mov ecx, gs                 ; mov and jecxz change no flags
+    jecxz .wait_tick
+.ticked:
     pushfd                      ; before anything can change a flag
     cld
     pop eax

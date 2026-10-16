@@ -14,7 +14,8 @@ entry <gdb socket> <kernel.map> <results file> <flagstest.elf>
     Attached after flagstest got its key: wait until it spins in wait_for_debugger, release it, then
     break at interrupt_handler and isr80h_handler. For every entry from ring 3 whose saved user
     EFLAGS (top of the TSS stack) has DF set, the live DF on entry to C must be clear. Needs one
-    such timer-vector entry and one syscall entry.
+    such timer-vector entry and one syscall entry. Also breaks at task_return: each of the four
+    timer-wait patterns must come back through it with the saved EIP inside the wait loop.
 """
 
 import struct
@@ -29,6 +30,7 @@ PATTERNS = [0x00000000, 0xFFFFFFFF] + [1 << i for i in range(32)] + [0x55555555,
 # struct registers: edi esi ebp ebx edx ecx eax ip cs flags esp ss
 FIELDS = ["edi", "esi", "ebp", "ebx", "edx", "ecx", "eax", "ip", "cs", "flags", "esp", "ss"]
 GATE_VALUE = 0x67617266
+TIMER_PATTERNS = [0x00240CD5, 0x00000000, 0x00040491, 0x00200844]   # flagstest.c patterns
 GATE_CODE = b"\x3d" + struct.pack("<I", GATE_VALUE) + b"\x75\xf9"   # cmp eax, GATE_VALUE; jne .spin
 
 
@@ -129,10 +131,15 @@ def entry_mode(sock, map_path, result_path, program_path):
     r.set_reg("eax", GATE_VALUE)
     for addr in handlers:
         r.add_breakpoint(addr)
+    usym = read_elf_symbols(program_path)
+    window = (usym["flags_after_timer.wait_tick"], usym["flags_after_timer.ticked"])
+    task_return = symbols["task_return"]
+    r.add_breakpoint(task_return)
+    returned = {p: 0 for p in TIMER_PATTERNS}
 
     seen = {"timer": [], "syscall": []}
     deadline = time.monotonic() + 90
-    while not (seen["timer"] and seen["syscall"]):
+    while not (seen["timer"] and seen["syscall"] and all(returned.values())):
         left = deadline - time.monotonic()
         if left <= 0:
             break
@@ -141,6 +148,12 @@ def entry_mode(sock, map_path, result_path, program_path):
         except RspError as e:
             print("  %s" % e, flush=True)
             break
+        if eip == task_return:
+            arg = r.read32(r.reg("esp") + 4)
+            ip, _, flags = struct.unpack("<III", r.read(arg + 28, 12))
+            if window[0] <= ip < window[1] and flags & 0x00240CD5 in returned:
+                returned[flags & 0x00240CD5] += 1
+            continue
         kind = handlers.get(eip)
         if kind is None:
             raise SystemExit("stopped at %#x, not at a handler" % eip)
@@ -152,6 +165,8 @@ def entry_mode(sock, map_path, result_path, program_path):
             continue
         seen[kind].append((user_flags, r.reg("eflags")))
 
+    res.add("timer_return_every_pattern", all(returned.values()),
+            " ".join("%#x:%d" % (p, n) for p, n in returned.items()))
     for kind in ("timer", "syscall"):
         hits = seen[kind]
         res.add("%s_entry_seen" % kind, bool(hits), "no %s entry from ring 3 with DF set" % kind)

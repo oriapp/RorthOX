@@ -3,8 +3,10 @@
  *
  * After "flagstest: armed" it waits for a key and then for the test's debugger (wait_for_debugger),
  * then sets the arithmetic flags, DF, AC and ID to a few patterns (all set, all clear, two halves)
- * and waits for a real timer interrupt (ring 3 can't "int" the timer vector), so the kernel saves
- * this task, runs the next one and comes back through task_return. The flags must come back as they were, with IF on and IOPL 0.
+ * and waits for a real timer interrupt (ring 3 can't "int" the timer vector): it spins with GS set
+ * to the null selector until the kernel's return to ring 3 loads GS again. The timer saves this
+ * task, runs the next one and comes back through task_return. The flags must come back as they
+ * were, with IF on and IOPL 0.
  * The same patterns go through a syscall too. Prints "flagstest: PASS" or "flagstest: FAIL".
  *
  * No globals: the loader doesn't map .bss.

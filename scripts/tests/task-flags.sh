@@ -13,9 +13,11 @@
 #    long names) prints "flagstest: armed" and waits for a key, then spins until task_flags.py
 #    entry, attached after the key, releases it. It then sets CF PF AF ZF SF DF OF AC ID to four
 #    patterns and waits for a real timer tick (save, switch to the shell, come back through
-#    task_return), does the same around a syscall, and prints "flagstest: PASS" if every flag
+#    task_return; it spins with GS set to the null selector until the kernel's way back to ring 3
+#    loads GS again), does the same around a syscall, and prints "flagstest: PASS" if every flag
 #    came back. Meanwhile task_flags.py breaks at interrupt_handler and isr80h_handler and checks
-#    that DF is clear on entry to C while the interrupted user code had DF set.
+#    that DF is clear on entry to C while the interrupted user code had DF set, and at
+#    task_return to check that each of the four timer waits really came back through it.
 #
 # Needs python3. Env: BOOT_TIMEOUT=60 (seconds to wait for the shell), STEP_TIMEOUT=60 (each step after)
 
@@ -105,6 +107,7 @@ check "entry session finished without errors"             "$OUT/entry-status.txt
 check "flagstest got its key and waited for the debugger"  "$e" "PASS gate_reached" line
 check "timer vector entered from ring 3 with DF set"       "$e" "PASS timer_entry_seen" line
 check "DF clear on entry to interrupt_handler"             "$e" "PASS timer_entry_df_clear" line
+check "every timer pattern came back through task_return"  "$e" "PASS timer_return_every_pattern" line
 check "syscall entered from ring 3 with DF set"            "$e" "PASS syscall_entry_seen" line
 check "DF clear on entry to isr80h_handler"                "$e" "PASS syscall_entry_df_clear" line
 check "no kernel panic (debugcon)"                         "$OUT/debugcon.log" "PANIC" absent
