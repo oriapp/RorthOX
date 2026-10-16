@@ -13,22 +13,25 @@
 #   early   right after idt_load (paging off, no task yet) the debugger puts a ud2 in the kernel's
 #           path: #UD in ring 0, before kernel_page()/task state exist
 #   nested  the same, and a ud2 at PANIC's first instruction: the second #UD must halt directly
+#   kpf     at the idle shell's getkey syscall (shell page directory loaded) the debugger clears
+#           one page's present bit and makes isr80h_handler read that page: #PF in ring 0 with
+#           a CPU error code and cr2, then an NMI into the halted kernel
 #   df      the debugger clears the present bit of the #GP gate, then fault.elf runs "cli" in
 #           ring 3: #GP can't be delivered, which makes a double fault from ring 3
 #
-# (A kernel #PF from a bad user pointer can no longer happen: every syscall reads user memory
-# through a checked copy, see user-pointers.sh. An NMI into the halted kernel is checked in panic.sh.)
+# (No user pointer can make a kernel #PF any more: every syscall reads user memory through a
+# checked copy, see user-pointers.sh. That's why kpf needs the debugger to make one.)
 #
 # The panic screen must show the reason and where PANIC was called (exception_fatal_stop in idt.c).
 #
 # Needs python3. Env: BOOT_TIMEOUT=60 (seconds to wait for the shell)  STEP_TIMEOUT=20
-#      KERNEL_EXCEPTION_CASES="early nested df"
+#      KERNEL_EXCEPTION_CASES="early nested kpf df"
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 STEP_TIMEOUT="${STEP_TIMEOUT:-20}"
-CASES="${KERNEL_EXCEPTION_CASES:-early nested df}"
+CASES="${KERNEL_EXCEPTION_CASES:-early nested kpf df}"
 . ./scripts/qemu-lib.sh
 
 OUT=build/tests/kernel-exceptions
@@ -160,6 +163,47 @@ run_early() {
     fi
 }
 
+# kpf: a real #PF in ring 0 with the shell's page directory loaded (the debugger clears one PTE and
+# makes isr80h_handler read that page), then an NMI into the halted kernel.
+run_kpf() {
+    local status nmi_status="not run"
+    case_start kpf
+    if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT"; then
+        if debugger "$D/kpf.log" kpf "$SOCK" build/kernel.map "$D/kpf.txt"; then status=0; else status=$?; fi
+        echo "exit=$status" > "$D/status.txt"
+        if [ "$status" = 0 ] && wait_screen "A problem has been detected" "$STEP_TIMEOUT"; then
+            halted "$D/halt.txt"
+            if debugger "$D/nmi.log" nmi "$SOCK" build/kernel.map "$D/nmi.txt"; then nmi_status=0; else nmi_status=$?; fi
+            halted "$D/halt-after-nmi.txt"
+        fi
+    fi
+    echo "exit=$nmi_status" > "$D/nmi-status.txt"
+    qemu_stop || true
+    counts "$D/counts.txt"
+    local r="$D/kpf.txt" n="$D/nmi.txt"
+    check "kpf: debugger session finished without errors"        "$D/status.txt" "exit=0" line
+    check "kpf: stopped in a syscall, PTE present before"        "$r" "PASS kpf_armed" line
+    check "kpf: #PF stub from ring 0, error 0, eip at the read"  "$r" "PASS kpf_stub" line
+    check "kpf: CR2 is the cleared page"                         "$r" "PASS kpf_cr2" line
+    check "kpf: interrupt_handler got vector 14, error, cr2"     "$r" "PASS kpf_handler_frame" line
+    check "kpf: PANIC(\"Kernel exception\")"                     "$r" "PASS kpf_panic" line
+    check "kpf: halted in PAUSE"                                 "$r" "PASS halted_in_pause" line
+    check "kpf: CR3 untouched (the shell's directory)"           "$r" "PASS cr3_untouched" line
+    check "kpf: exception line with vector 14, error 0 and cr2"  "$D/debugcon.log" "exception: vector=0x0000000e error=0x00000000 cr2=0x07fff000" line
+    check "kpf: panic message on debugcon"                       "$D/debugcon.log" "[PANIC]: Kernel exception at ./kernel/idt/idt.c:"
+    panic_screen kpf
+    check "kpf: CPU halted"                                      "$D/halt.txt" "halted" line
+    check "kpf: interrupts off"                                  "$D/halt.txt" "interrupts off" line
+    check "nmi: debugger session finished without errors"        "$D/nmi-status.txt" "exit=0" line
+    check "nmi: halted before the NMI"                           "$n" "PASS halted_before_nmi" line
+    check "nmi: NMI entered its stub from the halt loop"         "$n" "PASS nmi_stub" line
+    check "nmi: went straight back to PAUSE, no other exception" "$n" "PASS nmi_straight_to_pause" line
+    check "nmi: CPU halted again"                                "$D/halt-after-nmi.txt" "halted" line
+    check "nmi: interrupts still off"                            "$D/halt-after-nmi.txt" "interrupts off" line
+    check "nmi: no second exception line"                        "$D/counts.txt" "exceptions=1" line
+    check "nmi: no second panic"                                 "$D/counts.txt" "panics=1" line
+}
+
 # df: #GP gate not present, ring-3 cli: double fault.
 run_df() {
     local status
@@ -205,6 +249,7 @@ run_df() {
 for c in $CASES; do
     case "$c" in
         early | nested) run_early "$c" ;;
+        kpf) run_kpf ;;
         df) run_df ;;
         *) echo "kernel-exceptions: unknown case $c" >&2; exit 1 ;;
     esac

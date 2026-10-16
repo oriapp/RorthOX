@@ -27,6 +27,11 @@ early <socket> <map> <results> [nested]
 nmi <socket> <map> <results>
     The kernel is halted after a panic. Inject an NMI: it must enter the NMI stub and go straight
     back to PAUSE, with no other exception and no PANIC.
+kpf <socket> <map> <results>
+    The shell is idle in its getkey syscall. Break at isr80h_handler, clear the present bit of the
+    PTE for KPF_ADDRESS in the shell's directory and put "mov eax, [KPF_ADDRESS]" at
+    isr80h_handler: #PF stub from ring 0 with error 0 and CR2, interrupt_handler gets vector 14,
+    the CPU's error code and cr2, then PANIC("Kernel exception"), PAUSE, CR3 untouched.
 """
 
 import struct
@@ -563,6 +568,64 @@ def nmi_mode(sock, map_path, result_path):
         fail_session(e)
 
 
+# --- kpf ---------------------------------------------------------------------------------------
+
+KPF_ADDRESS = 0x07FFF000   # identity-mapped in every directory, above the kernel heap, never touched
+
+
+def kpf_mode(sock, map_path, result_path):
+    setup(map_path, result_path)
+    kernel_cs = CONFIG["KERNEL_CODE_SELECTOR"]
+    handler = SYMBOLS["isr80h_handler"]
+    panic = SYMBOLS["PANIC"]
+    pause = SYMBOLS["PAUSE"]
+    try:
+        r = connect(sock)
+        r.add_breakpoint(handler)
+        if r.cont(20) != handler:
+            raise RspError("no syscall reached isr80h_handler")
+        r.remove_breakpoint(handler)
+        cr3 = r.control_registers()["cr3"]
+        pde = r.read32(cr3 + (KPF_ADDRESS >> 22) * 4)
+        pte_at = (pde & ~0xFFF) + ((KPF_ADDRESS >> 12) & 0x3FF) * 4
+        pte = r.read32(pte_at)
+        RES.add("kpf_armed", pde & 1 and pte & 1 and r.read32(SYMBOLS["current_task"]) != 0,
+                "cr3 %#x pde %#x pte %#x" % (cr3, pde, pte))
+        r.write(pte_at, struct.pack("<I", pte & ~1))
+        r.write(handler, b"\xa1" + struct.pack("<I", KPF_ADDRESS))   # mov eax, [KPF_ADDRESS]
+        for addr in (stub(14), SYMBOLS["interrupt_handler"], panic, pause):
+            r.add_breakpoint(addr)
+
+        eip = run_to(r, None, 10)
+        frame = struct.unpack("<4I", r.read(r.reg("esp"), 16))
+        cr = r.control_registers()
+        RES.add("kpf_stub", eip == stub(14) and frame[0] == 0 and frame[1] == handler and frame[2] == kernel_cs,
+                "stopped at %s, frame %s" % (where(eip), ["%#x" % w for w in frame]))
+        RES.add("kpf_cr2", cr["cr2"] == KPF_ADDRESS, "cr2 %#x" % cr["cr2"])
+        if eip != stub(14):
+            bail()
+        esp = r.reg("esp")
+        eip = run_to(r, None, 10)
+        if eip == SYMBOLS["interrupt_handler"]:
+            vector, f, cr2, words = handler_frame(r)
+            RES.add("kpf_handler_frame", vector == 14 and f == esp - 32 and cr2 == KPF_ADDRESS and
+                    words[8] == 0 and words[9] == handler,
+                    "vector %d frame %#x (want %#x) cr2 %#x error %#x ip %#x" % (vector, f, esp - 32, cr2, words[8], words[9]))
+            eip = run_to(r, None, 10)
+        else:
+            RES.add("kpf_handler_frame", False, "interrupt_handler not reached, stopped at %s" % where(eip))
+        msg = read_string(r, r.read32(r.reg("esp") + 4)) if eip == panic else None
+        RES.add("kpf_panic", eip == panic and msg == "Kernel exception", "stopped at %s, message %r" % (where(eip), msg))
+        if eip != panic:
+            bail()
+        eip = run_to(r, None, 10)
+        RES.add("halted_in_pause", eip == pause, "stopped at %s" % where(eip))
+        RES.add("cr3_untouched", r.control_registers()["cr3"] == cr3, "cr3 changed from %#x" % cr3)
+        r.detach()
+    except (RspError, OSError) as e:
+        fail_session(e)
+
+
 if __name__ == "__main__":
     mode, args = sys.argv[1], sys.argv[2:]
-    {"catch": catch_mode, "list": list_mode, "layout": layout_mode, "early": early_mode, "nmi": nmi_mode}[mode](*args)
+    {"catch": catch_mode, "list": list_mode, "layout": layout_mode, "early": early_mode, "nmi": nmi_mode, "kpf": kpf_mode}[mode](*args)
