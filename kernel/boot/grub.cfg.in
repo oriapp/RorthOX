@@ -1,0 +1,9 @@
+set gfxpayload=text
+set timeout_style=menu
+set timeout=5
+set default=0
+
+menuentry "@RORTHOX_NAME@" {
+    multiboot /boot/kernel.bin
+    boot
+}

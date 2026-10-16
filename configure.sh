@@ -8,6 +8,9 @@
 #   sudo apt-get install -y build-essential bison flex libgmp3-dev libmpc-dev \
 #        libmpfr-dev texinfo curl xz-utils nasm qemu-system-x86 mtools python3
 #
+# Optional BIOS-only GRUB ISO packages (do not install grub-pc):
+#   sudo apt-get install -y grub-common grub-pc-bin xorriso mtools
+#
 # Then run (no sudo):   ./configure.sh
 # And add the toolchain to your PATH:   export PATH="$HOME/opt/cross/bin:$PATH"
 #

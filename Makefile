@@ -184,6 +184,23 @@ $(filter-out %.asm.o,$(FILES)): | $(CONFIG_H)
 
 all: ./bin/os.bin
 
+# Keep the ATA disk image and GRUB ISO in sync; the raw build needs no GRUB tools.
+iso: all ./bin/rorthox.iso
+
+.PHONY: iso_tools
+iso_tools:
+	@./scripts/check-iso-tools.sh
+
+./bin/rorthox.iso: ./bin/kernel.bin ./kernel/boot/grub.cfg.in config.mk Makefile | iso_tools
+	rm -rf build/iso
+	mkdir -p build/iso/boot/grub
+	cp ./bin/kernel.bin build/iso/boot/kernel.bin
+	sed 's/@RORTHOX_NAME@/$(RORTHOX_NAME)/g' ./kernel/boot/grub.cfg.in > build/iso/boot/grub/grub.cfg
+	grub-file --is-x86-multiboot ./bin/kernel.bin
+	rm -f $@.tmp
+	@if ! grub-mkrescue -d /usr/lib/grub/i386-pc -o $@.tmp build/iso; then rm -f $@.tmp; exit 1; fi
+	mv $@.tmp $@
+
 ./bin/os.bin: ./bin/boot.bin ./bin/kernel.bin $(IMAGE_FILES) | user_programs
 	rm -f $@
 	cat ./bin/boot.bin ./bin/kernel.bin > $@
@@ -364,10 +381,10 @@ test: all
 clean: user_programs_clean
 	rm -rf ./bin/boot.bin
 	rm -rf ./bin/kernel.bin
-	rm -rf ./bin/os.bin
+	rm -rf ./bin/os.bin ./bin/rorthox.iso ./bin/rorthox.iso.tmp ./build/iso
 	rm -rf ${FILES} $(FILES:.o=.d)
 	rm -rf ./build/kernelfull.o ./build/kernel.map ./build/config ./build/smoke ./build/tests
 
-.PHONY: all user_programs user_programs_clean smoke test clean
+.PHONY: all iso user_programs user_programs_clean smoke test clean
 
 -include $(FILES:.o=.d)
