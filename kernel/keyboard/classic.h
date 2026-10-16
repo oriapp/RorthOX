@@ -8,7 +8,6 @@
 extern "C" {
 #endif
 
-// FUTURE USE
 typedef struct {
     uint8_t scancode;
     char chr; // Character it corresponds to.
