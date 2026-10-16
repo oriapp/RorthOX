@@ -21,7 +21,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bison flex libgmp3-dev libmpc-dev \
-            libmpfr-dev texinfo curl xz-utils nasm qemu-system-x86 mtools python3
+            libmpfr-dev texinfo curl xz-utils nasm qemu-system-x86 mtools python3 \
+            grub-common grub-pc-bin xorriso
 
       # Building binutils + GCC takes a while, so keep ~/opt/cross between runs.
       # A change to configure.sh (versions, options) builds a new one.
@@ -40,10 +41,10 @@ jobs:
         run: echo "$HOME/opt/cross/bin" >> "$GITHUB_PATH"
 
       - name: Build
-        run: make all
+        run: make all iso
 
       - name: Tests
-        run: make test
+        run: RORTHOX_REQUIRE_ISO=1 make test
 
       - name: Upload the disk image and test output
         if: always()
@@ -52,6 +53,7 @@ jobs:
           name: rorthox
           path: |
             bin/os.bin
+            bin/rorthox.iso
             build/smoke/
             build/tests/
           if-no-files-found: ignore
