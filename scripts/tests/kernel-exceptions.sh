@@ -109,7 +109,7 @@ panic_screen() {
     check "$1: screen shows the reason"            "$D/screen.txt" "Reason: Kernel exception" line
     check "$1: screen shows file and line"         "$D/screen.txt" "at ./kernel/idt/idt.c:$panic_line" line
     check "$1: screen has no placeholder"          "$D/screen.txt" "Reason!" absent
-    check "$1: screen keeps its final text"        "$D/screen.txt" ".More Information" line
+    check "$1: screen keeps the issue line"        "$D/screen.txt" "and submit an issue with the information below." line
 }
 SOCK="$GDB_DIR/gdb"
 

@@ -11,8 +11,8 @@
  * debug line is not built by concatenation.
  *
  * The expected screen comes from a model: the copyright row of terminal_initialize, then the
- * unchanged advice lines, "Reason: <message>" on one row, "at <file>:<line>" on the next, and the
- * unchanged "Error description\n." and "More Information\n", all white on red, every other cell
+ * unchanged advice lines, "Reason: <message>" on one row, "at <file>:<line>" on the next, and
+ * nothing after that, all white on red, every other cell
  * as terminal_initialize left it. Control characters in the message and file show as spaces.
  * The message shows at most 71 characters and the file at most 64 (the rest is cut, optionally
  * marked with up to three of . ~ >), so each fits one row. Message and file strings end at an
@@ -176,16 +176,15 @@ static const char *const advice[] = {
     "A problem has been detected and RorthOX has been shut down to prevent damage to your computer.\n",
     "If this is the first time you've seen this stop error screen, restart your computer. If this screen appears again, follow these steps: \n",
     "Check to make sure any new hardware or software is properly installed.\n",
-    "If this a new install, check your software/hardware vendor for\n",
-    "any drivers or OS updates you many need.\n",
+    "If this is a new install, check your software/hardware vendor for\n",
+    "any drivers or OS updates you may need.\n",
     "If problems continue, remove any newly installed hardware or software.\n",
     "Disable BIOS memory options such as caching or shadowing.\n",
     "\n",
-    "Finally, if all else failes, go to https://github.com/oriapp/RorthOX/issues\n",
-    "and submit an issue with the following below information.\n",
+    "Finally, if all else fails, go to https://github.com/oriapp/RorthOX/issues\n",
+    "and submit an issue with the information below.\n",
     "\n",
 };
-static const char *const after[] = { "Error description\n.", "More Information\n" };
 
 static uint16_t want[CELLS];
 static int m_row, m_col, m_scrolled;
@@ -246,14 +245,6 @@ static void m_start(void)
 }
 
 static int reason_row;   // where "Reason: " must be
-
-static void m_end(void)
-{
-    for (unsigned i = 0; i < 2; i++)
-    {
-        m_print(after[i]);
-    }
-}
 
 // Screen text of a field: control characters as spaces.
 static void shown(char *out, const char *s, unsigned long n)
@@ -373,7 +364,6 @@ static void exact_case(const char *what, const char *msg, const char *file, int 
     m_print(tmp);
     host_snprintf(tmp, sizeof(tmp), ":%d\n", line);
     m_print(tmp);
-    m_end();
     expect_screen(what);
 }
 
@@ -510,17 +500,7 @@ static void c_long(void)
                 BAD("%s: file shown as \"%s\"", what, f);
             }
         }
-        row_text(r + 2, row);
-        if (strcmp(row, "Error description") != 0)
-        {
-            BAD("%s: row %d is \"%s\", expected \"Error description\"", what, r + 2, row);
-        }
-        row_text(r + 3, row);
-        if (strcmp(row, ".More Information") != 0)
-        {
-            BAD("%s: row %d is \"%s\", expected \".More Information\"", what, r + 3, row);
-        }
-        for (int i = r + 4; i < ROWS; i++)
+        for (int i = r + 2; i < ROWS; i++)
         {
             row_text(i, row);
             if (row[0])
@@ -571,9 +551,9 @@ static void c_null(void)
             BAD("NULL case %d: location row is \"%s\"", t, row);
         }
         row_text(r + 2, row);
-        if (strcmp(row, "Error description") != 0)
+        if (row[0])
         {
-            BAD("NULL case %d: row %d is \"%s\"", t, r + 2, row);
+            BAD("NULL case %d: row %d is \"%s\", expected empty", t, r + 2, row);
         }
     }
 }

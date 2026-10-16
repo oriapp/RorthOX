@@ -66,10 +66,10 @@ check "NMI: interrupts still off"          "$OUT/state.txt"    "interrupts off a
 check "NMI: back in PAUSE"                 "$OUT/state.txt"    "in PAUSE after nmi" line
 check "screen: copyright row kept"         "$S" "Copyright (C) R C N, GPL-2.0" line
 check "screen: advice kept"                "$S" "Disable BIOS memory options such as caching or shadowing." line
-check "screen: issue URL kept"             "$S" "Finally, if all else failes, go to https://github.com/oriapp/RorthOX/issues" line
+check "screen: issue URL kept"             "$S" "Finally, if all else fails, go to https://github.com/oriapp/RorthOX/issues" line
 check "screen: reason shown"               "$S" "Reason: Failed to load shell.elf" line
 check "screen: file and line shown"        "$S" "at ./kernel/kernel.c:$panic_line" line
 check "screen: no placeholder"             "$S" "Reason!" absent
-check "screen: final text kept"            "$S" "Error description" line
-check "screen: final text kept (2)"        "$S" ".More Information" line
+check "screen: issue line kept"            "$S" "and submit an issue with the information below." line
+check "screen: no placeholder lines"       "$S" "More Information" absent
 finish panic
