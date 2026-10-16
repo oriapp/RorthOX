@@ -111,7 +111,7 @@ void task_current_save_state(struct interrupt_frame *frame);
 int task_copy_from_user(struct task *task, void *destination, uint32_t source, uint32_t size);
 int task_copy_to_user(struct task *task, uint32_t destination, const void *source, uint32_t size);
 int copy_string_from_task(struct task *task, void *virtual, void *phys, int max);
-void *task_get_stack_item(struct task *task, int index);
+int task_get_stack_item(struct task *task, int index, uint32_t *value);
 void *task_virtual_address_to_physical(struct task *task, void *virtual_address);
 
 #ifdef __cplusplus

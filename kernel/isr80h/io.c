@@ -8,10 +8,15 @@
 
 void *isr80h_command1_print(struct interrupt_frame *frame)
 {
-    void *user_space_msg_buffer = task_get_stack_item(task_current(), 0);
+    uint32_t user_space_msg_buffer = 0;
+    int res = task_get_stack_item(task_current(), 0, &user_space_msg_buffer);
+    if (res < 0)
+    {
+        return ERROR(res);
+    }
+
     char buf[1024]; // this is also the max
-    buf[0] = 0;
-    int res = copy_string_from_task(task_current(), user_space_msg_buffer, buf, sizeof(buf));
+    res = copy_string_from_task(task_current(), (void*)user_space_msg_buffer, buf, sizeof(buf));
     if (res < 0)
     {
         return ERROR(res);
@@ -24,16 +29,26 @@ void *isr80h_command1_print(struct interrupt_frame *frame)
 void *isr80h_command11_printc(struct interrupt_frame *frame)
 {
     // The colour is an integer (stack item 1). Only the 16 foreground colours are valid.
-    uint32_t color = (uint32_t)task_get_stack_item(task_current(), 1);
+    uint32_t color = 0;
+    int res = task_get_stack_item(task_current(), 1, &color);
+    if (res < 0)
+    {
+        return ERROR(res);
+    }
     if (color > VGA_COLOR_WHITE)
     {
         return ERROR(-EINVARG);
     }
 
-    void *user_space_msg_buffer = task_get_stack_item(task_current(), 0);
+    uint32_t user_space_msg_buffer = 0;
+    res = task_get_stack_item(task_current(), 0, &user_space_msg_buffer);
+    if (res < 0)
+    {
+        return ERROR(res);
+    }
+
     char buf[1024]; // this is also the max
-    buf[0] = 0;
-    int res = copy_string_from_task(task_current(), user_space_msg_buffer, buf, sizeof(buf));
+    res = copy_string_from_task(task_current(), (void*)user_space_msg_buffer, buf, sizeof(buf));
     if (res < 0)
     {
         return ERROR(res);
@@ -51,7 +66,13 @@ void *isr80h_command2_getkey(struct interrupt_frame *frame)
 
 void *isr80h_command3_putchar(struct interrupt_frame *frame)
 {
-    char c = (char)((int) task_get_stack_item(task_current(), 0));
-    terminal_writechar(c, 15);
+    uint32_t c = 0;
+    int res = task_get_stack_item(task_current(), 0, &c);
+    if (res < 0)
+    {
+        return ERROR(res);
+    }
+
+    terminal_writechar((char)c, 15);
     return 0;
 }

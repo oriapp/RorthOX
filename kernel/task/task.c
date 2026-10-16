@@ -266,41 +266,51 @@ int task_copy_to_user(struct task *task, uint32_t destination, const void *sourc
     return task_copy_user(task, destination, (void*)source, size, 1);
 }
 
+// Copies a NUL-terminated string from user memory through the same ownership and page checks as
+// task_copy_from_user, one fragment at a time, so it may end anywhere inside owned memory.
+// A string longer than max - 1 is cut and still terminated.
 int copy_string_from_task(struct task *task, void *virtual, void *phys, int max)
 {
-    if (max >= PAGING_PAGE_SIZE)
+    uint32_t address = (uint32_t)virtual;
+    if (!task || !task->process || !task->page_directory || !phys || max <= 0 || !address)
     {
         return -EINVARG;
     }
 
-    int res = 0;
-    char *tmp = kzalloc(max);
-    if (!tmp)
+    char *out = phys;
+    uint32_t remaining = (uint32_t)max - 1;
+    while (remaining)
     {
-        res = -ENOMEM;
-        goto out;
+        void *physical = 0;
+        uint32_t fragment = 0;
+        int res = task_user_fragment(task, address, remaining, 0, &physical, &fragment);
+        if (res < 0)
+        {
+            *out = 0;
+            return res;
+        }
+
+        const char *in = physical;
+        for (uint32_t i = 0; i < fragment; i++)
+        {
+            out[i] = in[i];
+            if (!in[i])
+            {
+                return 0;
+            }
+        }
+
+        if (fragment > UINT32_MAX - address)
+        {
+            break;
+        }
+        out += fragment;
+        address += fragment;
+        remaining -= fragment;
     }
 
-    uint32_t *task_directory = task->page_directory->directory_entry;
-    uint32_t old_entry = paging_get(task_directory, tmp);
-    paging_map(task->page_directory, tmp, tmp, PAGING_IS_WRITEABLE | PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL);
-    paging_switch(task->page_directory);
-    strncpy(tmp, virtual, max);
-    kernel_page();
-
-    res = paging_set(task_directory, tmp, old_entry);
-    if (res < 0)
-    {
-        res = -EIO;
-        goto out_free;
-    }
-
-    strncpy(phys, tmp, max);
-
-out_free:
-    kfree(tmp);
-out:
-    return res;
+    *out = 0;
+    return 0;
 }
 
 void task_current_save_state(struct interrupt_frame *frame)
@@ -374,22 +384,21 @@ int task_init(struct task *task, struct process *process)
     return 0;
 }
 
-// Pull the stack item from the task
-void *task_get_stack_item(struct task *task, int index)
+// Reads syscall argument `index` (a 32-bit word above the saved user esp) through a checked copy.
+int task_get_stack_item(struct task *task, int index, uint32_t *value)
 {
-    void *result = 0;
+    if (!task || index < 0 || !value)
+    {
+        return -EINVARG;
+    }
 
-    uint32_t *sp_ptr = (uint32_t*) task->registers.esp;
-    
-    // Switch to the given tasks page
-    task_page_task(task);
+    uint32_t offset = (uint32_t)index * sizeof(uint32_t);
+    if (offset > UINT32_MAX - task->registers.esp)
+    {
+        return -EINVARG;
+    }
 
-    result = (void*) sp_ptr[index];
-
-    // Switch back to the kernel page
-    kernel_page();
-
-    return result;
+    return task_copy_from_user(task, value, task->registers.esp + offset, sizeof(*value));
 }
 
 void *task_virtual_address_to_physical(struct task *task, void *virtual_address)

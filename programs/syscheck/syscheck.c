@@ -6,6 +6,10 @@
 
 /* Observe EAX without changing the public void wrapper. */
 int get_arguments(struct process_arguments *) __asm__("rorthox_process_get_arguments");
+/* Observe EAX of the string syscalls (1, 6, 10) through the same wrappers. */
+int print_result(const char *) __asm__("print");
+int printc_result(const char *, int) __asm__("printc");
+int load_result(const char *) __asm__("rorthox_process_load_start");
 
 static void armed(void)
 {
@@ -180,6 +184,33 @@ static int command_test(const char *mode)
     free(memory); return 0;
 }
 
+/* Syscalls 1, 6 and 10 read their string through a checked copy: freed, unowned and
+   unterminated-at-the-end pointers give an error instead of a kernel fault or an overread. */
+static int pointer_test(void)
+{
+    int bad = 0;
+    char *freed = malloc(4096);
+    char *end = malloc(4096);
+    if (!freed || !end) return 1;
+    strcpy(freed, "syscheck: stale\n");
+    free(freed);
+    int rc = print_result(freed);
+    printf("syscheck: freed print %i\n", rc);
+    bad |= rc >= 0;
+    rc = print_result((void *)0x800000);
+    printf("syscheck: outside print %i\n", rc);
+    bad |= rc >= 0;
+    bad |= printc_result((void *)0x800000, 2) >= 0;
+    bad |= load_result(freed) != 0;
+    memset(end, 'A', 4096);
+    rc = print_result(end + 4096 - 8);
+    printf("syscheck: unterminated print %i\n", rc);
+    bad |= rc >= 0;
+    bad |= print_result("syscheck: valid print\n") != 0;
+    free(end);
+    return bad;
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 1 || (argc >= 2 && (!strncmp(argv[1],"child",6) || argv[1][0]=='x')))
@@ -208,6 +239,13 @@ int main(int argc, char **argv)
     {
         armed();
         print(arguments_test(argc, argv) ? "syscheck: FAIL\n" : "syscheck: PASS\n");
+        print("syscheck: continued\n");
+        return 0;
+    }
+    if (!strncmp(argv[1], "ptr", 4))
+    {
+        armed();
+        print(pointer_test() ? "syscheck: FAIL\n" : "syscheck: PASS\n");
         print("syscheck: continued\n");
         return 0;
     }

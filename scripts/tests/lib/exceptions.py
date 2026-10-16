@@ -118,7 +118,6 @@ CASES = {
     "out20": ([13],          13,   0,      3,   b"\xe6\x20"),   # out 0x20, al
     "inffff": ([13],         13,   0,      3,   b"\xec"),       # in al, dx (dx = 0xffff)
     "df":    ([8, 11, 13],   8,    0,      3,   None),
-    "kcopy": ([14],          14,   0x0,    0,   None),
 }
 
 
@@ -184,9 +183,6 @@ def catch_mode(sock, map_path, result_path, ready_path, case):
         want_cr2 = None
         if case == "pf":
             want_cr2 = r.reg("eax")      # fault_read keeps the pointer in eax
-        elif case == "kcopy":
-            user_esp = r.read32(top - 8)  # the syscall's ring-3 frame at the top of the TSS stack
-            want_cr2 = r.read32(user_esp)  # print's argument: the freed pointer
         if want_cr2 is not None:
             RES.add("cpu_cr2", cr["cr2"] == want_cr2, "cr2 %#x, expected %#x" % (cr["cr2"], want_cr2))
 

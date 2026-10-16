@@ -44,14 +44,15 @@ struct task *task_current()
     return the_task;
 }
 
-void *task_get_stack_item(struct task *task, int index)
+int task_get_stack_item(struct task *task, int index, uint32_t *value)
 {
     if (task != the_task || index < 0 || index > 1)
     {
         other_output++;
-        return 0;
+        return -EINVARG;
     }
-    return (void *)(uintptr_t)stack_items[index];
+    *value = stack_items[index];
+    return 0;
 }
 
 int copy_string_from_task(struct task *task, void *virtual, void *phys, int max)

@@ -10,8 +10,6 @@
  *                                     in21/out20/inffff: the same at ports 0x21, 0x20, 0xffff).
  *                                     The kernel must end the
  *                                     program, so "faulttest: survived" must never show.
- *   fault.elf kcopy                   the same, but passes a freed (unmapped) pointer to print,
- *                                     so the page fault happens in the kernel's copy.
  *   fault.elf parent                  starts "fault.elf child" (which then owns the keyboard)
  *                                     and raises #UD itself.
  *   fault.elf child                   prints "faulttest child: ready", waits for a key, prints
@@ -46,7 +44,7 @@ int main(int argc, char **argv)
 {
     if (argc != 2)
     {
-        print("faulttest: usage: fault.elf ud2|int3|cli|pf|int14|int18|in|out|in21|out20|inffff|kcopy|parent|child\n");
+        print("faulttest: usage: fault.elf ud2|int3|cli|pf|int14|int18|in|out|in21|out20|inffff|parent|child\n");
         return 1;
     }
 
@@ -119,13 +117,6 @@ int main(int argc, char **argv)
         void *page = malloc(4096);
         free(page);
         fault_read(page);
-    }
-    else if (is(mode, "kcopy"))
-    {
-        // Two pages: print's own kernel buffer may reuse the first one, never the second.
-        char *pages = malloc(8192);
-        free(pages);
-        print(pages + 4096);
     }
     else
     {

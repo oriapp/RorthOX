@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# The print and printc syscalls copy the user's text into a kernel buffer, and the copy borrows a
-# kernel heap block. With the heap full the copy fails: the kernel must print nothing and return
-# -ENOMEM, not print what was left in its buffer. Copy bin/os.bin, add programs/printoom to the
+# The print and printc syscalls copy the user's text through a checked copy that needs no kernel
+# heap, so with the heap full they must still print it and return 0, and never print what was
+# left in a kernel buffer. Copy bin/os.bin, add programs/printoom to the
 # copy only, and boot it. printoom.elf leaves one free block, prints a line, takes the last block,
-# calls print and printc, and checks they return -ENOMEM. Nothing they were given, and no second
-# copy of the line before, may reach the screen. Then blank.elf must start from the shell.
+# calls print and printc, and checks they return 0 and their text shows. No second copy of the
+# line before may reach the screen. Then blank.elf must start from the shell.
 # bin/os.bin itself must not change.
 #
 # Env: BOOT_TIMEOUT=60 (seconds to wait for the shell)   RUN_TIMEOUT=60 (for printoom.elf)
@@ -70,10 +70,10 @@ check "no kernel panic (debugcon)"                    "$OUT/debugcon.log"       
 check "shell started (banner on screen)"              "$OUT/screen.txt"          "${RORTHOX_NAME} v${RORTHOX_VERSION}"
 check "printoom.elf waited for the key"               "$OUT/screen-printoom.txt" "printoom: ready"
 check "no setup failure"                              "$OUT/screen-printoom.txt" "printoom: FAIL setup" absent
-check "print returned -ENOMEM"                        "$OUT/screen-printoom.txt" "printoom: FAIL print result" absent
-check "printc returned -ENOMEM"                       "$OUT/screen-printoom.txt" "printoom: FAIL printc result" absent
-check "print text not shown"                          "$OUT/screen-printoom.txt" "print got through" absent
-check "printc text not shown"                         "$OUT/screen-printoom.txt" "printc got through" absent
+check "print returned 0 with the heap full"           "$OUT/screen-printoom.txt" "printoom: FAIL print result" absent
+check "printc returned 0 with the heap full"          "$OUT/screen-printoom.txt" "printoom: FAIL printc result" absent
+check "print text shown"                              "$OUT/screen-printoom.txt" "print got through"
+check "printc text shown"                             "$OUT/screen-printoom.txt" "printc got through"
 check "old buffer contents not printed again"         "$OUT/good.txt"            "good=1" line
 check "printoom passed"                               "$OUT/screen-printoom.txt" "printoom: PASS"
 check "printoom finished"                             "$OUT/screen-printoom.txt" "printoom: done"

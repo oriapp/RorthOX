@@ -1,15 +1,15 @@
 /*
  * Print under heap pressure, for scripts/tests/print-oom.sh (only copied into the test image).
  *
- * The print and printc syscalls copy the user's string into a kernel buffer, and that copy borrows
- * one kernel heap block. With no free block left the copy fails: the kernel must then print nothing
- * and return -ENOMEM, instead of printing whatever its buffer held before.
+ * The print and printc syscalls copy the user's string into a buffer on the kernel stack through a
+ * checked copy that needs no kernel heap. So with the heap full they must still work: print the
+ * text and return 0, and never print whatever a kernel buffer held before.
  *
  * The program leaves exactly one free heap block and prints a line that ends up in the kernel's
  * print buffer ("printoom: last good line"). Then it takes that block too, checks from the heap
- * table that no block is free, and calls print and printc with other text. Neither text and no
- * second copy of the last good line may show up. Then it frees everything and prints the
- * syscall results.
+ * table that no block is free, and calls print and printc with other text. Both texts must show,
+ * and no second copy of the last good line. Then it frees everything and prints the
+ * syscall results. (Before the checked copy, the copy borrowed a heap block and failed here.)
  *
  * The free blocks are counted straight from the kernel's heap table at RORTHOX_HEAP_TABLE_ADDRESS.
  * That only works because user programs can read all memory today; it is a test-only shortcut.
@@ -173,14 +173,14 @@ int main(int argc, char **argv)
         return 1;
     }
     int failed = 0;
-    if (print_res != -ENOMEM)
+    if (print_res != 0)
     {
-        say("FAIL print result ", print_res, -ENOMEM);
+        say("FAIL print result ", print_res, 0);
         failed = 1;
     }
-    if (printc_res != -ENOMEM)
+    if (printc_res != 0)
     {
-        say("FAIL printc result ", printc_res, -ENOMEM);
+        say("FAIL printc result ", printc_res, 0);
         failed = 1;
     }
     if (!failed)
