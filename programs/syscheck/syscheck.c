@@ -184,8 +184,9 @@ static int command_test(const char *mode)
     free(memory); return 0;
 }
 
-/* Syscalls 1, 6 and 10 read their string through a checked copy: freed, unowned and
-   unterminated-at-the-end pointers give an error instead of a kernel fault or an overread. */
+/* Syscalls 0, 1, 3, 4, 5, 6 and 10 read their stack arguments through a checked copy, and 1, 6
+   and 10 their string too: a freed stack, and freed, unowned and unterminated-at-the-end string
+   pointers give an error instead of a kernel fault or an overread. */
 static int pointer_test(void)
 {
     int bad = 0;
@@ -194,6 +195,15 @@ static int pointer_test(void)
     if (!freed || !end) return 1;
     strcpy(freed, "syscheck: stale\n");
     free(freed);
+    /* ESP in the freed page (not present any more): every syscall must refuse its arguments.
+       malloc and load return 0 on any error. */
+    unsigned int sp = (unsigned int)freed + 64;
+    int sum = bad_stack(SYSCALL_SUM, sp), put = bad_stack(SYSCALL_PUTCHAR, sp);
+    int pr = bad_stack(SYSCALL_PRINT, sp), prc = bad_stack(SYSCALL_PRINTC, sp);
+    int fr = bad_stack(SYSCALL_FREE, sp), ma = bad_stack(SYSCALL_MALLOC, sp);
+    int ld = bad_stack(SYSCALL_PROCESS_LOAD_START, sp);
+    printf("syscheck: freed stack %i %i %i %i %i %i %i\n", sum, put, pr, prc, fr, ma, ld);
+    bad |= sum != -2 || put != -2 || pr != -2 || prc != -2 || fr != -2 || ma != 0 || ld != 0;
     int rc = print_result(freed);
     printf("syscheck: freed print %i\n", rc);
     bad |= rc >= 0;
@@ -201,6 +211,7 @@ static int pointer_test(void)
     printf("syscheck: outside print %i\n", rc);
     bad |= rc >= 0;
     bad |= printc_result((void *)0x800000, 2) >= 0;
+    /* Load returns 0 on every error, so this only shows that a freed path doesn't fault. */
     bad |= load_result(freed) != 0;
     memset(end, 'A', 4096);
     rc = print_result(end + 4096 - 8);
