@@ -35,8 +35,9 @@ Everything in this list is checked by `make test` or was run in QEMU.
   is) and flat binaries up to 1 MiB, loaded at 0x400000 and run in ring 3 with their own 16 KiB stack.
 - **Tasks:** 12 process slots, a round-robin task switch on every timer tick, command-line arguments passed to
   `main(argc, argv)`.
-- **Syscalls:** 11 calls through `int 0x80` (table below), with checked copies for the ones that write into or walk
-  user memory (arguments and command lists).
+- **Syscalls:** 11 calls through `int 0x80` (table below). Every argument and every string or list a syscall reads
+  from user memory goes through a checked copy: only memory the program owns and has mapped, so a bad pointer gives
+  the program an error instead of crashing the kernel.
 - **Console:** 80x25 VGA text with colours, scrolling and backspace across rows, and a kernel `printf`. Kernel debug
   output also goes to port 0xE9 (QEMU's `debugcon`).
 - **Keyboard:** PS/2 scancode set 1 with Shift symbols, Caps Lock and the keypad.
@@ -246,8 +247,8 @@ qemu-system-i386 -m 128 -drive file=bin/os.bin,format=raw,index=0,media=disk \
 make test
 ```
 
-This builds everything and runs 49 tests (`scripts/smoke.sh` plus every `scripts/tests/*.sh`); it keeps going after a
-failure and prints a summary (`49 passed, 0 failed, 0 skipped`). A full run takes about 10 minutes. `make smoke`
+This builds everything and runs 51 tests (`scripts/smoke.sh` plus every `scripts/tests/*.sh`); it keeps going after a
+failure and prints a summary (`51 passed, 0 failed, 0 skipped`). A full run takes about 10 minutes. `make smoke`
 runs only the smoke test, and `./scripts/run-tests.sh scripts/tests/panic.sh` runs single tests.
 
 The tests boot RorthOX headless in QEMU and drive it through the QEMU monitor: they type with `sendkey`, read the
@@ -261,11 +262,11 @@ where it matters) to check one function against every input. Tests that need ext
 |---|---|---|
 | Boot and CPU setup | `smoke`, `kernel-bss`, `descriptor-tables`, `idt-load`, `interrupt-count`, `pic`, `pit`, `kernel-headers` | the shell boots and runs a program with arguments; `.bss` is zero before C; GDT/TSS layout and limits; 256 IDT vectors; PIC remap and masks; PIT at 100 Hz and the tick order |
 | GRUB boot | `multiboot-header`, `grub-boot` | the Multiboot header fields and their bounds in `kernel.bin` (no QEMU needed); the ISO boots through the GRUB menu and runs `blank.elf`, and a second boot from a disk whose boot sector only loops checks through QEMU's gdbstub that the Multiboot entry, not the boot sector, sets up the GDT, segments and stack |
-| Exceptions and privilege | `exception-frames`, `exceptions`, `kernel-exceptions`, `panic`, `panic-screen`, `task-flags`, `tss-io` | one frame layout for every vector; a user fault ends only that program; kernel faults panic and stay halted; each task keeps its EFLAGS; ring 3 can't touch I/O ports |
+| Exceptions and privilege | `exception-frames`, `exceptions`, `kernel-exceptions`, `panic`, `panic-screen`, `task-flags`, `tss-io` | one frame layout for every vector; only the syscall and debugging gates are open to ring 3; a user fault ends only that program; kernel faults panic and stay halted; each task keeps its EFLAGS; ring 3 can't touch I/O ports |
 | Memory | `heap`, `heap-free`, `heap-oom`, `print-oom` | oversized requests fail; bad frees are ignored; running out of heap while starting a program is an error, not a crash |
 | Disk and FAT16 | `disk-read`, `fat-chain`, `fat-directory`, `fat-entry`, `fat-lookup`, `file-descriptors`, `file-read`, `path-release`, `open-oom` | ATA status checks; cluster chains; reserved and bad FAT values; lookups and seeks stay in bounds; every descriptor slot works; failed opens give their memory back |
-| Programs and processes | `elf-segments`, `elf-unwind`, `raw-program`, `load-unwind`, `process-release`, `task-list`, `syscall-path`, `program-arguments`, `command-arguments`, `argument-oom` | ELF segments get their own memory; bad ELF files are refused; raw programs must fit the load window; failed loads give everything back; finished programs free their memory; the task list stays linked; syscalls 6, 7 and 8 check their input |
-| Console, keyboard, user library | `tty-scroll`, `tty-backspace`, `printc`, `formatting`, `keyboard-burst`, `keyboard-scancode`, `keyboard-symbols`, `readline`, `strtok` | scrolling and backspace; colours; bounded formatting; no lost keys; the scancode table for every key with Shift and Caps; line editing; `strtok` |
+| Programs and processes | `elf-segments`, `elf-unwind`, `raw-program`, `load-unwind`, `process-release`, `task-list`, `syscall-path`, `program-arguments`, `command-arguments`, `argument-oom`, `user-pointers` | ELF segments get their own memory; bad ELF files are refused; raw programs must fit the load window; failed loads give everything back; finished programs free their memory; the task list stays linked; every syscall checks the user memory it reads or writes |
+| Console, keyboard, user library | `tty-scroll`, `tty-backspace`, `printc`, `formatting`, `keyboard-burst`, `keyboard-queue`, `keyboard-scancode`, `keyboard-symbols`, `readline`, `strtok` | scrolling and backspace; colours; bounded formatting; no lost keys; a full key queue keeps unread keys; the scancode table for every key with Shift and Caps; line editing; `strtok` |
 
 `grub-boot` needs the GRUB packages. Without them it is reported as skipped (`1 skipped` and a `SKIPPED:` line)
 instead of failing; `RORTHOX_REQUIRE_ISO=1 make test` turns that into a failure.
@@ -298,19 +299,15 @@ RorthOX is not a secure system. It has some targeted checks, but no real isolati
 program and the kernel.
 
 - **No process isolation.** Every task's page tables start with a read-only, user-readable identity map of all
-  4 GiB, so a program can read kernel memory and other programs' memory. Most IDT gates are DPL 3 (only the
-  error-code exceptions 8, 10-14, 17, 21, 29 and 30 are DPL 0), so a program can raise the timer or keyboard vector
-  with `int`. The TSS descriptor is DPL 3.
-- **Only syscalls 7 and 8 check user memory.** They read and write user memory through a checked copy (only memory
-  the process owns, present and user-accessible in its page tables, writable for writes). Syscalls 0, 1, 3, 4, 5, 6
-  and 10 still read their arguments directly: a pointer into memory the program has freed gives a kernel page fault,
-  which halts the machine. CR0.WP is off, and turning it on needs a change to how the interrupt stack is mapped.
+  4 GiB, so a program can read kernel memory and other programs' memory. CR0.WP is off, and turning it on needs a
+  change to how the interrupt stack is mapped. (The IDT gates and the TSS descriptor are DPL 0, except the syscall
+  and the `int3`/`into` debugging traps, so a program can't fake an IRQ or an exception.)
 - **Command length.** A command with more than 32 words (program name included) is refused. The shell doesn't print
   errors, so it just shows a new prompt.
 - **Resources.** There's no per-process memory limit: one program can take most of the kernel heap. Raw programs
   must be 1 byte to 1 MiB; ELF files get a kernel buffer as big as the file.
-- **Keyboard.** The per-process key queue has no full check, so unread keys get overwritten after 1024. Num Lock isn't
-  tracked (the keypad always types digits), and extended keys (arrows, Home, End and so on) type nothing.
+- **Keyboard.** The per-process key queue holds 1024 unread keys; more are dropped. Num Lock isn't tracked (the
+  keypad always types digits), and extended keys (arrows, Home, End and so on) type nothing.
 - **Filesystem.** FAT16 is read-only, 8.3 names only, and only the kernel can open files (there's no file syscall).
   A crafted disk image can make it scan for a long time; cluster chains aren't checked for loops.
 - **No FPU state per process.** x87 registers aren't saved or reset between tasks.
@@ -327,16 +324,12 @@ program and the kernel.
 
 Parts that are started but not finished:
 
-- **Checked user pointers everywhere:** syscalls 7 and 8 use a checked copy; 0, 1, 3, 4, 5, 6 and 10 don't yet.
-- **Isolation:** stop mapping all of memory into every process, make the IRQ gates and the TSS descriptor DPL 0,
-  and turn on CR0.WP.
+- **Isolation:** stop mapping all of memory into every process, and turn on CR0.WP.
 - **Writing files:** the VFS has write and append modes, but FAT16 refuses anything but read, and there are no file
   syscalls yet.
 - **Program lookup:** programs always come from `0:/`; a `PATH`-style lookup is still a TODO in the code.
 - **Sleeping:** `pit_sleep` is there, but kernel code can't use it until the tick stops switching tasks under it.
-- **Panic screen:** it shows the reason and location; the "Error description" and "More Information" parts are still
-  placeholders.
-- **Keyboard:** Num Lock, extended keys and a full check on the key queue.
+- **Keyboard:** Num Lock and extended keys.
 - **Real hardware:** never tried.
 
 ## Licence
