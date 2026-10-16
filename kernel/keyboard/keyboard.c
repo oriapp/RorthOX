@@ -74,6 +74,12 @@ void keyboard_push(char c)
         return;
     }
 
+    // A full queue drops the new key instead of overwriting one the program hasn't read yet.
+    if (process->keyboard.tail - process->keyboard.head >= (int)sizeof(process->keyboard.buffer))
+    {
+        return;
+    }
+
     int real_index = keyboard_get_tail_index(process);
     process->keyboard.buffer[real_index] = c;
     process->keyboard.tail++;
