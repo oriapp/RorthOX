@@ -12,7 +12,7 @@
 # 2. In the shell, flagtest.elf (flagstest.elf copied under an 8.3 name: the FAT16 driver has no
 #    long names) prints "flagstest: armed" and waits for a key, then spins until task_flags.py
 #    entry, attached after the key, releases it. It then sets CF PF AF ZF SF DF OF AC ID to four
-#    patterns and enters the timer vector with "int" (save, switch to the shell, come back through
+#    patterns and waits for a real timer tick (save, switch to the shell, come back through
 #    task_return), does the same around a syscall, and prints "flagstest: PASS" if every flag
 #    came back. Meanwhile task_flags.py breaks at interrupt_handler and isr80h_handler and checks
 #    that DF is clear on entry to C while the interrupted user code had DF set.

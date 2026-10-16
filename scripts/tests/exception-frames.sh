@@ -3,8 +3,8 @@
 # Every interrupt stub must hand the C code the same frame layout (struct interrupt_frame):
 # general registers, then an error code (the CPU's for vectors 8, 10-14, 17, 21, 29 and 30, a 0
 # pushed by the stub for every other vector and for the syscall stub), then eip, cs, eflags.
-# Only those error-code gates are DPL 0, so ring 3 can't enter them with "int n" (which pushes no
-# error code); every other gate stays DPL 3.
+# Only the syscall gate and the debugging traps #BP (3) and #OF (4) are DPL 3; every other gate is
+# DPL 0, so ring 3 can't enter it with "int n".
 #
 # QEMU starts stopped with its gdbstub on a Unix socket, on a copy of bin/os.bin. At the first
 # task_return, scripts/tests/lib/exceptions.py layout reads the IDT, then enters each of the 256
@@ -73,7 +73,7 @@ hash_after=$(image_hash)
 r="$OUT/layout.txt"
 check "debugger session finished without errors"                 "$OUT/status.txt" "exit=0" line
 check "every IDT gate points at its stub, kernel code selector"  "$r" "PASS idt_targets" line
-check "DPL 0 only on gates 8, 10-14, 17, 21, 29, 30"             "$r" "PASS idt_gate_dpl" line
+check "DPL 3 only on gates 3, 4 and the syscall"                 "$r" "PASS idt_gate_dpl" line
 check "all 256 stubs: vector, frame, error code, cr2 for C"      "$r" "PASS stub_frames" line
 check "syscall stub: command and frame (error code 0) for C"     "$r" "PASS syscall_frame" line
 check "syscall stub returns with the error code popped"          "$r" "PASS syscall_return" line

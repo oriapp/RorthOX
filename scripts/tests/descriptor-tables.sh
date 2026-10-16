@@ -106,7 +106,7 @@ check "GDTR limit is 6 * 8 - 1 = 0x2f"                  "$r" "PASS gdtr_limit" l
 check "null, code and data descriptors are the flat ones" "$r" "PASS flat_descriptors" line
 check "TSS descriptor base is the tss object"           "$r" "PASS tss_descriptor_base" line
 check "TSS descriptor limit 0x67, byte granularity"     "$r" "PASS tss_descriptor_limit" line
-check "TSS descriptor access 0xE9 before LTR"           "$r" "PASS tss_descriptor_access" line
+check "TSS descriptor access 0x89 before LTR"           "$r" "PASS tss_descriptor_access" line
 check "TSS descriptor bit 54 clear"                     "$r" "PASS tss_descriptor_bit54_clear" line
 check "tss_load gets the TSS selector"                  "$r" "PASS tss_load_selector" line
 check "TSS esp0 is the TSS stack top before LTR"        "$r" "PASS tss_esp0" line

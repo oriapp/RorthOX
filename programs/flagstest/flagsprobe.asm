@@ -23,9 +23,10 @@ wait_for_debugger:
     ret
 
 ; uint32_t flags_after_timer(uint32_t flags, uint32_t *before)
-; Sets the tested flags to <flags>, enters the timer vector with "int", which saves this task,
-; switches to the next one and later comes back through task_return, and returns EFLAGS as they
-; were right after that. *before gets EFLAGS as they were just before the int.
+; Sets the tested flags to <flags> and waits in a loop for a real timer interrupt (ring 3 can't
+; raise the timer vector with "int": its gate is DPL 0), which saves this task, switches to the
+; next one and later comes back through task_return. Returns EFLAGS as they were right after the
+; wait. *before gets EFLAGS as they were just before it. "loop" changes no flags.
 flags_after_timer:
     push ebp
     mov ebp, esp
@@ -39,7 +40,9 @@ flags_after_timer:
     popfd
     pushfd                      ; what popfd really set
     pop edx
-    int PIC_MASTER_VECTOR_BASE
+    mov ecx, 0x2000000          ; many timer ticks long under QEMU; mov changes no flags
+.wait_tick:
+    loop .wait_tick
     pushfd                      ; before anything can change a flag
     cld
     pop eax

@@ -8,8 +8,7 @@
 #   ud2    #UD, no error code             int3   #BP, a trap (must not resume after the int3)
 #   cli    #GP, error code 0              pf     #PF on a freed page, error 4, CR2 = the pointer
 #   int14  software "int 14" from ring 3: the gate is DPL 0, so #GP with error 0x72
-#   int18  software "int 18" from ring 3: the #MC gate is DPL 3 and only a software int reaches
-#          it (CR4.MCE is clear), so it must end the program like any other ring-3 exception
+#   int18  software "int 18" from ring 3: the #MC gate is DPL 0, so #GP with error 0x92 (18*8+2)
 #   in     "in al, 0x80" and "out 0x80, al" from ring 3: IOPL is 0 and the TSS has no I/O
 #   out    permission bitmap, so #GP with error 0 (not in the default cases: tss-io.sh runs them)
 #   in21 out20 inffff   the same for "in al, 0x21", "out 0x20, al" and "in al, dx" with dx 0xffff
@@ -187,11 +186,11 @@ run_fault() {
     local r="$D/catch.txt" s="$D/state.txt"
     check "$c: debugger session finished without errors"     "$D/catch-status.txt" "exit=0" line
     case "$c" in
-        int14) check "$c: entered the #GP stub (vector 13), not 14"  "$r" "PASS stub_vector" line ;;
+        int14 | int18) check "$c: entered the #GP stub (vector 13)"  "$r" "PASS stub_vector" line ;;
         *)     check "$c: entered the expected exception stub"         "$r" "PASS stub_vector" line ;;
     esac
     case "$c" in
-        cli | pf | int14 | in | out | in21 | out20 | inffff) check "$c: CPU error code as expected"     "$r" "PASS cpu_error_code" line ;;
+        cli | pf | int14 | int18 | in | out | in21 | out20 | inffff) check "$c: CPU error code as expected"     "$r" "PASS cpu_error_code" line ;;
     esac
     [ "$c" = pf ] && check "$c: CR2 is the freed pointer"             "$r" "PASS cpu_cr2" line
     [ "$c" = inffff ] && check "$c: DX held port 0xffff at the fault"   "$r" "PASS io_port" line

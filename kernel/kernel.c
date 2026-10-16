@@ -49,7 +49,7 @@ struct gdt_structured gdt_structured[RORTHOX_TOTAL_GDT_SEGMENTS] = {
     {.base = 0x00, .limit = 0xffffffff, .type = 0x92},              // Kernel Data Segment
     {.base = 0x00, .limit = 0xffffffff, .type = 0xF8},              // User Code Segment
     {.base = 0x00, .limit = 0xffffffff, .type = 0xF2},              // User Data Segment
-    {.base = (uint32_t)&tss, .limit = sizeof(tss) - 1, .type = 0xE9},   // TSS Segment
+    {.base = (uint32_t)&tss, .limit = sizeof(tss) - 1, .type = 0x89},   // TSS Segment (DPL 0: only the CPU uses it)
 };
 
 _Static_assert(KERNEL_CODE_SELECTOR == 1 * 8, "kernel code selector must match GDT slot 1");

@@ -4,12 +4,12 @@ QEMU waits at reset.
 1. Break at gdt_load when kernel_main calls it and run it to its return address. The GDTR must hold
    the base of gdt_real and the inclusive limit 6 * 8 - 1 = 0x2f. The five code/data/null
    descriptors in memory must be exactly the flat ones, and the TSS descriptor must describe the tss
-   object: base, limit 0x67 (104 bytes - 1), byte granularity, access 0xE9 and bit 54 clear.
+   object: base, limit 0x67 (104 bytes - 1), byte granularity, access 0x89 (DPL 0) and bit 54 clear.
 2. Break at tss_load: before LTR the TSS must already hold esp0 (the TSS stack top), ss0 (the kernel
    data selector) and an I/O map base of 104 (past the limit, so there is no I/O bitmap and ring 3
    port I/O faults). Every other byte is 0.
 3. Run tss_load to its return address. TR must hold the TSS selector, the base of tss and the limit
-   0x67, and the descriptor in memory must now be busy (type 11, access 0xEB). QEMU's cached TR
+   0x67, and the descriptor in memory must now be busy (type 11, access 0x8B). QEMU's cached TR
    flags are not checked for busy: it loads the cache before it marks the descriptor in memory.
 Then the debugger detaches so the OS boots on.
 
@@ -91,7 +91,7 @@ def main():
         res.add("tss_descriptor_base", base == tss, "base %#x, tss at %#x" % (base, tss))
         res.add("tss_descriptor_limit", limit == 0x67 and not flags & 0x80,
                 "limit %#x, granularity %s, expected 0x67 in bytes" % (limit, "4 KiB" if flags & 0x80 else "byte"))
-        res.add("tss_descriptor_access", access == 0xE9, "access %#x, expected 0xe9" % access)
+        res.add("tss_descriptor_access", access == 0x89, "access %#x, expected 0x89" % access)
         res.add("tss_descriptor_bit54_clear", not flags & 0x40, "byte 6 flags %#x: bit 54 set" % flags)
 
         # 2. tss_load: the TSS before LTR
@@ -121,7 +121,7 @@ def main():
         res.add("tr_base", regs["tr_base"] == tss, "TR base %#x, tss at %#x" % (regs["tr_base"], tss))
         res.add("tr_limit", regs["tr_limit"] == 0x67, "TR limit %#x, expected 0x67" % regs["tr_limit"])
         d = r.read(gdt_real + tss_sel, 8)
-        res.add("tss_descriptor_busy", d[5] == 0xEB, "access byte in memory %#x, expected 0xeb (busy)" % d[5])
+        res.add("tss_descriptor_busy", d[5] == 0x8B, "access byte in memory %#x, expected 0x8b (busy)" % d[5])
         r.detach()
     except (RspError, OSError, KeyError) as e:
         res.add("session", False, str(e))

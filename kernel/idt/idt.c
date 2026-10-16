@@ -45,18 +45,6 @@ void pic_send_eoi(int interrupt)
     }
 }
 
-// Vectors where the CPU pushes an error code. idt.asm has the same list.
-static int idt_has_error_code(int interrupt)
-{
-    switch (interrupt)
-    {
-        case 8: case 10: case 11: case 12: case 13: case 14: case 17: case 21: case 29: case 30:
-            return 1;
-    }
-
-    return 0;
-}
-
 // Set once a fatal exception is being reported. Anything that comes in after that just halts.
 static volatile int exception_fatal = 0;
 
@@ -167,9 +155,11 @@ void idt_set(int interrupt_no, void *address)
     desc->offset_1 = (uint32_t) address & 0x0000ffff;
     desc->selector = KERNEL_CODE_SELECTOR;
     desc->zero = 0x00;
-    // 0xEE: present, DPL 3, 32-bit interrupt gate. Error code vectors get DPL 0 (0x8E):
-    // a software int from ring 3 pushes no error code, so it gets #GP instead.
-    desc->type_attr = idt_has_error_code(interrupt_no) ? 0x8E : 0xEE;
+    // 32-bit interrupt gates. Only the syscall and the debugging traps #BP (int3) and #OF (into)
+    // are DPL 3 (0xEE); every other gate is DPL 0 (0x8E), so a software "int n" from ring 3
+    // gets #GP instead of faking an IRQ or an exception.
+    int user_gate = interrupt_no == RORTHOX_SYSCALL_VECTOR || interrupt_no == 3 || interrupt_no == 4;
+    desc->type_attr = user_gate ? 0xEE : 0x8E;
     desc->offset_2 = (uint32_t) address >> 16;
 }
 

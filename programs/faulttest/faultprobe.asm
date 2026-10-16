@@ -46,8 +46,8 @@ fault_int14:
     int 14
     ret
 
-; void fault_int18(void): software "int 18". Gate 18 (#MC) keeps DPL 3 and CR4.MCE is clear,
-; so only a software int can reach it. From ring 3 it must end the program, not halt the kernel
+; void fault_int18(void): software "int 18". Gate 18 (#MC) has DPL 0, so ring 3 gets
+; #GP with error code 18*8+2 = 0x92 and the program ends
 fault_int18:
     int 18
     ret

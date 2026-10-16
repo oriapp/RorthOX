@@ -111,7 +111,7 @@ CASES = {
     "cli":   ([13],          13,   0,      3,   b"\xfa"),
     "pf":    ([14],          14,   0x4,    3,   b"\x8b\x00"),
     "int14": ([13, 14],      13,   0x72,   3,   b"\xcd\x0e"),
-    "int18": ([18],          18,   None,   3,   b"\xcd\x12"),
+    "int18": ([13, 18],      13,   0x92,   3,   b"\xcd\x12"),
     "in":    ([13],          13,   0,      3,   b"\xe4\x80"),   # in al, 0x80
     "out":   ([13],          13,   0,      3,   b"\xe6\x80"),   # out 0x80, al
     "in21":  ([13],          13,   0,      3,   b"\xe4\x21"),   # in al, 0x21
@@ -171,7 +171,7 @@ def catch_mode(sock, map_path, result_path, ready_path, case):
         cr = r.control_registers()
         print("  cpu cr2 0x%08x" % cr["cr2"], flush=True)
         if insn is not None:
-            if case in ("int3", "int18"):   # traps: the saved eip is after the instruction
+            if case == "int3":   # a trap: the saved eip is after the instruction
                 at = r.read(f_eip - len(insn), len(insn))
             else:
                 at = r.read(f_eip, len(insn))
@@ -317,7 +317,7 @@ def layout_mode(sock, map_path, result_path):
         if r.cont(60) != task_return:
             raise RspError("did not stop at task_return")
 
-        # IDT gates: present, ring 0 code selector, the right stub, DPL 0 only on the error-code vectors.
+        # IDT gates: present, ring 0 code selector, the right stub, DPL 3 only on #BP, #OF and the syscall.
         idt = r.read(SYMBOLS["idt_descriptors"], total * 8)
         bad_attr, bad_target = [], []
         for v in range(total):
@@ -325,7 +325,7 @@ def layout_mode(sock, map_path, result_path):
             target = SYMBOLS["isr80h_wrapper"] if v == syscall else stub(v)
             if (hi << 16 | lo) != target or sel != kernel_cs:
                 bad_target.append(v)
-            want = 0x8E if v in ERROR_VECTORS else 0xEE
+            want = 0xEE if v in (3, 4, syscall) else 0x8E
             if attr != want:
                 bad_attr.append("%d:%#x/%#x" % (v, attr, want))
         RES.add("idt_targets", not bad_target, "vectors %s" % bad_target[:8])
