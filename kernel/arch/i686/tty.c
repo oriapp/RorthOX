@@ -173,7 +173,7 @@ void terminal_initialize(vga_color_t bg_colour)
             const size_t index = y * VGA_WIDTH + x; // x and y cordinate to into index
             video_mem[index] = vga_entry(0x00, terminal_color);
 
-            char copyright[] = "All rights reserved | R C N";
+            char copyright[] = "Copyright (C) R C N, GPL-2.0";
             if ((x < sizeof(copyright) / sizeof(char)) && y == 0)
             {
                 (video_mem[index] = vga_entry(copyright[x], terminal_color));

@@ -227,7 +227,7 @@ static void m_print(const char *s)
 // The screen terminal_initialize(red) leaves: NUL characters, the copyright on row 0, position (0,1).
 static void m_start(void)
 {
-    static const char copyright[] = "All rights reserved | R C N";
+    static const char copyright[] = "Copyright (C) R C N, GPL-2.0";
     for (int i = 0; i < CELLS; i++)
     {
         want[i] = PANIC_ATTR << 8;
@@ -327,7 +327,7 @@ static void run_panic(const char *msg, const char *file, int line)
     }
     char row0[COLS + 1];
     row_text(0, row0);
-    if (strcmp(row0, "All rights reserved | R C N") != 0)
+    if (strcmp(row0, "Copyright (C) R C N, GPL-2.0") != 0)
     {
         BAD("row 0 is \"%s\", not the copyright line", row0);
     }

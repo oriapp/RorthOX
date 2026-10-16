@@ -64,7 +64,7 @@ check "interrupts off"                     "$OUT/state.txt"    "interrupts off" 
 check "NMI: CPU halted again"              "$OUT/state.txt"    "halted after nmi" line
 check "NMI: interrupts still off"          "$OUT/state.txt"    "interrupts off after nmi" line
 check "NMI: back in PAUSE"                 "$OUT/state.txt"    "in PAUSE after nmi" line
-check "screen: copyright row kept"         "$S" "All rights reserved | R C N" line
+check "screen: copyright row kept"         "$S" "Copyright (C) R C N, GPL-2.0" line
 check "screen: advice kept"                "$S" "Disable BIOS memory options such as caching or shadowing." line
 check "screen: issue URL kept"             "$S" "Finally, if all else failes, go to https://github.com/oriapp/RorthOX/issues" line
 check "screen: reason shown"               "$S" "Reason: Failed to load shell.elf" line
