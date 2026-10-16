@@ -333,6 +333,11 @@ int process_count_command_arguments(struct command_argument *root_argument)
     int i = 0;
     while (current)
     {
+        if (i >= RORTHOX_MAX_COMMAND_ARGUMENTS ||
+            strnlen(current->argument, sizeof(current->argument)) == sizeof(current->argument))
+        {
+            return -EINVARG;
+        }
         i++;
         current = current->next;
     }
@@ -351,6 +356,11 @@ int process_inject_arguments(struct process *process, struct command_argument *r
     struct command_argument *current = root_argument;
     int i = 0;
     int argc = process_count_command_arguments(root_argument);
+    if (argc < 0)
+    {
+        res = argc;
+        goto out;
+    }
     if (argc == 0)
     {
         res = -EIO;

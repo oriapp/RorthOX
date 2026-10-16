@@ -6,7 +6,8 @@
  * blank.elf (syscall 7). Loading blank.elf allocates, in this order (in 4 KiB blocks, E = blocks
  * of the whole blank.elf file, D = blocks of its segment memory):
  *
- *   command node 1 (user malloc before the syscall), process 3, ELF object 1, parsed path 3
+ *   command node 1 (user malloc before the syscall), bounded snapshot SNAPSHOT_BLOCKS,
+ *   process 3, ELF object 1, parsed path 3
  *   (root 1, name 1, path part 1; freed when fopen returns), file descriptors 4 (FAT descriptor 1,
  *   FAT item 1, copy of the directory entry 1, file descriptor 1; freed again by fclose),
  *   ELF file E, segment memory D (the pointer array, then one zeroed allocation per loaded
@@ -22,6 +23,9 @@
  * after the file) no block of the run stays free, so the second page table is the first
  * allocation past 12 + E + D blocks. The test script works out E, D and H from the program
  * headers of blank.elf (scripts/tests/lib/elfblocks.py) and stops if H > 2.
+ *
+ * The bounded command snapshot stays allocated throughout loading; add its derived block
+ * cost to every budget, including the open/ELF/paging cases. It is freed before return.
  *
  * So the number of free blocks picks which allocation is the first to fail. The kernel must
  * return an error instead of crashing, and must give back everything the failed load allocated:
@@ -59,6 +63,7 @@
 #define TOTAL_BLOCKS (RORTHOX_HEAP_SIZE_BYTES / RORTHOX_HEAP_BLOCK_SIZE)
 #define TABLE ((const volatile unsigned char *)RORTHOX_HEAP_TABLE_ADDRESS)
 #define MAX_PLUGS 64
+#define SNAPSHOT_BLOCKS ((RORTHOX_MAX_COMMAND_ARGUMENTS * sizeof(struct command_argument) + BLOCK - 1) / BLOCK)
 
 // say() leaves out a number that is NONE
 #define NONE -1000000
@@ -238,7 +243,7 @@ int main(int argc, char **argv)
         say(c->name, "done", NONE, NONE);
         return 1;
     }
-    int want_free = c->free_base + c->free_per_e * e + c->free_per_d * d;
+    int want_free = c->free_base + c->free_per_e * e + c->free_per_d * d + SNAPSHOT_BLOCKS;
     int want_kept = c->kept_base + c->kept_per_e * e;
 
     struct command_argument *command = 0;

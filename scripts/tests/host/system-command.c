@@ -69,9 +69,9 @@ static struct process *setup(int is_elf, struct host_snapshot *before)
     // like user memory in the identity map).
     for (int i = 0; i < ARGS; i++)
     {
-        nodes[i] = kzalloc(sizeof(struct command_argument));
+        nodes[i] = process_malloc(caller, sizeof(struct command_argument));
     }
-    uint32_t *stack = kzalloc(64);
+    uint32_t *stack = process_malloc(caller, 64);
     if (!nodes[0] || !nodes[1] || !nodes[2] || !stack)
     {
         printf("setup: no memory\n");

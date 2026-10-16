@@ -18,17 +18,24 @@ run_syscheck() {
     type_line "syscheck.elf $mode"
     wait_screen "syscheck: armed" 20 || return 1
     qemu_cmd 'sendkey a'
+    case "$mode" in
+        cmdbad|cmdself|cmdtwo|cmdfree*)
+            wait_screen 'syscheck: key' 120 || return 1
+            check "$mode no child" "$out/screen.txt" 'syscheck: child' absent
+            qemu_cmd 'sendkey k'
+            ;;
+    esac
     wait_screen 'syscheck: continued' 120 || return 1
     case "$expected" in
-        'raw: ran') wait_screen "$expected" 20 || return 1 ;;
+        'syscheck: child PASS'|'raw: ran') wait_screen "$expected" 20 || return 1 ;;
     esac
     check "$mode result" "$out/screen.txt" "$expected"
     case "$mode" in
-        free*) check "$mode rejection" "$out/screen.txt" 'syscheck: freed result -2' ;;
+        free*|cmdfree*) check "$mode rejection" "$out/screen.txt" 'syscheck: freed result -2' ;;
     esac
     check "$mode no panic" "$out/debugcon.log" '[PANIC]' absent
     local exits=1
-    case "$expected" in 'raw: ran') exits=2;; esac
+    case "$expected" in 'syscheck: child PASS'|'raw: ran') exits=2;; esac
     wait_exits "$exits" || return 1
     # A fresh positive control proves the shell/keyboard survived, not just the caller.
     type_line 'blank.elf recovery'

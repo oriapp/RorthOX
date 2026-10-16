@@ -27,6 +27,11 @@ struct command_argument
     struct command_argument *next;    
 };
 
+_Static_assert(RORTHOX_MAX_COMMAND_ARGUMENTS > 0 && RORTHOX_MAX_COMMAND_ARGUMENTS < RORTHOX_MAX_PROGRAM_ALLOCATIONS,
+    "command arguments must leave an allocation slot for argv");
+_Static_assert(RORTHOX_MAX_COMMAND_ARGUMENTS <= (UINT32_MAX - (PAGING_PAGE_SIZE - 1)) / sizeof(struct command_argument),
+    "command snapshot and its page rounding must fit the allocation size");
+
 struct process_arguments
 {
     int argc;
@@ -76,9 +81,11 @@ void *process_malloc(struct process *process, size_t size);
 void process_free(struct process *process, void *ptr);
 // Store the exact remaining owned bytes at address in *available, without page rounding.
 int process_user_span(struct process *process, uint32_t address, int write, uint32_t *available);
+// Argument lists passed to the injector and loader must be trusted kernel nodes.
 int process_inject_arguments(struct process *process, struct command_argument *root_argument);
 void process_get_arguments(struct process *process, int *argc, char ***argv);
 int process_load(const char *filename, struct process **process);
+// A NULL list means no injected arguments; non-NULL lists contain trusted kernel nodes.
 int process_load_with_arguments(const char *filename, struct process **process, struct command_argument *root_argument);
 int process_load_switch(const char *filename, struct process **process);
 int process_load_for_slot(const char *filename, struct process **process, int process_slot);

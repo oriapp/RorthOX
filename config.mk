@@ -50,6 +50,8 @@ SYSCALL_PRINTC = 10
 
 # Bytes in the kernel/user command-argument field (including the terminator)
 COMMAND_ARGUMENT_SIZE = 512
+# Includes the program name.
+MAX_COMMAND_ARGUMENTS = 32
 
 # Display identity and guest RAM (MiB)
 RORTHOX_NAME = RorthOX
