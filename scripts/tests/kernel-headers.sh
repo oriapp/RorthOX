@@ -8,11 +8,11 @@
 # Compile checks only (i686-elf-gcc with the kernel's FLAGS from the Makefile, -Werror), no QEMU:
 #   guard       pit.h included twice defines _KERNEL_TIME_PIT
 #   pit-tty     pit.h then tty.h, and tty.h then pit.h, compile without warnings: the five
-#   tty-pit     terminal variables in tty.h give no unused-variable warning
+#   tty-pit     terminal state stays in tty.c, not in files including tty.h
 #   warning     a file that includes tty.h and then has an unused static and an unused local still
 #               gets both unused-variable warnings
-#   state       the five terminal variables keep their names and types, and stay file-local (no
-#               global symbol in an object that includes tty.h)
+#   state       the five terminal variables keep their names and types, and stay file-local in
+#               tty.c; an object that includes only tty.h contains no terminal state
 #   pragma      tty.h has no "#pragma GCC diagnostic" left
 #   unit        pit.h declares pit_sleep(int sec) and says the unit is seconds
 #
@@ -90,7 +90,7 @@ if [ "$r" = error ] && grep -q "unrelated_unused_static.*unused-variable" "$OUT/
 fi
 
 cat > "$OUT/state.c" << 'EOF'
-#include "include/kernel/tty.h"
+#include "arch/i686/tty.c"
 #define SAME_TYPE(x, t) _Static_assert(__builtin_types_compatible_p(__typeof__(x), t), #x " has the wrong type")
 SAME_TYPE(video_mem, volatile uint16_t *);
 SAME_TYPE(terminal_row, uint16_t);
@@ -112,7 +112,11 @@ sed 's/^/    /' "$OUT/state.log"
 if [ "$r" = ok ]; then
     i686-elf-nm "$OUT/state.o" > "$OUT/state-nm.txt"
     sed 's/^/    /' "$OUT/state-nm.txt"
-    if ! grep -qE ' [A-Z] (video_mem|terminal_row|terminal_col|terminal_color|termianl_background_color)$' "$OUT/state-nm.txt"; then
+    names='(video_mem|terminal_row|terminal_col|terminal_color|termianl_background_color)$'
+    i686-elf-nm "$OUT/tty-pit.o" > "$OUT/header-nm.txt"
+    if [ "$(grep -cE " [bd] $names" "$OUT/state-nm.txt")" = 5 ] &&
+        ! grep -qE " [A-Z] $names" "$OUT/state-nm.txt" &&
+        ! grep -qE " $names" "$OUT/header-nm.txt"; then
         echo "PASS state" >> "$OUT/results.txt"
     fi
 fi
@@ -132,7 +136,7 @@ check "pit.h defines its include guard"                          "$R" "PASS guar
 check "pit.h then tty.h: no warning"                             "$R" "PASS pit-tty" line
 check "tty.h then pit.h: no warning"                             "$R" "PASS tty-pit" line
 check "unused-variable warnings still on after tty.h"            "$R" "PASS warning" line
-check "terminal variables keep names and types, file-local"     "$R" "PASS state" line
+check "terminal state local to tty.c, absent from header objects"     "$R" "PASS state" line
 check "no #pragma GCC diagnostic in tty.h"                       "$R" "PASS pragma" line
 check "pit_sleep(int sec) declared, unit seconds documented"    "$R" "PASS unit" line
 if [ "$failures" -ne 0 ]; then

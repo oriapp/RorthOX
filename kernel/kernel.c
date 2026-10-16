@@ -1,7 +1,6 @@
 #include <kernel.h>
 #include <stdint.h>
 #include <stddef.h>
-// #include "../libc/include/stdio.h" // Should not use that.
 #include "include/kernel/tty.h" // Use that.
 #include "include/kernel/sys.h" // Use that.
 #include "include/kernel/time/pit.h"

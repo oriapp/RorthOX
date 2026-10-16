@@ -15,6 +15,11 @@
 
 int terminal_count = 0;
 static int cursor_pos;
+static volatile uint16_t *video_mem = 0;
+static uint16_t terminal_row = 0;
+static uint16_t terminal_col = 0;
+static uint8_t terminal_color = 0;
+static uint8_t termianl_background_color = 0;
 
 void checkIndent();
 

@@ -11,14 +11,6 @@ extern "C" {
 #endif
 
 
-// Per-translation-unit copies retained for the unfinished libc dependency.
-// The active terminal uses the copy included by tty.c.
-static volatile uint16_t *video_mem __attribute__((unused)) = 0;
-static uint16_t terminal_row __attribute__((unused)) = 0;
-static uint16_t terminal_col __attribute__((unused)) = 0;
-static uint8_t terminal_color __attribute__((unused)) = 0;
-static uint8_t termianl_background_color __attribute__((unused)) = 0;
-
 void terminal_putchar(int x, int y, char c, char colour);
 void terminal_backspace();
 void terminal_writechar(char c, char colour);
