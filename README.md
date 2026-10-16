@@ -343,5 +343,3 @@ Parts that are started but not finished:
 
 RorthOX is licensed under the GNU General Public License v2.0, see [LICENSE](LICENSE).
 Copyright (C) R C N.
-
-Started from the PeachOS course by Daniel McCarthy.
