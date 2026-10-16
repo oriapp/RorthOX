@@ -90,6 +90,68 @@ out_err:
     return 0;
 }
 
+_Static_assert(RORTHOX_HEAP_ADDRESS >= RORTHOX_PROGRAM_VIRTUAL_ADDRESS_LIMIT,
+    "heap allocations must not overlap the program window or user stack");
+_Static_assert(RORTHOX_HEAP_BLOCK_SIZE == PAGING_PAGE_SIZE,
+    "heap blocks must match pages to keep allocation ownership separate");
+
+static int process_region_span(uint32_t address, uint32_t start, uint32_t size, uint32_t *available)
+{
+    if (address < start || address - start >= size)
+    {
+        return -EINVARG;
+    }
+
+    *available = size - (address - start);
+    return 0;
+}
+
+int process_user_span(struct process *process, uint32_t address, int write, uint32_t *available)
+{
+    if (!process || !address || !available)
+    {
+        return -EINVARG;
+    }
+
+    if (process->stack && process_region_span(address, RORTHOX_PROGRAM_VIRTUAL_STACK_ADDRESS_END,
+        USER_PROGRAM_STACK_SIZE, available) == 0)
+    {
+        return 0;
+    }
+
+    for (int i = 0; i < RORTHOX_MAX_PROGRAM_ALLOCATIONS; i++)
+    {
+        struct process_allocation *allocation = &process->allocations[i];
+        if (allocation->ptr && process_region_span(address, (uint32_t)allocation->ptr,
+            allocation->size, available) == 0)
+        {
+            return 0;
+        }
+    }
+
+    if (process->filetype == PROCESS_FILETYPE_BINARY)
+    {
+        return process_region_span(address, RORTHOX_PROGRAM_VIRTUAL_ADDRESS, process->size, available);
+    }
+    if (process->filetype == PROCESS_FILETYPE_ELF && process->elf_file)
+    {
+        struct elf_file *file = process->elf_file;
+        struct elf_header *header = elf_header(file);
+        for (unsigned int i = 0; i < file->segment_count; i++)
+        {
+            struct elf32_phdr *phdr = elf_program_header(header, i);
+            // Only exact bytes of an owned segment count, not page padding or gaps.
+            if (phdr->p_type == PT_LOAD && file->segment_memory[i] && (!write || (phdr->p_flags & PF_W)) &&
+                process_region_span(address, phdr->p_vaddr, phdr->p_memsz, available) == 0)
+            {
+                return 0;
+            }
+        }
+    }
+
+    return -EINVARG;
+}
+
 static bool process_is_process_pointer(struct process *process, void *ptr)
 {
     for (int i = 0; i < RORTHOX_MAX_PROGRAM_ALLOCATIONS; i++)

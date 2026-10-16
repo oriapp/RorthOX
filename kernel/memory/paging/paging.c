@@ -203,6 +203,36 @@ void *paging_get_physical_address(uint32_t *directory, void *virt)
     return (void*)((paging_get(directory, virt_addr_new) & 0xFFFFF000) + difference);
 }
 
+int paging_user_translate(uint32_t *directory, uint32_t address, int write, void **physical)
+{
+    if (!directory || !physical)
+    {
+        return -EINVARG;
+    }
+
+    // Both levels must permit user access; only 4 KiB page tables are supported.
+    uint32_t required = PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL;
+    if (write)
+    {
+        required |= PAGING_IS_WRITEABLE;
+    }
+    uint32_t entry = directory[address >> 22];
+    if ((entry & required) != required || (entry & PAGING_PAGE_SIZE_FLAG))
+    {
+        return -EINVARG;
+    }
+
+    uint32_t *table = (uint32_t*)(entry & 0xFFFFF000);
+    entry = table[(address >> 12) & 0x3FF];
+    if ((entry & required) != required)
+    {
+        return -EINVARG;
+    }
+
+    *physical = (void*)((entry & 0xFFFFF000) | (address & (PAGING_PAGE_SIZE - 1)));
+    return 0;
+}
+
 uint32_t paging_get(uint32_t *directory, void *virt)
 {
     uint32_t directory_index = 0;

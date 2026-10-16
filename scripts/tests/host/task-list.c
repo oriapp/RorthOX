@@ -43,6 +43,10 @@ int paging_set(uint32_t *directory, void *virt, uint32_t val) { return 0; }
 int paging_map(struct paging_4gb_chunk *directory, void *virt, void *phys, int flags) { return 0; }
 uint32_t paging_get(uint32_t *directory, void *virt) { return 0; }
 void *paging_get_physical_address(uint32_t *directory, void *virt) { return virt; }
+/* User copies are tested with real ownership and a mapping model elsewhere.
+   A list-only case must never enter those paths. */
+int process_user_span(struct process *p, uint32_t a, int w, uint32_t *n) { exit(4); }
+int paging_user_translate(uint32_t *d, uint32_t a, int w, void **p) { exit(4); }
 void kernel_page() {}
 void user_registers() {}
 void task_return(struct registers *regs) { exit(4); }

@@ -1,4 +1,4 @@
-FILES=./build/syscheck.o
+FILES=./build/syscheck.o ./build/probe.o
 CONFIG_DIR ?= $(abspath ../../build/config)
 # The kernel directory is only for config.h (the heap geometry).
 INCLUDES= -I ../stdlib/src -I$(CONFIG_DIR) -I ../../kernel
@@ -10,6 +10,9 @@ all: ./build/syscheck.elf
 
 ./build/syscheck.o: ./syscheck.c $(CONFIG_DIR)/rorthox-config.h
 	i686-elf-gcc ${INCLUDES} -I./ $(FLAGS) -std=gnu99 -c ./syscheck.c -o ./build/syscheck.o
+
+./build/probe.o: ./probe.asm $(CONFIG_DIR)/rorthox-config.inc
+	nasm -I$(CONFIG_DIR)/ -f elf ./probe.asm -o ./build/probe.o
 
 .PHONY: all clean
 

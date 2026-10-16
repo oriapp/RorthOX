@@ -74,6 +74,8 @@ struct process
 int process_switch(struct process *process);
 void *process_malloc(struct process *process, size_t size);
 void process_free(struct process *process, void *ptr);
+// Store the exact remaining owned bytes at address in *available, without page rounding.
+int process_user_span(struct process *process, uint32_t address, int write, uint32_t *available);
 int process_inject_arguments(struct process *process, struct command_argument *root_argument);
 void process_get_arguments(struct process *process, int *argc, char ***argv);
 int process_load(const char *filename, struct process **process);

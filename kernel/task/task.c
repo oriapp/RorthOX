@@ -181,6 +181,91 @@ void task_save_state(struct task *task, struct interrupt_frame *frame)
     task->registers.esi = frame->esi;
 }
 
+static int task_user_fragment(struct task *task, uint32_t address, uint32_t remaining,
+    int write, void **physical, uint32_t *size)
+{
+    uint32_t available = 0;
+    int res = process_user_span(task->process, address, write, &available);
+    if (res < 0)
+    {
+        return res;
+    }
+    res = paging_user_translate(task->page_directory->directory_entry, address, write, physical);
+    if (res < 0)
+    {
+        return res;
+    }
+
+    uint32_t page_remaining = PAGING_PAGE_SIZE - (address & (PAGING_PAGE_SIZE - 1));
+    *size = remaining;
+    if (*size > available)
+    {
+        *size = available;
+    }
+    if (*size > page_remaining)
+    {
+        *size = page_remaining;
+    }
+    return 0;
+}
+
+// Kernel CR3 and IF=0 keep ownership and mappings stable across both passes.
+static int task_copy_user(struct task *task, uint32_t address, void *buffer, uint32_t size, int write)
+{
+    if (!task || !task->process || !task->page_directory || !buffer || !address || !size ||
+        size - 1 > UINT32_MAX - address)
+    {
+        return -EINVARG;
+    }
+
+    // Preflight every byte before changing either destination.
+    for (int copy = 0; copy < 2; copy++)
+    {
+        uint32_t remaining = size;
+        uint32_t current = address;
+        char *position = buffer;
+        while (remaining)
+        {
+            void *physical = 0;
+            uint32_t fragment = 0;
+            int res = task_user_fragment(task, current, remaining, write, &physical, &fragment);
+            if (res < 0)
+            {
+                return res;
+            }
+            if (copy)
+            {
+                if (write)
+                {
+                    memcpy(physical, position, fragment);
+                }
+                else
+                {
+                    memcpy(position, physical, fragment);
+                }
+            }
+            remaining -= fragment;
+            if (remaining)
+            {
+                current += fragment;
+                position += fragment;
+            }
+        }
+    }
+
+    return 0;
+}
+
+int task_copy_from_user(struct task *task, void *destination, uint32_t source, uint32_t size)
+{
+    return task_copy_user(task, source, destination, size, 0);
+}
+
+int task_copy_to_user(struct task *task, uint32_t destination, const void *source, uint32_t size)
+{
+    return task_copy_user(task, destination, (void*)source, size, 1);
+}
+
 int copy_string_from_task(struct task *task, void *virtual, void *phys, int max)
 {
     if (max >= PAGING_PAGE_SIZE)

@@ -77,10 +77,21 @@ void *isr80h_command7_invoke_system_command(struct interrupt_frame *frame)
 
 void *isr80h_command8_get_program_arguments(struct interrupt_frame *frame)
 {
-    struct process *process = task_current()->process;
-    struct process_arguments *arguments = task_virtual_address_to_physical(task_current(), task_get_stack_item(task_current(), 0));
+    struct task *task = task_current();
+    uint32_t destination = 0;
+    int res = task_copy_from_user(task, &destination, task->registers.esp, sizeof(destination));
+    if (res < 0)
+    {
+        return ERROR(res);
+    }
 
-    process_get_arguments(process, &arguments->argc, &arguments->argv);
+    struct process_arguments arguments = {0};
+    process_get_arguments(task->process, &arguments.argc, &arguments.argv);
+    res = task_copy_to_user(task, destination, &arguments, sizeof(arguments));
+    if (res < 0)
+    {
+        return ERROR(res);
+    }
 
     return 0;
 }

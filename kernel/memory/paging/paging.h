@@ -8,6 +8,7 @@
 extern "C" {
 #endif
 
+#define PAGING_PAGE_SIZE_FLAG 0b10000000  // PS - Large page in a directory entry
 #define PAGING_CACHE_DISABLED 0b00010000  // C - Cache Disables
 #define PAGING_WRITE_THROUGH 0b00001000   // W - Write Through
 #define PAGING_ACCESS_FROM_ALL 0b00000100 // U - User/Supervisor
@@ -38,6 +39,7 @@ int paging_map(struct paging_4gb_chunk *direcotry, void *virt, void *phys, int f
 void *paging_align_to_lower_page(void *addr);
 void *paging_align_address(void *ptr);
 void *paging_get_physical_address(uint32_t *directory, void *virt);
+int paging_user_translate(uint32_t *directory, uint32_t address, int write, void **physical);
 uint32_t paging_get(uint32_t *direcotry, void *virt);
 
 #ifdef __cplusplus

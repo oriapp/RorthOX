@@ -23,6 +23,9 @@ run_syscheck() {
         'raw: ran') wait_screen "$expected" 20 || return 1 ;;
     esac
     check "$mode result" "$out/screen.txt" "$expected"
+    case "$mode" in
+        free*) check "$mode rejection" "$out/screen.txt" 'syscheck: freed result -2' ;;
+    esac
     check "$mode no panic" "$out/debugcon.log" '[PANIC]' absent
     local exits=1
     case "$expected" in 'raw: ran') exits=2;; esac

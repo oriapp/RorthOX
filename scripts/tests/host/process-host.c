@@ -56,6 +56,9 @@ struct mapping
 {
     struct paging_4gb_chunk *directory;
     void *virt;
+    void *phys;
+    unsigned long size;
+    int flags;
     void *bases[MAX_BASES];
     int base_count;
 };
@@ -190,6 +193,7 @@ struct paging_4gb_chunk *paging_new_4gb(uint8_t flags)
         printf("paging_new_4gb: too many directories\n");
         exit(2);
     }
+    chunk->directory_entry = (void *)chunk;
     directories[directory_count++] = chunk;
     return chunk;
 }
@@ -284,6 +288,9 @@ int paging_map_to(struct paging_4gb_chunk *directory, void *virt, void *phys, vo
     struct mapping *m = &mappings[mapping_count++];
     m->directory = directory;
     m->virt = virt;
+    m->phys = phys;
+    m->size = (char *)phys_end - (char *)phys;
+    m->flags = flags;
     m->base_count = 0;
     // Remember the live allocations the mapped range touches.
     for (int i = 0; m->base_count < MAX_BASES; i++)
@@ -320,6 +327,29 @@ void *paging_align_address(void *ptr)
 void *paging_align_to_lower_page(void *addr)
 {
     return (void *)((unsigned long)addr & ~(unsigned long)(PAGING_PAGE_SIZE - 1));
+}
+
+int host_translate_calls;
+int paging_user_translate(uint32_t *directory, uint32_t address, int write, void **out)
+{
+    host_translate_calls++;
+    int flags = PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL;
+    void *physical = (void *)(unsigned long)address;
+    for (int i = mapping_count - 1; i >= 0; i--)
+    {
+        struct mapping *m = &mappings[i];
+        unsigned long start = (unsigned long)m->virt;
+        if (m->directory->directory_entry == directory && address >= start && address - start < m->size)
+        {
+            flags = m->flags;
+            physical = (char *)m->phys + (address - start);
+            break;
+        }
+    }
+    int required = PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL | (write ? PAGING_IS_WRITEABLE : 0);
+    if ((flags & required) != required) return -EINVARG;
+    *out = physical;
+    return 0;
 }
 
 void kernel_page() {}
