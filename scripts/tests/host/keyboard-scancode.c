@@ -15,7 +15,7 @@
  *    the table by name.
  * 2. classic_keyboard_handle_interrupt() for all 256 byte values read from port 0x60: a press
  *    with a character pushes exactly that character, anything else pushes nothing; caps lock,
- *    left shift and the left shift release toggle caps lock as before; port 0x60 is read twice.
+ *    left shift and the left shift release toggle caps lock as before; port 0x60 is read once.
  *
  * Prints "keyboard-scancode host check: <failed> of <checks> checks failed".
  */
@@ -179,7 +179,7 @@ int main(void)
             int caps_after = toggles ? !caps : caps;
             int now = keyboard_get_capslock(&classic_keyboard) == KEYBOARD_CAPS_LOCK_ON;
             expect(now == caps_after, "caps lock after the interrupt", scancode, caps, now, caps_after);
-            expect(port60_reads == 2, "port 0x60 reads", scancode, caps, port60_reads, 2);
+            expect(port60_reads == 1, "port 0x60 reads", scancode, caps, port60_reads, 1);
 
             int want = scancode & CLASSIC_KEYBOARD_KEY_RELEASED ? 0 : expected_char(scancode, caps_after);
             if (want)

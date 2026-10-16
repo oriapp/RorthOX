@@ -134,7 +134,6 @@ void classic_keyboard_handle_interrupt()
     kernel_page();
     uint8_t scancode = 0;
     scancode = insb(KEYBOARD_INPUT_PORT);
-    insb(KEYBOARD_INPUT_PORT);
 
     if (scancode & CLASSIC_KEYBOARD_KEY_RELEASED)
     {
