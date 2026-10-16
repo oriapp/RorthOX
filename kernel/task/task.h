@@ -4,7 +4,6 @@
 #include <stddef.h>
 #include "config.h"
 #include "memory/paging/paging.h"
-#include "sched/sched.h"
 
 #ifdef __cplusplus
 extern "C" {
