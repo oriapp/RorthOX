@@ -89,6 +89,7 @@ void kernel_main()
 
     // Initialize the interrupt descriptor table
     idt_init();
+    pit_init();
 
     // Setup the TSS
     memset(&tss, 0x00, sizeof(tss)); // memse the whole tss to 0
@@ -119,8 +120,6 @@ void kernel_main()
     // Initialize all the system keyboards
     keyboard_init();
 
-    // TODO: implement this in the coller way
-    // pit_sleep(1000);
     dbg_puts("\33[31m");
     dbg_puts("Thats cool");
     dbg_puts("\033[0m\n");
@@ -149,22 +148,9 @@ void kernel_main()
     printc("< -;\n", VGA_COLOR_LIGHT_MAGENTA);
     printtime();
 
-    // pit_sleep(1000);
-
     // print(gettime());
 
     task_run_first_ever_task();
-    print("Hello savta!\n");
-
-    // Enable the system interrupts
-    // enable_interrupts();
-
-    // pit_configure(100);
-    // pit_init();
-    pit_sleep(100);
-    print("Hello\n");
-
-    while(1){}
 }
 
 

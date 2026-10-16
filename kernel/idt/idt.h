@@ -60,6 +60,7 @@ _Static_assert(offsetof(struct interrupt_frame, ss) == 52, "the CPU puts the rin
 _Static_assert(sizeof(struct interrupt_frame) == 56, "struct interrupt_frame must stay 56 bytes");
 
 void idt_init();
+void pic_send_eoi(int interrupt);
 void enable_interrupts();
 void disable_interrupts();
 int idt_register_interrupt_callback(int interrupt, INTERRUPT_CALLBACK_FUNCTION interrupt_callback);

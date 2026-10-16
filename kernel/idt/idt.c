@@ -7,7 +7,6 @@
 #include "status.h"
 #include "task/process.h"
 #include "include/kernel/sys.h"
-#include "include/kernel/time/pit.h"
 #include "include/kernel/tty.h"
 
 struct idt_desc idt_descriptors[RORTHOX_TOTAL_INTERRUPTS];
@@ -32,7 +31,7 @@ void no_interrupt_handler()
 }
 
 // EOI the slave first, then the master. Exceptions and syscalls outside both ranges get no EOI.
-static void pic_send_eoi(int interrupt)
+void pic_send_eoi(int interrupt)
 {
     if (interrupt >= RORTHOX_PIC_SLAVE_VECTOR_BASE && interrupt < RORTHOX_PIC_SLAVE_VECTOR_BASE + 8)
     {
@@ -174,39 +173,6 @@ void idt_set(int interrupt_no, void *address)
     desc->offset_2 = (uint32_t) address >> 16;
 }
 
-static uint32_t jiffies = 0;
-static uint16_t hz = 0;
-
-void idt_clock()
-{
-    // Send an end-of-interrupt signal to the PIC to let it know that we have handled the interrupt
-    pic_send_eoi(RORTHOX_PIC_MASTER_VECTOR_BASE);
-    jiffies++;
-
-    // Switch to the next task
-    task_next();
-}
-
-#define INPUT_CLOCK_FREQUENCY 1193180
-#define TIMER_COMMAND 0x43
-#define TIMER_DATA 0x40
-#define TIMER_ICW 0x36
-
-void pit_sleep(int sec) {
-    uint32_t end = jiffies + sec * hz;
-    while(jiffies < end);
-}
-
-void set_frequency(uint16_t h) {
-    hz = h;
-    uint16_t divisor = INPUT_CLOCK_FREQUENCY / h;
-    // Init, Square Wave Mode, non-BCD, first transfer LSB then MSB
-    outb(TIMER_COMMAND, TIMER_ICW);
-    outb(TIMER_DATA, divisor & 0xFF);
-    outb(TIMER_DATA, (divisor >> 8) & 0xFF);
-
-}
-
 void idt_init()
 {
     memset(idt_descriptors, 0, sizeof(idt_descriptors));
@@ -221,16 +187,8 @@ void idt_init()
     // idt_set(0, idt_zero);
     idt_set(RORTHOX_SYSCALL_VECTOR, isr80h_wrapper);
 
-    // set PIT (Programmable Interval Timer) frequency to 1000 Hz
-    // set_frequency(100);
-    // pit_configure(1000);
-    // pit_init();
-
-    idt_register_interrupt_callback(RORTHOX_PIC_MASTER_VECTOR_BASE, idt_clock); // timer interrupt
-
     // Load the interrupt descriptor table
     idt_load(&idtr_descriptor);
-    set_frequency(100);
 }
 
 int idt_register_interrupt_callback(int interrupt, INTERRUPT_CALLBACK_FUNCTION interrupt_callback)

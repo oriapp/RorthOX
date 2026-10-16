@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
 #
 # Kernel headers (K31): kernel/include/kernel/time/pit.h defines its include guard and declares
-# pit_sleep with the unit its implementation uses (seconds, idt.c); kernel/include/kernel/tty.h
-# no longer switches off -Wunused-variable for every file that includes it (it had an "ignored"
-# pragma with an unmatched "pop", so the warning stayed off for the rest of each file).
+# pit_sleep in milliseconds with its current limitations; kernel/include/kernel/tty.h
+# declares the terminal API without defining per-file terminal state or suppressing warnings.
 #
 # Compile checks only (i686-elf-gcc with the kernel's FLAGS from the Makefile, -Werror), no QEMU:
 #   guard       pit.h included twice defines _KERNEL_TIME_PIT
-#   pit-tty     pit.h then tty.h, and tty.h then pit.h, compile without warnings: the five
+#   pit-tty     pit.h then tty.h, and tty.h then pit.h, compile without warnings
 #   tty-pit     terminal state stays in tty.c, not in files including tty.h
 #   warning     a file that includes tty.h and then has an unused static and an unused local still
 #               gets both unused-variable warnings
 #   state       the five terminal variables keep their names and types, and stay file-local in
 #               tty.c; an object that includes only tty.h contains no terminal state
 #   pragma      tty.h has no "#pragma GCC diagnostic" left
-#   unit        pit.h declares pit_sleep(int sec) and says the unit is seconds
+#   unit        pit.h declares pit_sleep(uint32_t ms), precision and the ring-0 limitation
 #
 # Needs i686-elf-gcc and i686-elf-nm (the cross toolchain).
 
@@ -125,9 +124,13 @@ grep -n "pragma" kernel/include/kernel/tty.h | sed 's/^/  tty.h: /' || true
 grep -q "#pragma GCC diagnostic" kernel/include/kernel/tty.h || echo "PASS pragma" >> "$OUT/results.txt"
 
 grep -n "pit_sleep" kernel/include/kernel/time/pit.h | sed 's/^/  pit.h: /' || true
-if grep -qE '^void pit_sleep\(int sec\);' kernel/include/kernel/time/pit.h &&
-    grep -qiE '//.*second|/\*.*second|^ \*.*second' kernel/include/kernel/time/pit.h &&
-    ! grep -qE 'pit_sleep\(int ms\)' kernel/include/kernel/time/pit.h; then
+if grep -qE '^void pit_sleep\(uint32_t ms\);' kernel/include/kernel/time/pit.h &&
+    grep -q 'milliseconds' kernel/include/kernel/time/pit.h &&
+    grep -q 'Busy-waits on jiffies' kernel/include/kernel/time/pit.h &&
+    grep -q '+/- one tick' kernel/include/kernel/time/pit.h &&
+    grep -q 'No caller' kernel/include/kernel/time/pit.h &&
+    grep -q 'Not usable from kernel code yet' kernel/include/kernel/time/pit.h &&
+    grep -q 'tick switches tasks and does not return to ring 0' kernel/include/kernel/time/pit.h; then
     echo "PASS unit" >> "$OUT/results.txt"
 fi
 
@@ -138,7 +141,7 @@ check "tty.h then pit.h: no warning"                             "$R" "PASS tty-
 check "unused-variable warnings still on after tty.h"            "$R" "PASS warning" line
 check "terminal state local to tty.c, absent from header objects"     "$R" "PASS state" line
 check "no #pragma GCC diagnostic in tty.h"                       "$R" "PASS pragma" line
-check "pit_sleep(int sec) declared, unit seconds documented"    "$R" "PASS unit" line
+check "pit_sleep unit, precision and ring-0 limitation documented" "$R" "PASS unit" line
 if [ "$failures" -ne 0 ]; then
     echo "kernel-headers: $failures check(s) failed" >&2
     exit 1
