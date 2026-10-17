@@ -53,6 +53,9 @@ COMMAND_ARGUMENT_SIZE = 512
 # Includes the program name.
 MAX_COMMAND_ARGUMENTS = 32
 
+# Ordered directories searched for bare program names.
+PROGRAM_SEARCH_PATHS = 0:/ 0:/bin/
+
 # Display identity and guest RAM (MiB)
 RORTHOX_NAME = RorthOX
 RORTHOX_VERSION = 1.0.0
