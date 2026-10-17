@@ -96,7 +96,7 @@ own program, stack and allocations mapped on top.
 | 0x7C00 | boot sector |
 | 0x7E00-0xE1FF | kernel heap block table (one byte per 4 KiB block) |
 | 0xB8000 | VGA text screen |
-| 0x100000-0x10DC6B | kernel image (`kernel.bin`, 56,428 bytes; the disk reserves 101,888) |
+| 0x100000-0x10DB4B | kernel image (`kernel.bin`, 56,140 bytes; the disk reserves 101,888) |
 | 0x10E000-0x11062B | kernel `.bss` |
 | below 0x200000 | kernel boot stack (top 0x200000) |
 | 0x3FB000-0x3FEFFF | user stack (virtual, 16 KiB, top 0x3FF000) |
@@ -178,8 +178,8 @@ it). `make all` gives:
 | File | What |
 |---|---|
 | `bin/boot.bin` | the boot sector (512 bytes) |
-| `bin/kernel.bin` | the kernel (56,428 bytes right now) |
-| `bin/os.bin` | the disk image with `shell.elf` and `blank.elf` on it (16,834,156 bytes) |
+| `bin/kernel.bin` | the kernel (56,140 bytes right now) |
+| `bin/os.bin` | the disk image with `shell.elf` and `blank.elf` on it (16,833,868 bytes) |
 | `bin/rorthox.iso` | the GRUB ISO, only with `make iso` (5,179,392 bytes) |
 
 `./build.sh` does the same as `make all` and adds `~/opt/cross/bin` to the PATH itself. `./clean.sh` (or
