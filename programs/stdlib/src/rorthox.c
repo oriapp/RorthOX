@@ -59,43 +59,111 @@ int rorthox_getkeyblock()
 
 void rorthox_terminal_readline(char *out, int max, bool output_while_typing)
 {
-    int i = 0;
-    for (i = 0; i < max - 1; i++)
+    if (!out || max <= 0)
     {
-        char key = rorthox_getkeyblock();
+        return;
+    }
 
-        // Carriage return means we have read the line
+    int length = 0;
+    int position = 0;
+    int capacity = max - 1;
+    if (output_while_typing && capacity > RORTHOX_READLINE_ECHO_LIMIT)
+    {
+        capacity = RORTHOX_READLINE_ECHO_LIMIT;
+    }
+    out[0] = 0;
+
+    while (length < capacity)
+    {
+        int key = rorthox_getkeyblock();
         if (key == 13)
         {
             break;
         }
 
-        // Nothing to erase at the start of the line
-        if (key == 0x08 && i == 0)
+        int next_position = position;
+        switch (key)
         {
-            i--;
+        case RORTHOX_KEY_LEFT:
+            if (position > 0)
+                next_position--;
+            break;
+        case RORTHOX_KEY_RIGHT:
+            if (position < length)
+                next_position++;
+            break;
+        case RORTHOX_KEY_HOME:
+            next_position = 0;
+            break;
+        case RORTHOX_KEY_END:
+            next_position = length;
+            break;
+        }
+        if (next_position != position)
+        {
+            if (output_while_typing)
+            {
+                rorthox_terminal_move_cursor(next_position - position);
+            }
+            position = next_position;
+        }
+
+        if (key == 0x08 || key == RORTHOX_KEY_DELETE)
+        {
+            if (key == 0x08)
+            {
+                if (position == 0)
+                    continue;
+                if (output_while_typing)
+                    rorthox_terminal_move_cursor(-1);
+                position--;
+            }
+            if (position == length)
+                continue;
+
+            for (int i = position; i < length; i++)
+            {
+                out[i] = out[i + 1];
+            }
+            length--;
+            if (output_while_typing)
+            {
+                for (int i = position; i < length; i++)
+                    rorthox_putchar(out[i]);
+                rorthox_putchar(' ');
+                rorthox_terminal_move_cursor(position - length - 1);
+            }
             continue;
         }
 
+        // LF is not a single-cell key; unsupported special keys are not text.
+        if (key <= 0 || key > 255 || key == '\n')
+        {
+            continue;
+        }
+        for (int i = length; i > position; i--)
+        {
+            out[i] = out[i - 1];
+        }
+        out[position] = (char)key;
+        length++;
+        out[length] = 0;
         if (output_while_typing)
         {
-            rorthox_putchar(key);
+            for (int i = position; i < length; i++)
+                rorthox_putchar(out[i]);
         }
-
-        // Backspace
-        if (key == 0x08 && i >= 1)
+        position++;
+        if (output_while_typing && position < length)
         {
-            out[i-1] = 0x00;
-            // -2 because we will +1 when we go to the continue
-            i -= 2;
-            continue;
+            rorthox_terminal_move_cursor(position - length);
         }
-
-        out[i] = key;
     }
 
-    // Add the null terminator
-    out[i] = 0x00;
+    if (output_while_typing && position < length)
+    {
+        rorthox_terminal_move_cursor(length - position);
+    }
 }
 
 int rorthox_system_run(const char *command)

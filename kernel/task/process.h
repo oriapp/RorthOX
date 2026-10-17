@@ -65,9 +65,10 @@ struct process
     // The size of the data pointed to by "ptr".
     uint32_t size;
 
+    // Unread keys: RORTHOX_KEYBOARD_BUFFER_SIZE entries, each a byte (1-255) or a RORTHOX_KEY_* value
     struct keyboard_buffer
     {
-        char buffer[RORTHOX_KEYBOARD_BUFFER_SIZE];
+        uint16_t buffer[RORTHOX_KEYBOARD_BUFFER_SIZE];
         int tail;
         int head;
     } keyboard;

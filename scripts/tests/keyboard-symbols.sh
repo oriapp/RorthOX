@@ -27,7 +27,6 @@ press caps_lock
 press c
 press spc
 press x
-for key in up down left right; do press "$key"; done
 press y
 # Unshifted suffix acknowledges that the whole sequence reached the shell.
 for key in spc e n d; do press "$key"; done
@@ -36,8 +35,7 @@ qemu_stop || true
 symbols='!@#$%^&*()_+{}:"~|<>?'
 expected="> $symbols 789-456+1230. Aabc xy end"
 check "shifted symbol echo" "$OUT/screen.txt" "$symbols"
-check "keypad echo (Num Lock is not tracked)" "$OUT/screen.txt" '789-456+1230.'
+check "keypad echo (Num Lock is on at boot)" "$OUT/screen.txt" '789-456+1230.'
 check "caps on: unshifted uppercase, both shifts lowercase; caps off again" "$OUT/screen.txt" ' Aabc xy end'
-check "arrow keys insert nothing" "$OUT/screen.txt" ' xy end'
 check "exact echoed line" "$OUT/screen.txt" "$expected" line
 finish keyboard-symbols

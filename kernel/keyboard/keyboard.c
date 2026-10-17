@@ -39,9 +39,15 @@ out:
     return res;
 }
 
+// The counters count keys. Unsigned, so the index stays inside the buffer even if a counter wraps.
+static unsigned int keyboard_buffer_index(int counter)
+{
+    return (unsigned int)counter % RORTHOX_KEYBOARD_BUFFER_SIZE;
+}
+
 static int keyboard_get_tail_index(struct process *process)
 {
-    return process->keyboard.tail % sizeof(process->keyboard.buffer);
+    return keyboard_buffer_index(process->keyboard.tail);
 }
 
 void keyboard_backspace(struct process *process)
@@ -61,7 +67,7 @@ KEYBOARD_CAPS_LOCK_STATE keyboard_get_capslock(struct keyboard *keyboard)
     return keyboard->capslock_state;
 }
 
-void keyboard_push(char c)
+void keyboard_push(uint16_t c)
 {
     struct process *process = process_current();
     if (!process)
@@ -75,7 +81,7 @@ void keyboard_push(char c)
     }
 
     // A full queue drops the new key instead of overwriting one the program hasn't read yet.
-    if (process->keyboard.tail - process->keyboard.head >= (int)sizeof(process->keyboard.buffer))
+    if (process->keyboard.tail - process->keyboard.head >= RORTHOX_KEYBOARD_BUFFER_SIZE)
     {
         return;
     }
@@ -85,7 +91,7 @@ void keyboard_push(char c)
     process->keyboard.tail++;
 }
 
-char keyboard_pop()
+uint16_t keyboard_pop()
 {
     if (!task_current())
     {
@@ -93,8 +99,8 @@ char keyboard_pop()
     }
 
     struct process *process = task_current()->process;
-    int real_index = process->keyboard.head % sizeof(process->keyboard.buffer);
-    char c =  process->keyboard.buffer[real_index];
+    int real_index = keyboard_buffer_index(process->keyboard.head);
+    uint16_t c = process->keyboard.buffer[real_index];
     if (c == 0x00)
     {
         // Nothing to pop return zero.

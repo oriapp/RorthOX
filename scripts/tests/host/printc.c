@@ -94,8 +94,14 @@ void terminal_writechar(char c, char colour)
     other_output++;
 }
 
-char keyboard_pop()
+uint16_t keyboard_pop()
 {
+    return 0;
+}
+
+int terminal_move_cursor(int delta)
+{
+    other_output++;
     return 0;
 }
 

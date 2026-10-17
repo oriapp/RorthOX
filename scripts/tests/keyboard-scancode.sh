@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Check the real keyboard IRQ handler against an independent set-1 map under ASan.
-# All 256 byte values run with caps off/on and neither/left/right/both shifts held.
+# All 256 byte values run with Num Lock off/on, caps off/on and neither/left/right/both shifts held.
 # Env: HOST_CC=cc. No QEMU boot in this host bounds/mapping check.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -26,11 +26,14 @@ echo "exit=$host_status" > "$OUT/host-status.txt"
 check "host check built and exited with status 0" "$OUT/host-status.txt" "exit=0" line
 check "no AddressSanitizer report" "$OUT/host-check.log" "AddressSanitizer" absent
 check "complete byte/modifier sweep ran" "$OUT/host-check.log" \
-    "interrupt: all 256 values, caps off/on, neither/left/right/both shifts" line
+    "interrupt: all 256 values, Num Lock off/on, caps off/on, neither/left/right/both shifts" line
 check "modifier transitions ran" "$OUT/host-check.log" "interrupt: modifier transitions checked" line
+check "Num Lock press cycles ran" "$OUT/host-check.log" "interrupt: Num Lock press cycles checked" line
+check "Pause ran" "$OUT/host-check.log" "interrupt: Pause checked" line
 check "extended byte/modifier sweep ran" "$OUT/host-check.log" \
-    "interrupt: E0 plus all 256 values in every Caps/Shift state checked" line
-check "extended arrows ran" "$OUT/host-check.log" "interrupt: extended arrows push nothing" line
+    "interrupt: E0 plus all 256 values in every Num Lock/Caps/Shift state checked" line
+check "navigation keys ran" "$OUT/host-check.log" \
+    "interrupt: E0 navigation keys give their key values, breaks give nothing" line
 check "every mapping and state check passed" "$OUT/host-check.log" "keyboard-scancode host check: passed" line
 if [ "$failures" -ne 0 ]; then
     echo "keyboard-scancode: $failures check(s) failed" >&2

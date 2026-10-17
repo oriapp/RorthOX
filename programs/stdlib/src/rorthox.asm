@@ -13,6 +13,7 @@ global rorthox_process_get_arguments:function
 global rorthox_system:function
 global rorthox_exit:function
 global printc:function
+global rorthox_terminal_move_cursor:function
 
 ; void print(const char message);
 print:
@@ -54,6 +55,17 @@ rorthox_putchar:
     mov ebp, esp
     mov eax, SYSCALL_PUTCHAR ; Command putchar
     push dword[ebp+8] ; Variable "c"
+    int SYSCALL_VECTOR
+    add esp, 4
+    pop ebp
+    ret
+
+; int rorthox_terminal_move_cursor(int delta);
+rorthox_terminal_move_cursor:
+    push ebp
+    mov ebp, esp
+    mov eax, SYSCALL_TERMINAL_MOVE_CURSOR ; Command move cursor, result in eax
+    push dword[ebp+8] ; Variable "delta"
     int SYSCALL_VECTOR
     add esp, 4
     pop ebp

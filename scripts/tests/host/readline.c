@@ -22,19 +22,21 @@ int strcmp(const char *a, const char *b);
 void *memset(void *s, int c, unsigned long n);
 unsigned long strlen(const char *s);
 
-#define BS "\x08"
-#define ENTER "\x0d"
+#define BS 0x08
+#define ENTER 0x0d
 #define GUARD 0xA5
 #define BEFORE 16
 #define AREA 128
 
-static const char *keys;
+static const int *keys;
 static int next_key;
 static int key_count;
 static int zero_next;
 static int overrun;
 static char echo[256];
 static int echo_count;
+static int move_count;
+static int move_delta;
 
 int user_rorthox_getkey()
 {
@@ -49,7 +51,7 @@ int user_rorthox_getkey()
         overrun = 1;
         return 13;
     }
-    return (unsigned char)keys[next_key++];
+    return keys[next_key++];
 }
 
 void user_rorthox_putchar(char c)
@@ -59,6 +61,13 @@ void user_rorthox_putchar(char c)
         echo[echo_count] = c;
     }
     echo_count++;
+}
+
+int user_rorthox_terminal_move_cursor(int delta)
+{
+    move_count++;
+    move_delta += delta;
+    return 0;
 }
 
 // Not used by readline; rorthox.c needs them to link.
@@ -95,8 +104,8 @@ static void show(const char *name, const char *s, int n)
 
 // One case: <script> (<script_len> keys) into a buffer of <max>; expect <want> stored, <want_echo>
 // echoed and <want_used> keys taken.
-static void run(const char *what, const char *script, int script_len, int max, int output, const char *want,
-                const char *want_echo, int want_used)
+static void run(const char *what, const int *script, int script_len, int max, int output, const char *want,
+                const char *want_echo, int want_used, int want_moves)
 {
     static unsigned char area[AREA];
     char *out = (char *)area + BEFORE;
@@ -107,12 +116,15 @@ static void run(const char *what, const char *script, int script_len, int max, i
     zero_next = 0;
     overrun = 0;
     echo_count = 0;
+    move_count = 0;
+    move_delta = 0;
     memset(echo, 0, sizeof(echo));
     memset(area, GUARD, sizeof(area));
 
     user_rorthox_terminal_readline(out, max, output);
 
     int ok = !overrun && next_key == want_used;
+    ok = ok && move_count == want_moves && move_delta == -want_moves;
     // The line and its terminator, and nothing written outside out[0 .. max-1].
     int len = strlen(want);
     for (int i = 0; i < len + 1; i++)
@@ -140,30 +152,32 @@ static void run(const char *what, const char *script, int script_len, int max, i
     }
 }
 
-#define KEYS(s) s, (int)sizeof(s) - 1
+#define KEYS(...) (int[]){__VA_ARGS__}, (int)(sizeof((int[]){__VA_ARGS__}) / sizeof(int))
+#define COMMAND 'b', 'l', 'a', 'n', 'k', '.', 'e', 'l', 'f'
 
 int main(void)
 {
-    static char many[200];
+    static int many[200];
 
-    run("backspace, Enter", KEYS(BS ENTER), 16, 1, "", "", 2);
-    run("3 backspaces, then a line", KEYS(BS BS BS "blank.elf rl1" ENTER), 64, 1, "blank.elf rl1", "blank.elf rl1",
-        17);
-    run("3 backspaces, then a line that fills the buffer", KEYS(BS BS BS "blank.elf" ENTER), 10, 1, "blank.elf",
-        "blank.elf", 12);
-    run("a, 2 backspaces, b", KEYS("a" BS BS "b" ENTER), 16, 1, "b", "a" BS "b", 5);
-    run("a, 3 backspaces, b", KEYS("a" BS BS BS "b" ENTER), 16, 1, "b", "a" BS "b", 6);
-    run("echo off", KEYS(BS "x" BS BS "y" ENTER), 16, 0, "y", "", 6);
+    run("backspace, Enter", KEYS(BS, ENTER), 16, 1, "", "", 2, 0);
+    run("3 backspaces, then a line", KEYS(BS, BS, BS, COMMAND, ' ', 'r', 'l', '1', ENTER), 64, 1,
+        "blank.elf rl1", "blank.elf rl1", 17, 0);
+    run("3 backspaces, then a line that fills the buffer", KEYS(BS, BS, BS, COMMAND, ENTER), 10, 1,
+        "blank.elf", "blank.elf", 12, 0);
+    run("a, 2 backspaces, b", KEYS('a', BS, BS, 'b', ENTER), 16, 1, "b", "a b", 5, 2);
+    run("a, 3 backspaces, b", KEYS('a', BS, BS, BS, 'b', ENTER), 16, 1, "b", "a b", 6, 2);
+    run("echo off", KEYS(BS, 'x', BS, BS, 'y', ENTER), 16, 0, "y", "", 6, 0);
     // max 4: three characters and the terminator; the 'd' stays unread.
-    run("full buffer", KEYS(BS BS "abcd" ENTER), 4, 1, "abc", "abc", 5);
-    run("ordinary erase", KEYS("ab" BS "c" ENTER), 16, 1, "ac", "ab" BS "c", 5);
-    run("Enter alone", KEYS(ENTER), 16, 1, "", "", 1);
+    run("full buffer", KEYS(BS, BS, 'a', 'b', 'c', 'd', ENTER), 4, 1, "abc", "abc", 5, 0);
+    run("ordinary erase", KEYS('a', 'b', BS, 'c', ENTER), 16, 1, "ac", "ab c", 5, 2);
+    run("Enter alone", KEYS(ENTER), 16, 1, "", "", 1, 0);
 
-    memset(many, 0x08, 150);
+    for (int i = 0; i < 150; i++)
+        many[i] = BS;
     many[150] = 'x';
     many[151] = 'y';
-    many[152] = 0x0d;
-    run("150 backspaces into a buffer of 3", many, 153, 3, 1, "xy", "xy", 152);
+    many[152] = ENTER;
+    run("150 backspaces into a buffer of 3", many, 153, 3, 1, "xy", "xy", 152, 0);
 
     printf("readline host check: %d of %d cases failed\n", failed, cases);
     fflush(0);

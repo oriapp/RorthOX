@@ -9,6 +9,7 @@
 #include "kernel.h"
 #include "io/io.h"
 #include "string/string.h"
+#include "status.h"
 
 #include "include/kernel/tty.h"
 #include "include/kernel/vga.h"
@@ -64,6 +65,28 @@ void terminal_backspace()
     // Store the blank directly: writing it with terminal_writechar would move the cursor on again
     terminal_putchar(terminal_col, terminal_row, ' ', terminal_color);
     update_cursor(terminal_col, terminal_row);
+}
+
+/// @brief Moves the cursor by delta cells (negative = back), across rows, without touching the
+/// screen. The new place must be on the visible page: nothing scrolls
+/// @param delta cells to move
+/// @return 0, or -EINVARG (cursor unchanged) if the new place would be off the page
+int terminal_move_cursor(int delta)
+{
+    const int last_cell = VGA_WIDTH * VGA_HEIGHT - 1;
+    const int position = terminal_row * VGA_WIDTH + terminal_col;
+
+    // Compare before adding: position is small, so neither side can overflow, even for INT_MIN or INT_MAX
+    if (delta < -position || delta > last_cell - position)
+    {
+        return -EINVARG;
+    }
+
+    const int new_position = position + delta;
+    terminal_row = new_position / VGA_WIDTH;
+    terminal_col = new_position % VGA_WIDTH;
+    update_cursor(terminal_col, terminal_row);
+    return 0;
 }
 
 /// @brief Formats given char and puts into screen

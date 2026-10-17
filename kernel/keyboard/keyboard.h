@@ -1,6 +1,8 @@
 #ifndef KEYBOARD_H
 #define KEYBOARD_H
 
+#include <stdint.h>
+
 #define KEYBOARD_CAPS_LOCK_ON 1
 #define KEYBOARD_CAPS_LOCK_OFF 0
 
@@ -30,8 +32,9 @@ int keyboard_insert(struct keyboard *keyboard);
 void keyboard_backspace(struct process *process);
 void keyboard_set_capslock(struct keyboard *keyboard, KEYBOARD_CAPS_LOCK_STATE state);
 KEYBOARD_CAPS_LOCK_STATE keyboard_get_capslock(struct keyboard *keyboard);
-void keyboard_push(char c);
-char keyboard_pop();
+// A key is a byte (1-255) or one of the RORTHOX_KEY_* values. 0 means no key.
+void keyboard_push(uint16_t key);
+uint16_t keyboard_pop();
 
 #ifdef __cplusplus
 }

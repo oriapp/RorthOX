@@ -13,8 +13,18 @@
 #define CLASSIC_KEYBOARD_LSHIFT_R   0xAA
 #define CLASSIC_KEYBOARD_RSHIFT     0x36
 #define CLASSIC_KEYBOARD_RSHIFT_R   0xB6
+#define CLASSIC_KEYBOARD_NUMLOCK    0x45
+#define CLASSIC_KEYBOARD_NUMLOCK_R  0xC5
+#define CLASSIC_KEYBOARD_EXTENDED   0xE0
+#define CLASSIC_KEYBOARD_PAUSE      0xE1
 
-// Num Lock is not tracked: the keypad always gives digits and operators.
+// Pause sends E1 1D 45 E1 9D C5 and no break. Each E1 drops the two bytes after it, so the 45
+// inside never toggles Num Lock and a cut-off sequence loses at most two bytes.
+#define CLASSIC_KEYBOARD_PAUSE_PAYLOAD 2
+
+// The keypad sends the same make codes whatever the Num Lock state (47-53, no prefix); the driver
+// keeps Num Lock itself. With Num Lock off the digits and the decimal point give nothing, while
+// - and + (4A, 4E), * (37), / and Enter (E0 35, E0 1C) always work. Shift doesn't change this.
 static const kybd_scancode regular_scancodes[] = {
   {0x01, 0x1B},
   /* Numerical keys */
@@ -67,6 +77,24 @@ typedef struct {
 } kybd_modifier_key_states;
 static kybd_modifier_key_states modifier_keys;
 static int extended;
+static int pause_bytes_left;
+
+// Num Lock is on at boot, whatever the firmware left behind. The LED isn't updated (no 0xED command).
+static int numlock;
+static int numlock_down;
+
+// Keys that only exist with the E0 prefix. The keypad keys with the same second byte are separate keys.
+typedef struct {
+    uint8_t scancode;
+    uint16_t key;
+} kybd_extended_scancode;
+static const kybd_extended_scancode extended_scancodes[] = {
+  {0x1C, 0x0D}, {0x35, '/'},
+  {0x48, RORTHOX_KEY_UP}, {0x50, RORTHOX_KEY_DOWN}, {0x4B, RORTHOX_KEY_LEFT}, {0x4D, RORTHOX_KEY_RIGHT},
+  {0x47, RORTHOX_KEY_HOME}, {0x4F, RORTHOX_KEY_END}, {0x52, RORTHOX_KEY_INSERT}, {0x53, RORTHOX_KEY_DELETE},
+  {0x49, RORTHOX_KEY_PAGE_UP}, {0x51, RORTHOX_KEY_PAGE_DOWN},
+  {0x00, 0}
+};
 
 int classic_keyboard_init();
 void classic_keyboard_handle_interrupt();
@@ -85,6 +113,9 @@ int classic_keyboard_init()
     modifier_keys.lshift = 0;
     modifier_keys.rshift = 0;
     extended = 0;
+    pause_bytes_left = 0;
+    numlock = 1;
+    numlock_down = 0;
 
     outb(PS2_PORT, PS2_COMMAND_ENABLE_FIRST_PORT); // enable port 64
     // command 0xAE
@@ -112,31 +143,77 @@ uint8_t classic_keyboard_scancode_to_char(uint8_t scancode)
     return 0;
 }
 
+// Keypad 7 8 9 4 5 6 1 2 3 0 . (without the prefix): these follow Num Lock
+static int classic_keyboard_is_keypad_digit(uint8_t scancode)
+{
+    return scancode >= 0x47 && scancode <= 0x53 && scancode != 0x4A && scancode != 0x4E;
+}
+
+// The byte after E0. It never reaches the modifier keys, so fake shifts change no state and only
+// makes of the keys in extended_scancodes give a key.
+static void classic_keyboard_handle_extended(uint8_t scancode)
+{
+    if (scancode & CLASSIC_KEYBOARD_KEY_RELEASED)
+    {
+        return;
+    }
+
+    for (int i = 0; extended_scancodes[i].scancode != 0; i++)
+    {
+        if (extended_scancodes[i].scancode == scancode)
+        {
+            keyboard_push(extended_scancodes[i].key);
+            return;
+        }
+    }
+}
+
 void classic_keyboard_handle_interrupt()
 {
     kernel_page();
+    // One byte per interrupt: a second read here would take the next key's byte and lose it
     uint8_t scancode = insb(KEYBOARD_INPUT_PORT);
 
-    if (extended)
+    if (pause_bytes_left > 0)
     {
-        extended = 0;
-        // Only keypad Enter and / produce characters; fake shifts change no state.
-        if (scancode == 0x1C)
-            keyboard_push(0x0D);
-        else if (scancode == 0x35)
-            keyboard_push('/');
+        pause_bytes_left--;
         task_page();
         return;
     }
-    if (scancode == 0xE0)
+    if (extended)
+    {
+        // Exactly one byte after E0, even if it is E0 or E1 itself
+        extended = 0;
+        classic_keyboard_handle_extended(scancode);
+        task_page();
+        return;
+    }
+    if (scancode == CLASSIC_KEYBOARD_EXTENDED)
     {
         extended = 1;
+        task_page();
+        return;
+    }
+    if (scancode == CLASSIC_KEYBOARD_PAUSE)
+    {
+        pause_bytes_left = CLASSIC_KEYBOARD_PAUSE_PAYLOAD;
         task_page();
         return;
     }
 
     switch (scancode)
     {
+    case CLASSIC_KEYBOARD_NUMLOCK:
+        // Held keys repeat their make code: toggle only on the first one
+        if (!numlock_down)
+        {
+            numlock = !numlock;
+        }
+        numlock_down = 1;
+        break;
+    case CLASSIC_KEYBOARD_NUMLOCK_R:
+        numlock_down = 0;
+        break;
     case CLASSIC_KEYBOARD_CAPSLOCK:
         keyboard_toggle_capslock();
         break;
@@ -156,7 +233,9 @@ void classic_keyboard_handle_interrupt()
         break;
     }
 
-    if (!(scancode & CLASSIC_KEYBOARD_KEY_RELEASED))
+    // With Num Lock off the keypad digits and the decimal point give nothing
+    int suppressed = !numlock && classic_keyboard_is_keypad_digit(scancode);
+    if (!(scancode & CLASSIC_KEYBOARD_KEY_RELEASED) && !suppressed)
     {
         uint8_t c = classic_keyboard_scancode_to_char(scancode);
         if (c != 0) // valid scancode

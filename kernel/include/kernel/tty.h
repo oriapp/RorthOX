@@ -13,6 +13,7 @@ extern "C" {
 
 void terminal_putchar(int x, int y, char c, char colour);
 void terminal_backspace();
+int terminal_move_cursor(int delta);
 void terminal_writechar(char c, char colour);
 void update_cursor(uint8_t x, uint8_t y);
 void terminal_panic(vga_color_t bg_colour);
