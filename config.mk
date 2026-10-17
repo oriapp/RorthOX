@@ -47,6 +47,19 @@ SYSCALL_INVOKE_SYSTEM_COMMAND = 7
 SYSCALL_GET_PROGRAM_ARGUMENTS = 8
 SYSCALL_EXIT = 9
 SYSCALL_PRINTC = 10
+SYSCALL_TERMINAL_MOVE_CURSOR = 11
+
+# Dedicated navigation and editing keys (outside the byte-valued key range).
+KEY_UP = 0x100
+KEY_DOWN = 0x101
+KEY_LEFT = 0x102
+KEY_RIGHT = 0x103
+KEY_HOME = 0x104
+KEY_END = 0x105
+KEY_INSERT = 0x106
+KEY_DELETE = 0x107
+KEY_PAGE_UP = 0x108
+KEY_PAGE_DOWN = 0x109
 
 # Bytes in the kernel/user command-argument field (including the terminator)
 COMMAND_ARGUMENT_SIZE = 512
