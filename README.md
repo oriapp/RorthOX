@@ -41,8 +41,15 @@ Everything in this list is checked by `make test` or was run in QEMU.
 - **Console:** 80x25 VGA text with colours, scrolling and backspace across rows, and a kernel `printf`. Kernel debug
   output also goes to port 0xE9 (QEMU's `debugcon`).
 - **Keyboard:** PS/2 scancode set 1 with Shift symbols, Caps Lock and the keypad.
-- **Shell:** reads a line, splits it into words and runs the first word as a program from the root of the disk
-  (`blank.elf hello world`). There are no built-in commands.
+- **Shell:** reads a line, splits it into words and runs the first word as a program (`blank.elf hello world`).
+  There are no built-in commands.
+- **Program lookup:** syscalls 6 and 7 (and so the shell) look a bare program name (no `/` or `:`) up in the
+  directories of `PROGRAM_SEARCH_PATHS` in `config.mk`, in order: by default `0:/` and then `0:/bin/`. The first
+  directory that has the file wins. Only "not found" moves on to the next directory; a name that is there but can't
+  be loaded (a directory, a broken ELF file, an empty or too big raw program) stops the lookup with an error. A name with a `/`
+  or `:` is tried once, relative to `0:/` (`bin/x.elf` means `0:/bin/x.elf`; a drive prefix like `0:/x.elf` isn't
+  understood). Names can be up to 104 characters, and `argv[0]` is the name as typed, not the full path. The image
+  the build makes has no `bin/` directory: `shell.elf` and `blank.elf` are in the root.
 - **User library:** `programs/stdlib` with the syscall wrappers, `malloc`/`free`, `printf`, `strtok`, `itoa`
   and a line reader.
 
@@ -97,7 +104,9 @@ own program, stack and allocations mapped on top.
 | 0x500000-0x5FFFFF | kernel stack for interrupts from ring 3 (TSS `esp0` = 0x600000) |
 | 0x01000000-0x073FFFFF | kernel heap (100 MiB), so the machine needs 128 MiB of RAM |
 
-The values shared between C, NASM, the linker scripts and the shell scripts live in one place, `config.mk`.
+The values shared between C, NASM, the linker scripts and the shell scripts live in one place, `config.mk`. It also
+holds the program search list, `PROGRAM_SEARCH_PATHS`: 1 to 4 directory prefixes such as `0:/` or `0:/bin/`
+(`0:/`, then simple directory names, each ending in `/`; disk 0 is the only disk). The build stops on anything else.
 
 ### Disk image
 
@@ -141,8 +150,8 @@ numbers are in `config.mk`, the handlers in `kernel/isr80h/`, the wrappers in `p
 | 3 | `rorthox_putchar(c)` | prints one character |
 | 4 | `rorthox_malloc(size)` | allocates kernel heap memory and maps it into the process |
 | 5 | `rorthox_free(ptr)` | frees an allocation of the process |
-| 6 | `rorthox_process_load_start(name)` | loads `0:/<name>` and switches to it |
-| 7 | `rorthox_system(args)` | runs a command from a list of arguments (at most 32 words, program name included) |
+| 6 | `rorthox_process_load_start(name)` | finds the program (see program lookup above), loads it and switches to it |
+| 7 | `rorthox_system(args)` | runs a command from a list of arguments; the first word is looked up the same way (at most 32 words, program name included) |
 | 8 | `rorthox_process_get_arguments(out)` | writes `argc`/`argv` into a writable struct the process owns |
 | 9 | `rorthox_exit()` | ends the process |
 | 10 | `printc(str, colour)` | prints a string in one of the 16 VGA colours |
@@ -247,8 +256,8 @@ qemu-system-i386 -m 128 -drive file=bin/os.bin,format=raw,index=0,media=disk \
 make test
 ```
 
-This builds everything and runs 51 tests (`scripts/smoke.sh` plus every `scripts/tests/*.sh`); it keeps going after a
-failure and prints a summary (`51 passed, 0 failed, 0 skipped`). A full run takes about 10 minutes. `make smoke`
+This builds everything and runs 53 tests (`scripts/smoke.sh` plus every `scripts/tests/*.sh`); it keeps going after a
+failure and prints a summary (`53 passed, 0 failed, 0 skipped`). A full run takes about 10 minutes. `make smoke`
 runs only the smoke test, and `./scripts/run-tests.sh scripts/tests/panic.sh` runs single tests.
 
 The tests boot RorthOX headless in QEMU and drive it through the QEMU monitor: they type with `sendkey`, read the
@@ -264,8 +273,8 @@ where it matters) to check one function against every input. Tests that need ext
 | GRUB boot | `multiboot-header`, `grub-boot` | the Multiboot header fields and their bounds in `kernel.bin` (no QEMU needed); the ISO boots through the GRUB menu and runs `blank.elf`, and a second boot from a disk whose boot sector only loops checks through QEMU's gdbstub that the Multiboot entry, not the boot sector, sets up the GDT, segments and stack |
 | Exceptions and privilege | `exception-frames`, `exceptions`, `kernel-exceptions`, `panic`, `panic-screen`, `task-flags`, `tss-io` | one frame layout for every vector; only the syscall and debugging gates are open to ring 3; a user fault ends only that program; kernel faults panic and stay halted; each task keeps its EFLAGS; ring 3 can't touch I/O ports |
 | Memory | `heap`, `heap-free`, `heap-oom`, `print-oom` | oversized requests fail; bad frees are ignored; running out of heap while starting a program is an error, not a crash |
-| Disk and FAT16 | `disk-read`, `fat-chain`, `fat-directory`, `fat-entry`, `fat-lookup`, `file-descriptors`, `file-read`, `path-release`, `open-oom` | ATA status checks; cluster chains; reserved and bad FAT values; lookups and seeks stay in bounds; every descriptor slot works; failed opens give their memory back |
-| Programs and processes | `elf-segments`, `elf-unwind`, `raw-program`, `load-unwind`, `process-release`, `task-list`, `syscall-path`, `program-arguments`, `command-arguments`, `argument-oom`, `user-pointers` | ELF segments get their own memory; bad ELF files are refused; raw programs must fit the load window; failed loads give everything back; finished programs free their memory; the task list stays linked; every syscall checks the user memory it reads or writes |
+| Disk and FAT16 | `disk-read`, `fat-chain`, `fat-directory`, `fat-entry`, `fat-lookup`, `file-descriptors`, `file-read`, `path-release`, `open-oom` | ATA status checks; cluster chains; reserved and bad FAT values; lookups and seeks stay in bounds; a missing file is told apart from other open errors; every descriptor slot works; failed opens give their memory back |
+| Programs and processes | `elf-segments`, `elf-unwind`, `raw-program`, `load-unwind`, `process-release`, `task-list`, `syscall-path`, `program-arguments`, `command-arguments`, `argument-oom`, `user-pointers`, `program-lookup`, `program-lookup-config` | ELF segments get their own memory; bad ELF files are refused; raw programs must fit the load window; failed loads give everything back; finished programs free their memory; the task list stays linked; every syscall checks the user memory it reads or writes; bare names are looked up in the search list in order, the first match wins, only a missing file moves on, and `argv[0]` stays as typed; bad `PROGRAM_SEARCH_PATHS` values stop the build |
 | Console, keyboard, user library | `tty-scroll`, `tty-backspace`, `printc`, `formatting`, `keyboard-burst`, `keyboard-queue`, `keyboard-scancode`, `keyboard-symbols`, `readline`, `strtok` | scrolling and backspace; colours; bounded formatting; no lost keys; a full key queue keeps unread keys; the scancode table for every key with Shift and Caps; line editing; `strtok` |
 
 `grub-boot` needs the GRUB packages. Without them it is reported as skipped (`1 skipped` and a `SKIPPED:` line)
@@ -286,7 +295,7 @@ programs/blank/    a small program that prints its arguments
 programs/*/        test-only programs, used by scripts/tests/ on a copy of the disk image
 scripts/           smoke test, test runner, QEMU helpers (qemu-lib.sh), ISO tool check (check-iso-tools.sh)
 scripts/tests/     the tests; host/ has the host C checks, lib/ the Python and gdbstub helpers
-config.mk          shared values: disk layout, addresses, selectors, syscall numbers, RAM size
+config.mk          shared values: disk layout, addresses, selectors, syscall numbers, program search list, RAM size
 Makefile           builds bin/boot.bin, bin/kernel.bin and bin/os.bin; make iso, make test, make smoke
 configure.sh       builds the i686-elf cross toolchain
 build.sh, qemu.sh, clean.sh, uninstall-config.sh   small wrappers
@@ -309,6 +318,8 @@ program and the kernel.
   must be 1 byte to 1 MiB; ELF files get a kernel buffer as big as the file.
 - **Keyboard.** The per-process key queue holds 1024 unread keys; more are dropped. Num Lock isn't tracked (the
   keypad always types digits), and extended keys (arrows, Home, End and so on) type nothing.
+- **Program lookup.** The search list is fixed when the kernel is built. There's no current directory and no
+  environment, so there's no `PATH` to change at run time.
 - **Filesystem.** FAT16 is read-only, 8.3 names only, and only the kernel can open files (there's no file syscall).
   A crafted disk image can make it scan for a long time; cluster chains aren't checked for loops.
 - **No FPU state per process.** x87 registers aren't saved or reset between tasks.
@@ -328,7 +339,6 @@ Parts that are started but not finished:
 - **Isolation:** stop mapping all of memory into every process, and turn on CR0.WP.
 - **Writing files:** the VFS has write and append modes, but FAT16 refuses anything but read, and there are no file
   syscalls yet.
-- **Program lookup:** programs always come from `0:/`; a `PATH`-style lookup is still a TODO in the code.
 - **Sleeping:** `pit_sleep` is there, but kernel code can't use it until the tick stops switching tasks under it.
 - **Keyboard:** Num Lock and extended keys.
 - **Real hardware:** never tried.
