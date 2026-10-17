@@ -35,14 +35,19 @@ Everything in this list is checked by `make test` or was run in QEMU.
   is) and flat binaries up to 1 MiB, loaded at 0x400000 and run in ring 3 with their own 16 KiB stack.
 - **Tasks:** 12 process slots, a round-robin task switch on every timer tick, command-line arguments passed to
   `main(argc, argv)`.
-- **Syscalls:** 11 calls through `int 0x80` (table below). Every argument and every string or list a syscall reads
+- **Syscalls:** 12 calls through `int 0x80` (table below). Every argument and every string or list a syscall reads
   from user memory goes through a checked copy: only memory the program owns and has mapped, so a bad pointer can't
   crash the kernel. The call fails instead and the program carries on.
-- **Console:** 80x25 VGA text with colours, scrolling and backspace across rows, and a kernel `printf`. Kernel debug
-  output also goes to port 0xE9 (QEMU's `debugcon`).
-- **Keyboard:** PS/2 scancode set 1 with Shift symbols, Caps Lock and the keypad.
+- **Console:** 80x25 VGA text with colours, scrolling and backspace across rows, and a kernel `printf`. Programs can
+  move the cursor back and forth across rows without changing the text (syscall 11); a move off the visible page is
+  refused. Kernel debug output also goes to port 0xE9 (QEMU's `debugcon`).
+- **Keyboard:** PS/2 scancode set 1 with Shift symbols, Caps Lock and the keypad. Num Lock starts on, so the keypad
+  types digits right away as before, whatever state the BIOS or GRUB left the keyboard in. The driver keeps track of
+  it: with it off, the keypad digits and the decimal point type nothing, while keypad `+ - * /` and Enter still work. The arrows, Home, End, Insert, Delete, Page Up and Page Down arrive as their own key codes,
+  0x100-0x109 (`KEY_*` in `config.mk`), whatever the Num Lock state. Print Screen and Pause type nothing.
 - **Shell:** reads a line, splits it into words and runs the first word as a program (`blank.elf hello world`).
-  There are no built-in commands.
+  While typing, Left/Right, Home/End, Backspace and Delete work anywhere in the line; Up, Down, Insert and the page
+  keys are ignored. There are no built-in commands.
 - **Program lookup:** syscalls 6 and 7 (and so the shell) look a bare program name (no `/` or `:`) up in the
   directories of `PROGRAM_SEARCH_PATHS` in `config.mk`, in order: by default `0:/` and then `0:/bin/`. The first
   directory that has the file wins. Only "not found" moves on to the next directory; a name that is there but can't
@@ -51,7 +56,7 @@ Everything in this list is checked by `make test` or was run in QEMU.
   understood). Names can be up to 104 characters, and `argv[0]` is the name as typed, not the full path. The image
   the build makes has no `bin/` directory: `shell.elf` and `blank.elf` are in the root.
 - **User library:** `programs/stdlib` with the syscall wrappers, `malloc`/`free`, `printf`, `strtok`, `itoa`
-  and a line reader.
+  and a line reader with the editing keys above (`rorthox_terminal_readline`).
 
 ## Architecture
 
@@ -97,14 +102,15 @@ own program, stack and allocations mapped on top.
 | 0x7E00-0xE1FF | kernel heap block table (one byte per 4 KiB block) |
 | 0xB8000 | VGA text screen |
 | 0x100000-0x10DB4B | kernel image (`kernel.bin`, 56,140 bytes; the disk reserves 101,888) |
-| 0x10E000-0x11062B | kernel `.bss` |
+| 0x10E000-0x11064B | kernel `.bss` |
 | below 0x200000 | kernel boot stack (top 0x200000) |
 | 0x3FB000-0x3FEFFF | user stack (virtual, 16 KiB, top 0x3FF000) |
 | 0x400000-0x4FFFFF | user program load window (virtual) |
 | 0x500000-0x5FFFFF | kernel stack for interrupts from ring 3 (TSS `esp0` = 0x600000) |
 | 0x01000000-0x073FFFFF | kernel heap (100 MiB), so the machine needs 128 MiB of RAM |
 
-The values shared between C, NASM, the linker scripts and the shell scripts live in one place, `config.mk`. It also
+The values shared between C, NASM, the linker scripts and the shell scripts live in one place, `config.mk`: among
+others the syscall numbers and the codes of the special keys (`KEY_UP` = 0x100 to `KEY_PAGE_DOWN` = 0x109). It also
 holds the program search list, `PROGRAM_SEARCH_PATHS`: 1 to 4 directory prefixes such as `0:/` or `0:/bin/`
 (`0:/`, then simple directory names, each ending in `/`; disk 0 is the only disk). The build stops on anything else.
 
@@ -146,7 +152,7 @@ numbers are in `config.mk`, the handlers in `kernel/isr80h/`, the wrappers in `p
 |---|---|---|
 | 0 | (no wrapper) | returns the sum of two integers |
 | 1 | `print(str)` | prints a string (copied through a 1 KiB kernel buffer) |
-| 2 | `rorthox_getkey()` | next key from the process's keyboard queue, 0 if there is none |
+| 2 | `rorthox_getkey()` | next key from the process's keyboard queue: a byte (1-255) or a special key code (0x100-0x109), 0 if there is none |
 | 3 | `rorthox_putchar(c)` | prints one character |
 | 4 | `rorthox_malloc(size)` | allocates kernel heap memory and maps it into the process |
 | 5 | `rorthox_free(ptr)` | frees an allocation of the process |
@@ -155,6 +161,7 @@ numbers are in `config.mk`, the handlers in `kernel/isr80h/`, the wrappers in `p
 | 8 | `rorthox_process_get_arguments(out)` | writes `argc`/`argv` into a writable struct the process owns |
 | 9 | `rorthox_exit()` | ends the process |
 | 10 | `printc(str, colour)` | prints a string in one of the 16 VGA colours |
+| 11 | `rorthox_terminal_move_cursor(delta)` | moves the screen cursor by `delta` cells (negative = back, across rows) without changing the text; a move off the 80x25 page returns an error and changes nothing, it never scrolls |
 
 ## Building
 
@@ -256,8 +263,8 @@ qemu-system-i386 -m 128 -drive file=bin/os.bin,format=raw,index=0,media=disk \
 make test
 ```
 
-This builds everything and runs 53 tests (`scripts/smoke.sh` plus every `scripts/tests/*.sh`); it keeps going after a
-failure and prints a summary (`53 passed, 0 failed, 0 skipped`). A full run takes about 10 minutes. `make smoke`
+This builds everything and runs 56 tests (`scripts/smoke.sh` plus every `scripts/tests/*.sh`); it keeps going after a
+failure and prints a summary (`56 passed, 0 failed, 0 skipped`). A full run takes about 10 minutes. `make smoke`
 runs only the smoke test, and `./scripts/run-tests.sh scripts/tests/panic.sh` runs single tests.
 
 The tests boot RorthOX headless in QEMU and drive it through the QEMU monitor: they type with `sendkey`, read the
@@ -274,8 +281,8 @@ where it matters) to check one function against every input. Tests that need ext
 | Exceptions and privilege | `exception-frames`, `exceptions`, `kernel-exceptions`, `panic`, `panic-screen`, `task-flags`, `tss-io` | one frame layout for every vector; only the syscall and debugging gates are open to ring 3; a user fault ends only that program; kernel faults panic and stay halted; each task keeps its EFLAGS; ring 3 can't touch I/O ports |
 | Memory | `heap`, `heap-free`, `heap-oom`, `print-oom` | oversized requests fail; bad frees are ignored; running out of heap while starting a program is an error, not a crash |
 | Disk and FAT16 | `disk-read`, `fat-chain`, `fat-directory`, `fat-entry`, `fat-lookup`, `file-descriptors`, `file-read`, `path-release`, `open-oom` | ATA status checks; cluster chains; reserved and bad FAT values; lookups and seeks stay in bounds; a missing file is told apart from other open errors; every descriptor slot works; failed opens give their memory back |
-| Programs and processes | `elf-segments`, `elf-unwind`, `raw-program`, `load-unwind`, `process-release`, `task-list`, `syscall-path`, `program-arguments`, `command-arguments`, `argument-oom`, `user-pointers`, `program-lookup`, `program-lookup-config` | ELF segments get their own memory; bad ELF files are refused; raw programs must fit the load window; failed loads give everything back; finished programs free their memory; the task list stays linked; every syscall checks the user memory it reads or writes; bare names are looked up in the search list in order, the first match wins, only a missing file moves on, and `argv[0]` stays as typed; bad `PROGRAM_SEARCH_PATHS` values stop the build |
-| Console, keyboard, user library | `tty-scroll`, `tty-backspace`, `printc`, `formatting`, `keyboard-burst`, `keyboard-queue`, `keyboard-scancode`, `keyboard-symbols`, `readline`, `strtok` | scrolling and backspace; colours; bounded formatting; no lost keys; a full key queue keeps unread keys; the scancode table for every key with Shift and Caps; line editing; `strtok` |
+| Programs and processes | `elf-segments`, `elf-unwind`, `raw-program`, `load-unwind`, `process-release`, `task-list`, `syscall-path`, `program-arguments`, `command-arguments`, `argument-oom`, `user-pointers`, `program-lookup`, `program-lookup-config`, `config-values` | ELF segments get their own memory; bad ELF files are refused; raw programs must fit the load window; failed loads give everything back; finished programs free their memory; the task list stays linked; every syscall checks the user memory it reads or writes; bare names are looked up in the search list in order, the first match wins, only a missing file moves on, and `argv[0]` stays as typed; bad `PROGRAM_SEARCH_PATHS` values stop the build, and so do key codes outside 0x100-0xFFFF and duplicate key codes or syscall numbers in `config.mk` |
+| Console, keyboard, user library | `tty-scroll`, `tty-backspace`, `printc`, `formatting`, `keyboard-burst`, `keyboard-queue`, `keyboard-scancode`, `keyboard-symbols`, `keyboard-extended`, `readline`, `readline-edit`, `strtok` | scrolling and backspace; colours, and the key and cursor syscalls pass their values whole; bounded formatting; no lost keys; a full key queue keeps unread keys and every key value comes back unchanged; the decoder for every key with Shift, Caps and Num Lock, plus the E0/E1 sequences (fake shifts, Print Screen, Pause); the special keys and Num Lock as QEMU sends them; cursor moves stay on the page and change no text; line editing in the middle of a line, across a row edge and while the screen scrolls; `strtok` |
 
 `grub-boot` needs the GRUB packages. Without them it is reported as skipped (`1 skipped` and a `SKIPPED:` line)
 instead of failing; `RORTHOX_REQUIRE_ISO=1 make test` turns that into a failure.
@@ -295,7 +302,7 @@ programs/blank/    a small program that prints its arguments
 programs/*/        test-only programs, used by scripts/tests/ on a copy of the disk image
 scripts/           smoke test, test runner, QEMU helpers (qemu-lib.sh), ISO tool check (check-iso-tools.sh)
 scripts/tests/     the tests; host/ has the host C checks, lib/ the Python and gdbstub helpers
-config.mk          shared values: disk layout, addresses, selectors, syscall numbers, program search list, RAM size
+config.mk          shared values: disk layout, addresses, selectors, syscall numbers, key codes, program search list, RAM size
 Makefile           builds bin/boot.bin, bin/kernel.bin and bin/os.bin; make iso, make test, make smoke
 configure.sh       builds the i686-elf cross toolchain
 build.sh, qemu.sh, clean.sh, uninstall-config.sh   small wrappers
@@ -316,8 +323,17 @@ program and the kernel.
   errors, so it just shows a new prompt.
 - **Resources.** There's no per-process memory limit: one program can take most of the kernel heap. Raw programs
   must be 1 byte to 1 MiB; ELF files get a kernel buffer as big as the file.
-- **Keyboard.** The per-process key queue holds 1024 unread keys; more are dropped. Num Lock isn't tracked (the
-  keypad always types digits), and extended keys (arrows, Home, End and so on) type nothing.
+- **Keyboard.** The per-process key queue holds 1024 unread keys; more are dropped. The keyboard LEDs aren't set,
+  so the Num Lock light can disagree with the state the driver keeps. With Num Lock off the keypad keys don't act as
+  arrows, Home and so on (they type nothing), and Shift doesn't flip the keypad between digits and those keys.
+  The driver drops the two bytes after each E1 (Pause), so a cut-off Pause sequence swallows up to two real key bytes.
+- **Line editing.** The line reader returns on its own, as if Enter was pressed, once the caller's buffer is full.
+  With echo on it also stops at 1023 characters; without echo only the buffer size limits it. There's no history,
+  no overwrite mode and no scrolling inside a line: the whole line has to stay on the visible page. The screen is
+  shared, so if another program prints while a line is being edited, the echo and the cursor get out of step with
+  the line.
+- **One shared screen.** There's no per-program console: any program can move the cursor anywhere on the page
+  (syscall 11) and overwrite text that the kernel or another program printed.
 - **Program lookup.** The search list is fixed when the kernel is built. There's no current directory and no
   environment, so there's no `PATH` to change at run time.
 - **Filesystem.** FAT16 is read-only, 8.3 names only, and only the kernel can open files (there's no file syscall).
@@ -340,7 +356,6 @@ Parts that are started but not finished:
 - **Writing files:** the VFS has write and append modes, but FAT16 refuses anything but read, and there are no file
   syscalls yet.
 - **Sleeping:** `pit_sleep` is there, but kernel code can't use it until the tick stops switching tasks under it.
-- **Keyboard:** Num Lock and extended keys.
 - **Real hardware:** never tried.
 
 ## Licence
