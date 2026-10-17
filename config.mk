@@ -48,6 +48,7 @@ SYSCALL_GET_PROGRAM_ARGUMENTS = 8
 SYSCALL_EXIT = 9
 SYSCALL_PRINTC = 10
 SYSCALL_TERMINAL_MOVE_CURSOR = 11
+SYSCALL_SLEEP = 12
 
 # Dedicated navigation and editing keys (outside the byte-valued key range).
 KEY_UP = 0x100
