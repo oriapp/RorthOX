@@ -22,7 +22,8 @@ Everything in this list is checked by `make test` or was run in QEMU.
 - **GRUB boot:** the same `kernel.bin` carries a Multiboot 1 header, and `make iso` builds a BIOS GRUB ISO with a
   one-entry menu. Programs still come from the FAT16 disk image.
 - **CPU setup:** GDT with kernel/user code and data segments plus a 104-byte TSS, a 256-vector IDT, both 8259 PICs
-  remapped (IRQs at 0x20-0x2F, only timer, keyboard and cascade unmasked), PIT at 100 Hz.
+  remapped (IRQs at 0x20-0x2F, only timer, keyboard and cascade unmasked), PIT at 100 Hz (divisor 11932, rounded
+  up so a tick is never shorter than 10 ms of the nominal clock).
 - **Exceptions:** a CPU exception in a user program ends only that program and the shell keeps working. An exception
   in kernel code stops the machine with a panic screen showing the reason and `file:line`, and one line on the debug
   port.
@@ -35,7 +36,11 @@ Everything in this list is checked by `make test` or was run in QEMU.
   is) and flat binaries up to 1 MiB, loaded at 0x400000 and run in ring 3 with their own 16 KiB stack.
 - **Tasks:** 12 process slots, a round-robin task switch on every timer tick, command-line arguments passed to
   `main(argc, argv)`.
-- **Syscalls:** 12 calls through `int 0x80` (table below). Every argument and every string or list a syscall reads
+- **Sleeping:** a program can call `sleep(milliseconds)` (syscall 12). Only that program blocks: the scheduler skips
+  it and the other tasks keep running, and the timer tick wakes it once its deadline has passed. It comes back with
+  its registers and stack as they were and gets 0. When every task is asleep, the kernel halts the CPU (`hlt` with
+  interrupts on) until a tick makes one due; keys and other interrupts that come in meanwhile go back to the halt.
+- **Syscalls:** 13 calls through `int 0x80` (table below). Every argument and every string or list a syscall reads
   from user memory goes through a checked copy: only memory the program owns and has mapped, so a bad pointer can't
   crash the kernel. The call fails instead and the program carries on.
 - **Console:** 80x25 VGA text with colours, scrolling and backspace across rows, and a kernel `printf`. Programs can
@@ -74,7 +79,10 @@ The default path is my own boot sector:
    paging, registers the syscalls and the keyboard, loads `0:/shell.elf` and drops into ring 3 with `iret`.
 
 Interrupts stay off while the kernel runs. They are on only in user mode (`task_return` sets EFLAGS.IF), so every
-timer tick, key press and syscall enters the kernel from ring 3.
+timer tick, key press and syscall enters the kernel from ring 3. The one exception is the idle loop in `task_next`:
+when every task sleeps, it runs `sti; hlt; cli` (`IRQ_ON_AND_PAUSE`) in ring 0 and looks for a runnable task again
+after each return. An interrupt that arrives there comes from ring 0, so the kernel saves no task state for it and
+keeps its own page directory: the timer tick only counts and wakes sleepers, and the loop picks the next task itself.
 
 The second path is GRUB (`make iso`, `./qemu.sh --iso`):
 
@@ -106,7 +114,7 @@ own program, stack and allocations mapped on top.
 | below 0x200000 | kernel boot stack (top 0x200000) |
 | 0x3FB000-0x3FEFFF | user stack (virtual, 16 KiB, top 0x3FF000) |
 | 0x400000-0x4FFFFF | user program load window (virtual) |
-| 0x500000-0x5FFFFF | kernel stack for interrupts from ring 3 (TSS `esp0` = 0x600000) |
+| 0x500000-0x5FFFFF | kernel stack for interrupts from ring 3 (TSS `esp0` = 0x600000); the idle loop runs on it too, there is no separate idle stack |
 | 0x01000000-0x073FFFFF | kernel heap (100 MiB), so the machine needs 128 MiB of RAM |
 
 The values shared between C, NASM, the linker scripts and the shell scripts live in one place, `config.mk`: among
@@ -133,12 +141,12 @@ The build copies `shell.elf` and `blank.elf` into the root directory with mtools
 | `kernel/boot` | boot sector, GRUB menu template |
 | `kernel/kernel.asm`, `kernel/kernel.c` | entry points (`_start` and `multiboot_entry`), PIC setup, `kernel_main`, panic |
 | `kernel/gdt`, `kernel/idt`, `kernel/task/tss.*` | descriptor tables, 256 interrupt stubs, TSS |
-| `kernel/arch/i686` | VGA terminal and `printf`, debug port, panic screen, PIT driver |
+| `kernel/arch/i686` | VGA terminal and `printf`, debug port, panic screen, PIT driver (tick counter, milliseconds to ticks) |
 | `kernel/memory` | heap allocator (`heap/`), paging (`paging/`) |
 | `kernel/disk` | ATA PIO driver and byte streamer |
 | `kernel/fs` | path parser, VFS, FAT16 |
 | `kernel/loader/formats` | ELF32 loader |
-| `kernel/task` | tasks, processes, switching to ring 3 |
+| `kernel/task` | tasks, processes, switching to ring 3, sleeping tasks and the idle loop |
 | `kernel/isr80h` | the syscalls |
 | `kernel/keyboard` | keyboard queue and the PS/2 driver |
 | `kernel/time/rtc` | CMOS clock read at boot ("System Time") |
@@ -162,6 +170,12 @@ numbers are in `config.mk`, the handlers in `kernel/isr80h/`, the wrappers in `p
 | 9 | `rorthox_exit()` | ends the process |
 | 10 | `printc(str, colour)` | prints a string in one of the 16 VGA colours |
 | 11 | `rorthox_terminal_move_cursor(delta)` | moves the screen cursor by `delta` cells (negative = back, across rows) without changing the text; a move off the 80x25 page returns an error and changes nothing, it never scrolls |
+| 12 | `sleep(milliseconds)` | blocks the calling program for at least that many milliseconds while other tasks run, then returns 0; 0 returns 0 at once, a negative value returns `-EINVARG` (-2) without sleeping |
+
+`sleep` takes milliseconds, not seconds like POSIX `sleep`. The kernel turns them into timer ticks:
+`ceil(ms / 10) + 2` at 100 Hz. The two extra ticks cover a tick that may already be pending when the sleep starts
+and the partial tick that is running, so the whole ticks that follow add up to at least the time asked for, counted
+in ticks as they arrive. `sleep(1)` therefore waits 3 ticks and `sleep(1000)` 102.
 
 ## Building
 
@@ -263,8 +277,8 @@ qemu-system-i386 -m 128 -drive file=bin/os.bin,format=raw,index=0,media=disk \
 make test
 ```
 
-This builds everything and runs 56 tests (`scripts/smoke.sh` plus every `scripts/tests/*.sh`); it keeps going after a
-failure and prints a summary (`56 passed, 0 failed, 0 skipped`). A full run takes about 10 minutes. `make smoke`
+This builds everything and runs 58 tests (`scripts/smoke.sh` plus every `scripts/tests/*.sh`); it keeps going after a
+failure and prints a summary (`58 passed, 0 failed, 0 skipped`). A full run takes about 10 minutes. `make smoke`
 runs only the smoke test, and `./scripts/run-tests.sh scripts/tests/panic.sh` runs single tests.
 
 The tests boot RorthOX headless in QEMU and drive it through the QEMU monitor: they type with `sendkey`, read the
@@ -276,12 +290,13 @@ where it matters) to check one function against every input. Tests that need ext
 
 | Area | Tests | What they prove |
 |---|---|---|
-| Boot and CPU setup | `smoke`, `kernel-bss`, `descriptor-tables`, `idt-load`, `interrupt-count`, `pic`, `pit`, `kernel-headers` | the shell boots and runs a program with arguments; `.bss` is zero before C; GDT/TSS layout and limits; 256 IDT vectors; PIC remap and masks; PIT at 100 Hz and the tick order |
+| Boot and CPU setup | `smoke`, `kernel-bss`, `descriptor-tables`, `idt-load`, `interrupt-count`, `pic`, `pit`, `kernel-headers` | the shell boots and runs a program with arguments; `.bss` is zero before C; GDT/TSS layout and limits; 256 IDT vectors; PIC remap and masks; the PIT divisor (11932), the milliseconds-to-ticks conversion, and what a tick does from ring 3 (acknowledge, count, wake, switch) and from the idle loop (count, wake, return) |
 | GRUB boot | `multiboot-header`, `grub-boot` | the Multiboot header fields and their bounds in `kernel.bin` (no QEMU needed); the ISO boots through the GRUB menu and runs `blank.elf`, and a second boot from a disk whose boot sector only loops checks through QEMU's gdbstub that the Multiboot entry, not the boot sector, sets up the GDT, segments and stack |
 | Exceptions and privilege | `exception-frames`, `exceptions`, `kernel-exceptions`, `panic`, `panic-screen`, `task-flags`, `tss-io` | one frame layout for every vector; only the syscall and debugging gates are open to ring 3; a user fault ends only that program; kernel faults panic and stay halted; each task keeps its EFLAGS; ring 3 can't touch I/O ports |
 | Memory | `heap`, `heap-free`, `heap-oom`, `print-oom` | oversized requests fail; bad frees are ignored; running out of heap while starting a program is an error, not a crash |
 | Disk and FAT16 | `disk-read`, `fat-chain`, `fat-directory`, `fat-entry`, `fat-lookup`, `file-descriptors`, `file-read`, `path-release`, `open-oom` | ATA status checks; cluster chains; reserved and bad FAT values; lookups and seeks stay in bounds; a missing file is told apart from other open errors; every descriptor slot works; failed opens give their memory back |
 | Programs and processes | `elf-segments`, `elf-unwind`, `raw-program`, `load-unwind`, `process-release`, `task-list`, `syscall-path`, `program-arguments`, `command-arguments`, `argument-oom`, `user-pointers`, `program-lookup`, `program-lookup-config`, `config-values` | ELF segments get their own memory; bad ELF files are refused; raw programs must fit the load window; failed loads give everything back; finished programs free their memory; the task list stays linked; every syscall checks the user memory it reads or writes; bare names are looked up in the search list in order, the first match wins, only a missing file moves on, and `argv[0]` stays as typed; bad `PROGRAM_SEARCH_PATHS` values stop the build, and so do key codes outside 0x100-0xFFFF and duplicate key codes or syscall numbers in `config.mk` |
+| Sleeping | `sleep`, `sleep-idle`, `task-list`, `pit` | `sleep(0)` returns 0, negative and too-big values return -2; a sleep lasts at least `ceil(ms / 10) + 2` ticks while another program keeps running, then returns 0 with registers and stack unchanged; sleeping tasks are never picked, every due sleeper wakes on its tick (also across the 2^32 wrap of the tick counter), and a freed sleeper leaves nothing behind; with every task asleep the CPU sits in `hlt` in ring 0 with interrupts on and the kernel's page directory, a key or an NMI doesn't wake the sleeper (the key is read after it wakes), and the idle stack doesn't grow |
 | Console, keyboard, user library | `tty-scroll`, `tty-backspace`, `printc`, `formatting`, `keyboard-burst`, `keyboard-queue`, `keyboard-scancode`, `keyboard-symbols`, `keyboard-extended`, `readline`, `readline-edit`, `strtok` | scrolling and backspace; colours, and the key and cursor syscalls pass their values whole; bounded formatting; no lost keys; a full key queue keeps unread keys and every key value comes back unchanged; the decoder for every key with Shift, Caps and Num Lock, plus the E0/E1 sequences (fake shifts, Print Screen, Pause); the special keys and Num Lock as QEMU sends them; cursor moves stay on the page and change no text; line editing in the middle of a line, across a row edge and while the screen scrolls; `strtok` |
 
 `grub-boot` needs the GRUB packages. Without them it is reported as skipped (`1 skipped` and a `SKIPPED:` line)
@@ -342,8 +357,18 @@ program and the kernel.
 - **Fixed memory layout.** The kernel heap is at 16 MiB and the machine needs 128 MiB of RAM; there's no BIOS
   memory map, and the one GRUB passes is ignored. The boot sector loads the kernel to 1 MiB before `_start` enables
   A20, so it relies on the firmware having A20 on (QEMU's does).
-- **Small things.** `pit_sleep` exists but can't be used from kernel code yet (the tick switches tasks). Kernel
-  `vsprintf`/`sprintf` are unbounded (no code that runs calls them). The boot clock prints minutes and seconds without
+- **Sleep timing.** A sleep is counted in 10 ms timer ticks as they arrive, not in calibrated time: it is at least
+  `ceil(ms / 10) + 2` ticks, so even `sleep(1)` waits 3 ticks. Under QEMU's TCG a late tick can make a sleep
+  up to one tick shorter than QEMU's virtual clock says, and the tick catch-up of KVM's in-kernel PIT isn't taken
+  into account. There's no upper bound on when a sleeper runs again: once it is due it waits for its turn in the
+  round robin like any other task.
+- **No way to end a sleep early.** Nothing cancels a sleep. Keys typed meanwhile go into the program's key queue
+  (if it's the one that gets the keyboard) and wait there; they don't wake it. A program started from the shell keeps
+  the keyboard while it sleeps, and the longest sleep is 2,147,483,647 ms (about 24.9 days), so a program that
+  sleeps that long holds the keyboard until a reboot.
+- **Idle only when every task sleeps.** The shell waits for keys by polling `getkey`, so while it runs the CPU never
+  halts, even when the program it started is asleep. Sleeping doesn't change which program gets the keys either.
+- **Small things.** Kernel `vsprintf`/`sprintf` are unbounded (no code that runs calls them). The boot clock prints minutes and seconds without
   leading zeros.
 - **GRUB path is BIOS only.** No UEFI, and the ISO has only been booted in QEMU (not VirtualBox, not from USB).
 - **Tested only in QEMU** (8.2, TCG). It has never run on real hardware.
@@ -355,7 +380,6 @@ Parts that are started but not finished:
 - **Isolation:** stop mapping all of memory into every process, and turn on CR0.WP.
 - **Writing files:** the VFS has write and append modes, but FAT16 refuses anything but read, and there are no file
   syscalls yet.
-- **Sleeping:** `pit_sleep` is there, but kernel code can't use it until the tick stops switching tasks under it.
 - **Real hardware:** never tried.
 
 ## Licence
