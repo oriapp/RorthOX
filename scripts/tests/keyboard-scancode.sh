@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Check the real keyboard IRQ handler against an independent set-1 map under ASan.
 # All 256 byte values run with Num Lock off/on, caps off/on and neither/left/right/both shifts held.
+# Whole sequences only a real keyboard sends (fake shifts, Shift/Alt Print Screen, Ctrl+Pause, a
+# cut-off Pause) give exactly their keys, and init writes nothing but the port enable command.
 # Env: HOST_CC=cc. No QEMU boot in this host bounds/mapping check.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -34,6 +36,10 @@ check "extended byte/modifier sweep ran" "$OUT/host-check.log" \
     "interrupt: E0 plus all 256 values in every Num Lock/Caps/Shift state checked" line
 check "navigation keys ran" "$OUT/host-check.log" \
     "interrupt: E0 navigation keys give their key values, breaks give nothing" line
+check "real-keyboard sequences ran" "$OUT/host-check.log" \
+    "interrupt: fake shifts, Print Screen, Ctrl+Pause and cut-off Pause sequences checked" line
+check "no port write but the enable command" "$OUT/host-check.log" \
+    "ports: init wrote 0xAE to 0x64, nothing else was written" line
 check "every mapping and state check passed" "$OUT/host-check.log" "keyboard-scancode host check: passed" line
 if [ "$failures" -ne 0 ]; then
     echo "keyboard-scancode: $failures check(s) failed" >&2

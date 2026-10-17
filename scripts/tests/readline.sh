@@ -7,7 +7,10 @@
 # 1. Host check (scripts/tests/host/readline.c): the real programs/stdlib/src/rorthox.c and
 #    string.c built with the host C compiler, every symbol prefixed with "user_". Scripted keys,
 #    recorded echo, guard bytes around the line buffer: leading backspaces are neither stored nor
-#    echoed nor counted against the buffer size; ordinary erasing still works.
+#    echoed nor counted against the buffer size; ordinary erasing still works. Line editing
+#    (integer keys: arrows, Home, End, Delete, Backspace in the middle, ignored special keys,
+#    bytes 0x80/0xff, echo off, the 1023-character echo limit, starts in columns 0/77/79 and on
+#    the bottom row where the screen scrolls) against a string model and an 80x25 screen model.
 # 2. QEMU: boot bin/os.bin (a copy), wait for the shell's prompt, read the VGA page, press
 #    backspace three times, then type "blank.elf rl2", a backspace, "1" and Enter. blank.elf
 #    must run with the argument "rl1"; the prompt row must read "> blank.elf rl1" with the
@@ -42,7 +45,7 @@ if "$HOST_CC" -std=gnu99 -g -O0 -ffreestanding -fno-builtin -fno-stack-protector
         -c programs/stdlib/src/string.c -o "$OUT/user-string.o" >> "$OUT/host-build.log" 2>&1 &&
     "$OBJCOPY" --prefix-symbols=user_ "$OUT/user-rorthox.o" "$OUT/user-rorthox-prefixed.o" >> "$OUT/host-build.log" 2>&1 &&
     "$OBJCOPY" --prefix-symbols=user_ "$OUT/user-string.o" "$OUT/user-string-prefixed.o" >> "$OUT/host-build.log" 2>&1 &&
-    "$HOST_CC" -std=gnu99 -g -O0 -fno-builtin -w -I scripts/tests/host \
+    "$HOST_CC" -std=gnu99 -g -O0 -fno-builtin -w -I scripts/tests/host -I build/config \
         scripts/tests/host/readline.c "$OUT/user-rorthox-prefixed.o" "$OUT/user-string-prefixed.o" \
         -o "$OUT/host-check" >> "$OUT/host-build.log" 2>&1; then
     if "$OUT/host-check" > "$OUT/host-check.log" 2>&1; then host_status=0; else host_status=$?; fi
@@ -53,7 +56,7 @@ else
 fi
 echo "exit=$host_status" > "$OUT/host-status.txt"
 check "host check built and exited with status 0"  "$OUT/host-status.txt" "exit=0" line
-check "host check: every readline case passed"     "$OUT/host-check.log"  "readline host check: 0 of 10 cases failed" line
+check "host check: every readline case passed"     "$OUT/host-check.log"  "readline host check: 0 of 33 cases failed" line
 
 # prompts: the number of shell prompts below the shell banner.
 prompts() {

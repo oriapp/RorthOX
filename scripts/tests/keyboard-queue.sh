@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # The per-process key queue drops keys when it is full instead of overwriting unread ones.
+# Entries are whole key values: bytes 0x01-0xff and the special keys keep their value through
+# partial drains, refills and wrap-around, zero is never queued, and the fields around the
+# buffer keep their values.
 # Host check of the real kernel/keyboard/keyboard.c under ASan. Env: HOST_CC=cc. No QEMU boot.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -24,6 +27,7 @@ fi
 echo "exit=$host_status" > "$OUT/host-status.txt"
 check "host check built and exited with status 0" "$OUT/host-status.txt" "exit=0" line
 check "no AddressSanitizer report" "$OUT/host-check.log" "AddressSanitizer" absent
+check "mixed keys, partial drains and refills ran" "$OUT/host-check.log" "keyboard-queue: mixed keys, partial drains and refills checked" line
 check "full queue keeps unread keys, wraps correctly" "$OUT/host-check.log" "keyboard-queue: PASS" line
 if [ "$failures" -ne 0 ]; then
     echo "keyboard-queue: $failures check(s) failed" >&2

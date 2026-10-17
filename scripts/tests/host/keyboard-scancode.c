@@ -56,7 +56,14 @@ unsigned char insb(unsigned short port)
     reads++;
     return input;
 }
-void outb(unsigned short port, unsigned char val) {}
+// Every port write: init enables the first PS/2 port (0x64 <- 0xAE) and nothing else is sent,
+// no LED command (0xED) and no other keyboard command.
+static int outb_calls, outb_bad;
+void outb(unsigned short port, unsigned char val)
+{
+    if (outb_calls++ || port != 0x64 || val != 0xae)
+        outb_bad++;
+}
 int idt_register_interrupt_callback(int vector, INTERRUPT_CALLBACK_FUNCTION callback)
 {
     expect(vector == ISR_KEYBOARD_INTERRUPT, "IRQ1 vector", 0, vector, ISR_KEYBOARD_INTERRUPT);
@@ -71,7 +78,17 @@ KEYBOARD_CAPS_LOCK_STATE keyboard_get_capslock(struct keyboard *keyboard)
 {
     return keyboard->capslock_state;
 }
-void keyboard_push(uint16_t key) { pushed++; value = key; }
+// Everything pushed since the last log_clear(), for the whole-sequence checks.
+static int log_keys[32], log_count;
+static void log_clear(void) { log_count = 0; }
+void keyboard_push(uint16_t key)
+{
+    pushed++;
+    value = key;
+    if (log_count < 32)
+        log_keys[log_count] = key;
+    log_count++;
+}
 void kernel_page() {}
 int task_page() { return 0; }
 
@@ -226,6 +243,57 @@ int main(void)
         }
     }
     printf("interrupt: E0 navigation keys give their key values, breaks give nothing\n");
+
+    /* Whole sequences a real keyboard sends (QEMU sends none of the fake shifts or a cut-off
+     * Pause): only the listed keys come out, and held Shift and Num Lock are what they were. */
+    static const struct
+    {
+        const char *name;
+        int num, bytes[24], nbytes, want[4], nwant;
+    } sequences[] = {
+        {"Up with Num Lock fake shifts, then a", 1,
+         {0xe0, 0x2a, 0xe0, 0x48, 0xe0, 0xc8, 0xe0, 0xaa, 0x1e, 0x9e}, 10, {RORTHOX_KEY_UP, 'a'}, 2},
+        {"left Shift held, Up with fake shift release/press", 0,
+         {0x2a, 0xe0, 0xaa, 0xe0, 0x48, 0xe0, 0xc8, 0xe0, 0x2a, 0x1e, 0x9e, 0xaa, 0x1e, 0x9e}, 14,
+         {RORTHOX_KEY_UP, 'A', 'a'}, 3},
+        {"right Shift held, End with fake shifts", 0,
+         {0x36, 0xe0, 0xb6, 0xe0, 0x4f, 0xe0, 0xcf, 0xe0, 0x36, 0x1e, 0x9e, 0xb6, 0x1e, 0x9e}, 14,
+         {RORTHOX_KEY_END, 'A', 'a'}, 3},
+        {"both Shifts held, Home with both fake shifts", 0,
+         {0x2a, 0x36, 0xe0, 0xaa, 0xe0, 0xb6, 0xe0, 0x47, 0xe0, 0xc7, 0xe0, 0x36, 0xe0, 0x2a, 0x1e, 0x9e,
+          0xaa, 0x1e, 0x9e, 0xb6, 0x1e, 0x9e}, 22, {RORTHOX_KEY_HOME, 'A', 'A', 'a'}, 4},
+        {"left Shift held, keypad / with fake shifts", 1,
+         {0x2a, 0xe0, 0xaa, 0xe0, 0x35, 0xe0, 0xb5, 0xe0, 0x2a, 0x1e, 0x9e, 0xaa}, 12, {'/', 'A'}, 2},
+        {"Print Screen make and break, then keypad 1 and a", 1,
+         {0xe0, 0x2a, 0xe0, 0x37, 0xe0, 0xb7, 0xe0, 0xaa, 0x4f, 0xcf, 0x1e, 0x9e}, 12, {'1', 'a'}, 2},
+        {"Shift+Print Screen, then a", 1,
+         {0x2a, 0xe0, 0x37, 0xe0, 0xb7, 0x1e, 0x9e, 0xaa, 0x1e}, 9, {'A', 'a'}, 2},
+        {"Alt+Print Screen (QEMU's fake Alt), then a", 1,
+         {0xb8, 0x38, 0x54, 0xd4, 0xb8, 0x38, 0x1e}, 7, {'a'}, 1},
+        {"Ctrl+Pause, then keypad 1", 1,
+         {0x1d, 0xe0, 0x46, 0xe0, 0xc6, 0x9d, 0x4f}, 7, {'1'}, 1},
+        {"Pause cut off after 1D, then a, a", 1,
+         {0xe1, 0x1d, 0x1e, 0x9e, 0x1e}, 5, {'a'}, 1},
+        {"Pause cut off after 45, then keypad 1", 1,
+         {0xe1, 0x1d, 0x45, 0x4f}, 4, {'1'}, 1},
+        {"Pause in the byte after E0, then keypad 1", 1,
+         {0xe0, 0xe1, 0x4f}, 3, {'1'}, 1},
+    };
+    for (unsigned s = 0; s < sizeof(sequences) / sizeof(sequences[0]); s++)
+    {
+        reset(0, sequences[s].num);
+        log_clear();
+        for (int i = 0; i < sequences[s].nbytes; i++)
+            send(sequences[s].bytes[i]);
+        int ok = log_count == sequences[s].nwant;
+        for (int i = 0; ok && i < log_count; i++)
+            ok = log_keys[i] == sequences[s].want[i];
+        expect(ok, sequences[s].name, s, log_count, sequences[s].nwant);
+    }
+    printf("interrupt: fake shifts, Print Screen, Ctrl+Pause and cut-off Pause sequences checked\n");
+
+    expect(outb_calls == 1 && !outb_bad, "only the port enable command was written", 0, outb_calls, 1);
+    printf("ports: init wrote 0xAE to 0x64, nothing else was written\n");
     printf("keyboard-scancode host check: %d of %d checks failed\n", failed, checks);
     if (!failed) printf("keyboard-scancode host check: passed\n");
     fflush(0);

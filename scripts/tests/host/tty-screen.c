@@ -20,7 +20,12 @@
  * cleared to spaces in the terminal colour; terminal_putchar ignores coordinates off the screen;
  * a long mixed run of output never leaves the screen page.
  *
- * Usage: tty-screen backspace|scroll
+ * Group "cursor": terminal_move_cursor() within a row, across rows, to the first and last cell,
+ * one past them, INT_MIN/INT_MAX and other off-page deltas, and on a scrolled screen. A move
+ * changes no cell; a valid one sets row, column and the CRT cursor, a refused one (-EINVARG)
+ * changes none of them; the next output lands at the new place.
+ *
+ * Usage: tty-screen backspace|scroll|cursor
  * Prints "tty-screen <group> host check: <failed> of <cases> cases failed".
  */
 #include <stdint.h>
@@ -593,6 +598,123 @@ static void sc_stress(void)
     }
 }
 
+// --- group cursor: terminal_move_cursor (syscall 11) ---
+
+// One move: the result, and on success the new row/column and CRT cursor; on failure nothing
+// changed, not even the CRT cursor. No screen cell changes either way.
+static void move(int delta, int want_result)
+{
+    int before_reg = cursor_reg;
+    int result = terminal_move_cursor(delta);
+    if (result != want_result)
+    {
+        BAD("move %d from (%d,%d) returned %d, expected %d", delta, want_col, want_row, result, want_result);
+    }
+    if (want_result == 0)
+    {
+        int to = want_row * COLS + want_col + delta;
+        want_row = to / COLS;
+        want_col = to % COLS;
+        verify("cursor move", 1);
+    }
+    else
+    {
+        verify("refused cursor move", 0);
+        if (cursor_reg != before_reg)
+        {
+            BAD("refused move %d changed the VGA cursor to %d", delta, cursor_reg);
+        }
+    }
+}
+
+static void cu_row(void)
+{
+    setup();
+    set_position(10, 3);
+    move(-4, 0);
+    move(7, 0);
+    move(0, 0);
+    terminal_writechar('Q', 0x0E);
+    model_put('Q', 0x0E);
+    verify("character after moving within a row", 1);
+}
+
+static void cu_rows(void)
+{
+    setup();
+    set_position(0, 5);
+    move(-1, 0);    // column 79 of the row above
+    move(1, 0);
+    set_position(78, 6);
+    move(3, 0);     // (1,7)
+    move(-250, 0);
+    move(333, 0);
+    move(-COLS, 0);
+    print("ab");
+    model_print("ab", WHITE);
+    verify("print after moving across rows", 1);
+    terminal_backspace();
+    model_backspace();
+    verify("backspace after moving across rows", 1);
+}
+
+static void cu_edges(void)
+{
+    setup();
+    set_position(0, 0);
+    move(0, 0);
+    move(-1, -EINVARG);
+    move(CELLS - 1, 0);    // the last cell
+    move(1, -EINVARG);
+    move(0, 0);
+    terminal_writechar('E', WHITE);   // the last cell, then the screen scrolls
+    model_put('E', WHITE);
+    verify("character in the last cell after a move", 1);
+    move(-(CELLS - 1), -EINVARG);  // (0,24) after the scroll: only 1920 cells before it
+    move(-(CELLS - COLS), 0);
+}
+
+static void cu_extremes(void)
+{
+    static const int bad[] = { -2147483647 - 1, 2147483647, -1001, 1000, -2000, 2000, CELLS, -CELLS,
+                               0x40000000, -0x40000000 };
+    setup();
+    set_position(40, 12);    // cell 1000: 1000 cells before it, 999 after
+    for (unsigned i = 0; i < sizeof(bad) / sizeof(bad[0]); i++)
+    {
+        move(bad[i], -EINVARG);
+    }
+    move(-1000, 0);
+    move(1999, 0);
+    move(-1999, 0);
+}
+
+static void cu_after_scroll(void)
+{
+    setup();
+    char line[40];
+    for (int n = 1; n <= 30; n++)
+    {
+        numbered(line, "scrolled ", n, 30);
+        line[30] = '\n';
+        line[31] = 0;
+        print(line);
+        model_print(line, WHITE);
+    }
+    print("tail");
+    model_print("tail", WHITE);
+    verify("30 lines before the moves", 1);
+    move(-3, 0);
+    move(-COLS, 0);
+    terminal_writechar('M', 0x0C);
+    model_put('M', 0x0C);
+    verify("character after moving on a scrolled screen", 1);
+    move(COLS + 1, 0);
+    print("XYZ\n");
+    model_print("XYZ\n", WHITE);
+    verify("print and scroll after a move", 1);
+}
+
 struct test_case
 {
     const char *group;
@@ -619,13 +741,19 @@ static const struct test_case cases[] = {
     { "scroll", "printf literal text and unknown format wrap and scroll", sc_printf_wrap },
     { "scroll", "terminal_putchar ignores positions off the screen", sc_putchar_bounds },
     { "scroll", "4000 mixed output calls stay on the screen", sc_stress },
+    { "cursor", "moves within a row, then a character lands there", cu_row },
+    { "cursor", "moves across rows, then print and backspace", cu_rows },
+    { "cursor", "first and last cell, one past each refused", cu_edges },
+    { "cursor", "INT_MIN, INT_MAX and off-page moves change nothing", cu_extremes },
+    { "cursor", "moves on a scrolled screen", cu_after_scroll },
 };
 
 int main(int argc, char **argv)
 {
-    if (argc != 2 || (strcmp(argv[1], "backspace") != 0 && strcmp(argv[1], "scroll") != 0))
+    if (argc != 2 || (strcmp(argv[1], "backspace") != 0 && strcmp(argv[1], "scroll") != 0 &&
+                      strcmp(argv[1], "cursor") != 0))
     {
-        printf("usage: tty-screen backspace|scroll\n");
+        printf("usage: tty-screen backspace|scroll|cursor\n");
         return 2;
     }
     const char *group = argv[1];

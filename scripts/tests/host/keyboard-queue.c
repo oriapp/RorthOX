@@ -61,6 +61,56 @@ int main(void)
         expect(keyboard_pop() == 0, "empty after wrap", round, 0, 0);
     }
 
+    /* Mixed bytes and special keys, partly drained and refilled so the queue wraps with unread
+     * keys in it, full at every refill. A shadow queue says what must come out. Zero is never
+     * queued. The fields around the buffer must keep their values. */
+    static int shadow[4 * RORTHOX_KEYBOARD_BUFFER_SIZE];
+    int first = 0, last = 0;
+    unsigned int seed = 7;
+    proc.size = 0x5a5a5a5a;
+    for (unsigned i = 0; i < sizeof(proc.arguments); i++)
+        ((unsigned char *)&proc.arguments)[i] = 0x5a;
+    for (int round = 0; round < 6; round++)
+    {
+        for (int dropped = 0; dropped < 3;)
+        {
+            seed = seed * 1103515245 + 12345;
+            int k = (seed >> 16) % (nkeys + 1);
+            int key = k == nkeys ? 0 : keys[k];
+            if (k < nkeys && keys[k] == 'a')
+                key = 1 + (seed >> 8) % 255;
+            keyboard_push(key);
+            if (key && last - first < size)
+                shadow[last++] = key;
+            else if (key)
+                dropped++;
+        }
+        expect(proc.keyboard.tail - proc.keyboard.head == size, "full after refill", round,
+               proc.keyboard.tail - proc.keyboard.head, size);
+        int drain = round == 5 ? size : 300 + round * 97;
+        for (int i = 0; i < drain; i++)
+        {
+            int c = keyboard_pop();
+            expect(c == shadow[first], "mixed queue order", round * 10000 + i, c, shadow[first]);
+            first++;
+        }
+        if (first > 2 * size)
+        {
+            for (int i = first; i < last; i++)
+                shadow[i - first] = shadow[i];
+            last -= first;
+            first = 0;
+        }
+    }
+    expect(keyboard_pop() == 0, "empty after mixed rounds", 0, 0, 0);
+    keyboard_push(0);
+    expect(keyboard_pop() == 0, "zero is not queued", 0, 0, 0);
+    expect(proc.size == 0x5a5a5a5a, "field before the queue", 0, proc.size, 0x5a5a5a5a);
+    const unsigned char *after = (const unsigned char *)&proc.arguments;
+    for (unsigned i = 0; i < sizeof(proc.arguments); i++)
+        expect(after[i] == 0x5a, "field after the queue", i, after[i], 0x5a);
+    printf("keyboard-queue: mixed keys, partial drains and refills checked\n");
+
     printf(failed ? "keyboard-queue: FAIL\n" : "keyboard-queue: PASS\n");
     return failed != 0;
 }

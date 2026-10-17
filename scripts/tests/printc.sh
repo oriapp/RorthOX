@@ -8,7 +8,10 @@
 #    stubbed task stack, string copy and terminal. Colours 0-15 copy the message once (never the
 #    colour) and print it in that colour; colours 16, 255, 256, 0x7fffffff, 0x80000000 and
 #    0xffffffff give -EINVARG and copy and print nothing; a failing copy gives its error back
-#    and prints nothing.
+#    and prints nothing. The same file's getkey handler returns every key value whole (bytes and
+#    the special keys above 255, zero-extended), and the cursor-move handler passes stack item 0
+#    once as a signed int and returns the terminal's result, or the read error without calling
+#    the terminal.
 # 2. QEMU: copy bin/os.bin, add programs/libtest to the copy only, boot, run
 #    "libtest.elf printc". After its "armed" line and the shell's prompt, a key makes it print
 #    one row: "lt-c:" (print), "#0" ... "#f" through the real printc wrapper in colours 0-15,
@@ -52,7 +55,9 @@ else
 fi
 echo "exit=$host_status" > "$OUT/host-status.txt"
 check "host check built and exited with status 0"  "$OUT/host-status.txt" "exit=0" line
-check "host check: every handler case passed"      "$OUT/host-check.log"  "printc host check: 0 of 25 cases failed" line
+check "host check: getkey cases ran"               "$OUT/host-check.log"  "getkey: every key value comes back whole" line
+check "host check: cursor move cases ran"          "$OUT/host-check.log"  "cursor move: item 0 passed once as a signed int, an unreadable item calls nothing" line
+check "host check: every handler case passed"      "$OUT/host-check.log"  "printc host check: 0 of 50 cases failed" line
 
 # prompts: the number of shell prompts below the shell banner.
 prompts() {
