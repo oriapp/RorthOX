@@ -184,7 +184,7 @@ static int command_test(const char *mode)
     free(memory); return 0;
 }
 
-/* Syscalls 0, 1, 3, 4, 5, 6, 10 and 11 read their stack arguments through a checked copy, and 1, 6
+/* Syscalls 0, 1, 3, 4, 5, 6, 10, 11 and 12 read their stack arguments through a checked copy, and 1, 6
    and 10 their string too: a freed stack, and freed, unowned and unterminated-at-the-end string
    pointers give an error instead of a kernel fault or an overread. */
 static int pointer_test(void)
@@ -203,7 +203,8 @@ static int pointer_test(void)
     int pr = bad_stack(SYSCALL_PRINT, sp), prc = bad_stack(SYSCALL_PRINTC, sp);
     int fr = bad_stack(SYSCALL_FREE, sp), ma = bad_stack(SYSCALL_MALLOC, sp);
     int ld = bad_stack(SYSCALL_PROCESS_LOAD_START, sp), mc = bad_stack(SYSCALL_TERMINAL_MOVE_CURSOR, sp);
-    bad |= sum != -2 || put != -2 || pr != -2 || prc != -2 || fr != -2 || ma != 0 || ld != 0 || mc != -2;
+    int sl = bad_stack(SYSCALL_SLEEP, sp);
+    bad |= sum != -2 || put != -2 || pr != -2 || prc != -2 || fr != -2 || ma != 0 || ld != 0 || mc != -2 || sl != -2;
     /* 1100 bytes that cross a page edge: print copies at most 1023 of them, so the screen
        shows "...TRUN|" and never the X. */
     char *s = two + 4096 - 600;
@@ -214,7 +215,7 @@ static int pointer_test(void)
     print("|\n");
     printf("syscheck: long print %i\n", rc);
     /* Printed after the long string, which pushes earlier lines off the screen. */
-    printf("syscheck: freed stack %i %i %i %i %i %i %i %i\n", sum, put, pr, prc, fr, ma, ld, mc);
+    printf("syscheck: freed stack %i %i %i %i %i %i %i %i %i\n", sum, put, pr, prc, fr, ma, ld, mc, sl);
     bad |= rc != 0;
     /* Freed now, so nothing the program owns follows end (the unterminated case below). */
     free(two);

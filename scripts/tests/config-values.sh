@@ -10,6 +10,10 @@
 #             (so they can't wrap back into range), two keys with the same code (also when spelled
 #             differently), two syscalls with the same number (also 11 and 0xb). A non-numeric or
 #             zero-padded key code stops at the numeric spelling check.
+#   sleep     SYSCALL_SLEEP (12): emitted to the C header and the NASM include, can be moved (0), and
+#             is refused as a duplicate (11, 0xa), zero-padded or a word, too long to fit 32 bits,
+#             or on the make command line. 1023 compiles with the kernel's isr80h.h, 1024 stops at
+#             its command table range check.
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -81,16 +85,19 @@ reject() {
     echo "  reject $tag: $*"
 }
 
-ACCEPTED="defaults key-low key-high key-padded-hex syscalls-reordered"
+ACCEPTED="defaults key-low key-high key-padded-hex syscalls-reordered sleep-default sleep-reordered"
 echo "config-values: accepted values"
 accept defaults           "#define RORTHOX_KEY_PAGE_DOWN 0x109"
 accept key-low            "#define RORTHOX_KEY_UP 0x100"            KEY_UP=0x100
 accept key-high           "#define RORTHOX_KEY_DOWN 65535"          KEY_DOWN=65535
 accept key-padded-hex     "#define RORTHOX_KEY_HOME 0x0200"         KEY_HOME=0x0200
 accept syscalls-reordered "#define SYSCALL_TERMINAL_MOVE_CURSOR 0"  SYSCALL_TERMINAL_MOVE_CURSOR=0 SYSCALL_SUM=11
+accept sleep-default      "#define SYSCALL_SLEEP 12"
+accept sleep-reordered    "#define SYSCALL_SLEEP 0"                 SYSCALL_SLEEP=0 SYSCALL_SUM=12
 
 REJECTED="key-zero key-0xff key-255 key-0x10000 key-65536 key-wrap-hex key-wrap-dec key-dup key-dup-spelling \
-key-word key-zero-padded syscall-dup syscall-dup-spelling"
+key-word key-zero-padded syscall-dup syscall-dup-spelling sleep-dup sleep-dup-spelling sleep-zero-padded sleep-word \
+sleep-wrap-hex sleep-wrap-dec"
 echo "config-values: rejected values"
 reject key-zero             "$KEY_ERROR"     KEY_UP=0
 reject key-0xff             "$KEY_ERROR"     KEY_LEFT=0xFF
@@ -106,6 +113,43 @@ reject key-word             "$NUMERIC_ERROR" KEY_UP=abc
 reject key-zero-padded      "$NUMERIC_ERROR" KEY_UP=0400
 reject syscall-dup          "$SYSCALL_ERROR" SYSCALL_PRINTC=9
 reject syscall-dup-spelling "$SYSCALL_ERROR" SYSCALL_PRINTC=0xb
+reject sleep-dup            "$SYSCALL_ERROR" SYSCALL_SLEEP=11
+reject sleep-dup-spelling   "$SYSCALL_ERROR" SYSCALL_SLEEP=0xa
+reject sleep-zero-padded    "$NUMERIC_ERROR" SYSCALL_SLEEP=012
+reject sleep-word           "$NUMERIC_ERROR" SYSCALL_SLEEP=twelve
+# 2^64 + 0x20: bash arithmetic wraps it to 32, a free number (dash saturates it).
+reject sleep-wrap-hex       "$SYSCALL_ERROR" SYSCALL_SLEEP=0x10000000000000020
+reject sleep-wrap-dec       "$SYSCALL_ERROR" SYSCALL_SLEEP=18446744073709551648
+
+echo "config-values: syscall 12 (sleep) in the NASM include, on the command line and past the command table"
+# The stdlib's sleep wrapper takes its number from the NASM include.
+set_values
+if make -s -C "$FIX" build/config/rorthox-config.inc > "$FIX/sleep-nasm.log" 2>&1 &&
+        grep -qxF '%define SYSCALL_SLEEP 12' "$FIX/build/config/rorthox-config.inc"; then
+    echo "PASS sleep-nasm" >> "$RESULTS"
+fi
+for sh in /bin/sh /bin/bash; do
+    log="$FIX/sleep-override-$(basename "$sh").log"
+    make -s -C "$FIX" -n SHELL="$sh" SYSCALL_SLEEP=12 build/config/rorthox-config.h > "$log" 2>&1 || true
+    grep -qF '*** SYSCALL_SLEEP must be set in config.mk, not on the command line' "$log" &&
+        echo "PASS sleep-override $sh" >> "$RESULTS"
+done
+# make accepts any distinct number; the kernel's range check refuses one past its command table.
+# range_case <tag> <value> ok|error: the kernel's isr80h.h compiled against that header.
+range_case() {
+    local tag="$1" got
+    set_values SYSCALL_SLEEP="$2" && make -s -C "$FIX" build/config/rorthox-config.h > "$FIX/$tag.log" 2>&1 || {
+        echo "  $tag: no header"; return; }
+    printf '#include "isr80h/isr80h.h"\nint range_fixture;\n' > "$FIX/$tag.c"
+    if i686-elf-gcc -std=gnu99 -ffreestanding -I "$FIX/build/config" -I kernel -c "$FIX/$tag.c" -o "$FIX/$tag.o" \
+            >> "$FIX/$tag.log" 2>&1; then got=ok; else got=error; fi
+    echo "  SYSCALL_SLEEP = $2: isr80h.h $got"
+    if [ "$got" = "$3" ] && { [ "$got" = ok ] || grep -qF 'syscall outside command table' "$FIX/$tag.log"; }; then
+        echo "PASS $tag" >> "$RESULTS"
+    fi
+}
+range_case sleep-range-last 1023 ok
+range_case sleep-range-past 1024 error
 
 for t in $ACCEPTED; do
     check "$t: parsed with /bin/sh"     "$RESULTS" "PASS $t parsed /bin/sh" line
@@ -116,6 +160,11 @@ for t in $REJECTED; do
     check "$t: rejected with /bin/sh"   "$RESULTS" "PASS $t rejected /bin/sh" line
     check "$t: rejected with /bin/bash" "$RESULTS" "PASS $t rejected /bin/bash" line
 done
+check "sleep: %define SYSCALL_SLEEP 12 in the NASM include" "$RESULTS" "PASS sleep-nasm" line
+check "sleep: command-line value refused (/bin/sh)"         "$RESULTS" "PASS sleep-override /bin/sh" line
+check "sleep: command-line value refused (/bin/bash)"       "$RESULTS" "PASS sleep-override /bin/bash" line
+check "sleep: 1023, the last command slot, compiles"        "$RESULTS" "PASS sleep-range-last" line
+check "sleep: 1024 stops at the command table range check"  "$RESULTS" "PASS sleep-range-past" line
 if [ "$failures" -ne 0 ]; then
     echo "config-values: $failures check(s) failed" >&2
     exit 1
