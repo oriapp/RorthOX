@@ -8,6 +8,7 @@
 #    process_load_elf()/process_load_data() cut out of kernel/task/process.c, with the host C
 #    compiler, and makes the object allocation, fopen, fstat, the buffer allocation, fread and
 #    the format check fail in turn, and fread come back short (must be -EIO, no flat binary).
+#    A failed fopen must come back as -ENOENT for a missing file and -EIO for anything else.
 # 2. QEMU: the "elfdata" case of programs/oomtest, run through heap-oom.sh: allocating the
 #    buffer for blank.elf fails, and the ELF object must not stay taken (oomtest.c has the
 #    expected count). blank.elf must start from the shell afterwards.

@@ -5,7 +5,8 @@
  * kernel/task/process.c, with the host C compiler. The file calls (fopen, fstat, fread, fclose)
  * are stubs that serve one file from memory and can fail; the heap is scripts/tests/host/kalloc.c.
  * Every failing elf_load() must return an error, leave *file_out alone, close the file and leave
- * nothing allocated. A file that is not an ELF file must be gone from the heap before
+ * nothing allocated. A failed open is -ENOENT when the file is missing and -EIO for any other
+ * error (-EINVARG, -ENOMEM). A file that is not an ELF file must be gone from the heap before
  * process_load_data() falls back to loading it as a flat binary; a file with the ELF magic that
  * is not a supported ELF file (here a 64-bit one) is -EINVARG and is never tried as a flat binary. A good ELF file keeps
  * its object, its buffer, the pointer array and one zeroed allocation per loaded segment (and
@@ -33,6 +34,7 @@ static unsigned char content[MAX_FILE];
 static int content_size;
 static unsigned char blank[MAX_FILE];
 static int blank_size;
+// What fopen_status() returns instead of opening the file (0: it opens it).
 static int fail_open;
 static int fail_stat;
 static int fail_read;
@@ -49,7 +51,7 @@ int fopen_status(const char *filename, const char *mode_str)
 {
     if (fail_open)
     {
-        return -EIO;
+        return fail_open;
     }
     opens++;
     is_open = 1;
@@ -225,6 +227,8 @@ enum
 {
     OBJECT_ALLOC,
     OPEN,
+    OPEN_NOMEM,
+    OPEN_MISSING,
     STAT,
     BUFFER_ALLOC,
     READ,
@@ -240,7 +244,8 @@ enum
     CASE_COUNT
 };
 
-static const char *case_name[] = { "ELF object allocation fails", "fopen fails", "fstat fails",
+static const char *case_name[] = { "ELF object allocation fails", "fopen fails with -EINVARG", "fopen fails with -ENOMEM",
+                                   "fopen finds no such file", "fstat fails",
                                    "file buffer allocation fails", "fread fails",
                                    "fread reads 0 items and nothing", "fread reads 0 items, all but the last byte",
                                    "not an ELF file",
@@ -262,8 +267,14 @@ static int run_case(int which)
         kalloc_fail_at(1);
         return clean_failure(what, elf_load("0:/blank.elf", &out), -ENOMEM, out);
     case OPEN:
-        fail_open = 1;
-        return clean_failure(what, elf_load("0:/blank.elf", &out), 0, out);
+        fail_open = -EINVARG;
+        return clean_failure(what, elf_load("0:/blank.elf", &out), -EIO, out);
+    case OPEN_NOMEM:
+        fail_open = -ENOMEM;
+        return clean_failure(what, elf_load("0:/blank.elf", &out), -EIO, out);
+    case OPEN_MISSING:
+        fail_open = -ENOENT;
+        return clean_failure(what, elf_load("0:/blank.elf", &out), -ENOENT, out);
     case STAT:
         fail_stat = 1;
         return clean_failure(what, elf_load("0:/blank.elf", &out), 0, out);
@@ -332,7 +343,7 @@ static int run_case(int which)
     case NO_FALLBACK:
     {
         static struct process process;
-        fail_open = 1;
+        fail_open = -EINVARG;
         int res = process_load_data("0:/blank.elf", &process);
         if (res >= 0 || binary_calls != 0)
         {

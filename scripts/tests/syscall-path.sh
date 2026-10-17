@@ -5,7 +5,7 @@
 # Copy bin/os.bin, add programs/pathtest to the copy only, and boot it. pathtest.elf asks
 # syscall 7 and syscall 6 to start "blank.elf" followed by slashes (the path parser stops at the
 # first empty part, so such a name opens blank.elf if the kernel takes it), 1, 2, 3, 4 characters
-# too long and much longer. Syscall 7 must return -EINVARG, a name that just fits must still reach
+# too long and much longer. Syscalls 7 and 6 must return -EINVARG, a name that just fits must still reach
 # the loader, and blank.elf must not run. Then the shell starts blank.elf by a name that just
 # fits (blank.elf and slashes), and by its plain name. bin/os.bin itself must not change.
 #

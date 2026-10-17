@@ -23,6 +23,12 @@
  *              (back to an earlier byte, or to 0); SEEK_END (still -EUNIMP) and a bad mode (-EINVARG); the same on
  *              empty.bin. A failed seek keeps the position (checked by reading the next byte), and
  *              a read at the end returns 0 without a disk read.
+ *   missing    (deleted image) fopen_status() gives -ENOENT for a name that is nowhere, in the
+ *              root, in ldir and under a missing directory, and fopen() still gives 0. A file
+ *              used as a directory, a path with no file, a missing disk and bad syntax give
+ *              other errors, and so does every failed allocation and disk read on the way to
+ *              later.elf, ldir/later.elf, nosuch.elf and ldir/nosuch.elf (nothing left
+ *              allocated). Program lookup tries the next directory only on -ENOENT.
  *
  * Usage: fat-lookup <deleted image> <full image> <odd image> <blank.elf> <last.bin> <dup1.bin>
  *                   <hiword.bin> <seek.bin>
@@ -273,10 +279,87 @@ static int seek_empty_case(void)
     return 0;
 }
 
+// ---- not found (program lookup tries the next directory only for -ENOENT) ----
+
+// fopen_status(path) on a fresh disk, with allocation call <fail_alloc> or disk read <fail_read>
+// from now made to fail (0 = none). *failed says whether that failure happened.
+static int open_status(const char *path, int fail_alloc, int fail_read, int *failed)
+{
+    fat_host_setup();
+    int live = kalloc_live();
+    kalloc_fail_at(fail_alloc ? kalloc_calls() + fail_alloc : 0);
+    fat_host_fail_read(fail_read, -EIO);
+    int res = fopen_status(path, "r");
+    *failed = kalloc_failed() || failed_reads;
+    if (res > 0)
+    {
+        fclose(res);
+    }
+    if (kalloc_live() != live || kalloc_bad_frees() || kalloc_poison_errors())
+    {
+        printf("  FAIL missing: %s left %d allocation(s) or freed badly\n", path, kalloc_live() - live);
+        return -1000;
+    }
+    return res;
+}
+
+static int missing_case(void)
+{
+    // Names that are nowhere: -ENOENT from fopen_status, 0 from fopen.
+    static const char *absent[] = { "0:/nosuch.elf", "0:/ldir/nosuch.elf", "0:/nodir/later.elf" };
+    // Not absence: a file used as a directory, no first part, no such disk, bad syntax.
+    static const char *other[] = { "0:/later.elf/x.elf", "0:/", "5:/later.elf", "later.elf" };
+    // Every allocation and disk read on the way to these must fail with something else.
+    static const char *swept[] = { "0:/later.elf", "0:/ldir/later.elf", "0:/nosuch.elf", "0:/ldir/nosuch.elf" };
+    int failed;
+    fat_host_open_image(images[0]);
+    for (int i = 0; i < 3; i++)
+    {
+        int res = open_status(absent[i], 0, 0, &failed);
+        if (res != -ENOENT)
+            FAIL("missing: fopen_status(%s) returned %d, expected %d", absent[i], res, -ENOENT);
+        fat_host_setup();
+        if ((res = fopen(absent[i], "r")) != 0)
+            FAIL("missing: fopen(%s) returned %d, expected 0", absent[i], res);
+    }
+    for (int i = 0; i < 4; i++)
+    {
+        int res = open_status(other[i], 0, 0, &failed);
+        if (res >= 0 || res == -ENOENT || res == -1000)
+            FAIL("missing: fopen_status(%s) returned %d, expected an error other than %d", other[i], res, -ENOENT);
+    }
+    for (int i = 0; i < 4; i++)
+    {
+        int alloc_cases = 0, read_cases = 0;
+        for (int n = 1; n < 100; n++, alloc_cases++)
+        {
+            int res = open_status(swept[i], n, 0, &failed);
+            if (!failed)
+                break;
+            if (res >= 0 || res == -ENOENT || res == -1000)
+                FAIL("missing: %s with allocation %d failing returned %d", swept[i], n, res);
+        }
+        for (int n = 1; n < 100; n++, read_cases++)
+        {
+            int res = open_status(swept[i], 0, n, &failed);
+            if (!failed)
+                break;
+            if (res >= 0 || res == -ENOENT || res == -1000)
+                FAIL("missing: %s with disk read %d failing returned %d", swept[i], n, res);
+        }
+        if (!alloc_cases)
+            FAIL("missing: no allocation to fail for %s", swept[i]);
+        if (i % 2 && !read_cases)
+            FAIL("missing: no disk read to fail for %s", swept[i]);
+    }
+    return 0;
+}
+
 static int (*const cases[])(void) = { later_case, gone_case, root_case, first_case, hiword_case,
-                                      seek_set_case, seek_cur_case, seek_other_case, seek_empty_case };
+                                      seek_set_case, seek_cur_case, seek_other_case, seek_empty_case,
+                                      missing_case };
 static const char *names[] = { "later", "gone", "root", "first", "hiword", "seek-set", "seek-cur", "seek-other",
-                               "seek-empty" };
+                               "seek-empty", "missing" };
 
 int main(int argc, char **argv)
 {

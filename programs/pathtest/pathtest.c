@@ -8,8 +8,8 @@
  *
  * Syscall 7 (start a program with arguments) must return -EINVARG for every name that is too
  * long. A name that fits but names no file must still reach the loader and fail there (some other
- * error). Syscall 6 (start a program) returns nothing, so for it the test script checks that
- * blank.elf never printed anything.
+ * error). Syscall 6 (start a program) must return -EINVARG for them too, and the test script
+ * checks that blank.elf never printed anything.
  *
  * Prints "pathtest: FAIL ..." lines, then "pathtest: PASS" if every check passed, then
  * "pathtest: done". No globals: the loader doesn't map .bss.
@@ -19,6 +19,9 @@
 #include "string.h"
 #include "config.h"
 #include "status.h"
+
+// Syscall 6 leaves its result in eax; the stdlib wrapper is declared void.
+int load_start_result(const char *filename) __asm__("rorthox_process_load_start");
 
 // Longest name that fits after "0:/" with its terminator.
 #define FITS (RORTHOX_MAX_PATH - 4)
@@ -98,7 +101,12 @@ int main(int argc, char **argv)
     for (int i = 0; i < count; i++)
     {
         make_name(command->argument, too_long[i], "blank.elf", '/');
-        rorthox_process_load_start(command->argument);
+        int res = load_start_result(command->argument);
+        if (res != -EINVARG)
+        {
+            fail("syscall 6 blank.elf+slashes", too_long[i], res, -EINVARG);
+            failed = 1;
+        }
     }
 
     free(command);

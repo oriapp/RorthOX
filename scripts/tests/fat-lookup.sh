@@ -3,7 +3,8 @@
 # FAT16 lookup: an entry after a deleted slot must be found (the directory size counts raw slots
 # and lookup skips deleted ones), the root directory scan must stay inside the root, the first of
 # two equal names wins without leaking the other, only the low first-cluster word counts on FAT16,
-# and fseek() can reach the end of a file but not go past it.
+# and fseek() can reach the end of a file but not go past it. A name that is nowhere is reported as
+# not found (-ENOENT), and nothing else is.
 #
 # Three copies of bin/os.bin, built with mtools and scripts/tests/lib/fatimg.py:
 #   deleted  zap.elf and later.elf (both blank.elf) in the root and in directory ldir; zap.elf is
@@ -149,7 +150,7 @@ else
 fi
 echo "exit=$host_status" > "$OUT/host-status.txt"
 check "host check built and exited with status 0"  "$OUT/host-status.txt" "exit=0" line
-check "host check: every lookup and seek case passed" "$OUT/host-check.log" "fat-lookup host check: 0 of 9 cases failed" line
+check "host check: every lookup and seek case passed" "$OUT/host-check.log" "fat-lookup host check: 0 of 10 cases failed" line
 
 qemu_start "$DELETED" "$OUT"
 if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT"; then
