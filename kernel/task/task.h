@@ -40,6 +40,13 @@ _Static_assert(sizeof(struct registers) == 48, "struct registers must stay 48 by
 
 struct process;
 
+enum task_state
+{
+    TASK_RUNNABLE = 0,
+    // Waits for wake_tick (syscall 12). The scheduler skips it until the PIT tick wakes it.
+    TASK_SLEEPING,
+};
+
 struct task
 {
     /*
@@ -81,6 +88,12 @@ struct task
     *   Previous in the linked list
     */
    struct task *prev;
+
+    /*
+    *   Runnable or sleeping, and the PIT tick a sleeping task wakes at
+    */
+    enum task_state state;
+    uint32_t wake_tick;
 };
 
 // Construct a detached task; publish it exactly once after setup succeeds.
@@ -93,7 +106,17 @@ struct task *task_get_next();
 // Unlink and destroy a published task.
 int task_free(struct task *task);
 
-void task_next();
+// Switches to the next runnable task and does not return. If every task sleeps, halts with
+// interrupts on until a PIT tick wakes one. IF=0, kernel CR3, on the TSS entry stack.
+// No master PIC interrupt may still be in service: a caller coming from an IRQ sends its EOI
+// first. The 8259 holds back that IRQ and every lower-priority one while it is in service
+// (IRQ0 blocks both the tick and the keyboard), so the idle halt could wait forever.
+void task_next() __attribute__((noreturn));
+// Marks the current task sleeping until the PIT counter reaches deadline, then task_next().
+// Does not return: the caller's kernel stack is dropped. Set the task's saved eax first.
+void task_sleep_until(uint32_t deadline) __attribute__((noreturn));
+// Wakes every sleeping task whose deadline is due at now (wrap-safe). IF=0, from the PIT tick.
+void task_wake_sleepers(uint32_t now);
 int task_switch(struct task *task);
 int task_page();
 int task_page_task(struct task *task);
@@ -101,7 +124,7 @@ int task_page_task(struct task *task);
 void task_run_first_ever_task();
 
 // Will drop us into user land
-void task_return(struct registers *regs);
+void task_return(struct registers *regs) __attribute__((noreturn));
 
 void restore_general_purpose_registers(struct registers *regs);
 void user_registers();

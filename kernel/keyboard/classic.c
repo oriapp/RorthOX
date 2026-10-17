@@ -97,7 +97,7 @@ static const kybd_extended_scancode extended_scancodes[] = {
 };
 
 int classic_keyboard_init();
-void classic_keyboard_handle_interrupt();
+void classic_keyboard_handle_interrupt(struct interrupt_frame *frame);
 void keyboard_toggle_capslock();
 
 struct keyboard classic_keyboard = {
@@ -168,16 +168,15 @@ static void classic_keyboard_handle_extended(uint8_t scancode)
     }
 }
 
-void classic_keyboard_handle_interrupt()
+// IRQ1 callback. interrupt_handler owns the page directory, segments and EOI on both ends.
+void classic_keyboard_handle_interrupt(struct interrupt_frame *frame)
 {
-    kernel_page();
     // One byte per interrupt: a second read here would take the next key's byte and lose it
     uint8_t scancode = insb(KEYBOARD_INPUT_PORT);
 
     if (pause_bytes_left > 0)
     {
         pause_bytes_left--;
-        task_page();
         return;
     }
     if (extended)
@@ -185,19 +184,16 @@ void classic_keyboard_handle_interrupt()
         // Exactly one byte after E0, even if it is E0 or E1 itself
         extended = 0;
         classic_keyboard_handle_extended(scancode);
-        task_page();
         return;
     }
     if (scancode == CLASSIC_KEYBOARD_EXTENDED)
     {
         extended = 1;
-        task_page();
         return;
     }
     if (scancode == CLASSIC_KEYBOARD_PAUSE)
     {
         pause_bytes_left = CLASSIC_KEYBOARD_PAUSE_PAYLOAD;
-        task_page();
         return;
     }
 
@@ -243,7 +239,6 @@ void classic_keyboard_handle_interrupt()
             keyboard_push(c);
         }
     }
-    task_page();
 }
 
 void keyboard_toggle_capslock()

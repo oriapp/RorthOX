@@ -19,4 +19,5 @@ void isr80h_register_commands()
     isr80h_register_command(SYSTEM_COMMAND9_EXIT, isr80h_command9_exit);
     isr80h_register_command(SYSTEM_COMMAND10_PRINTC, isr80h_command11_printc);
     isr80h_register_command(SYSTEM_COMMAND11_TERMINAL_MOVE_CURSOR, isr80h_command_terminal_move_cursor);
+    isr80h_register_command(SYSTEM_COMMAND12_SLEEP, isr80h_command_sleep);
 }

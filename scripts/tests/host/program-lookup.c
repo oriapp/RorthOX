@@ -156,6 +156,25 @@ void task_next()
 {
 }
 
+// Syscall 12 is not under test here; stop the check if it is ever reached.
+uint32_t pit_get_ticks(void)
+{
+    printf("pit_get_ticks() called unexpectedly\n");
+    exit(4);
+}
+
+uint32_t pit_ms_to_ticks(uint32_t milliseconds)
+{
+    printf("pit_ms_to_ticks() called unexpectedly\n");
+    exit(4);
+}
+
+void task_sleep_until(uint32_t deadline)
+{
+    printf("task_sleep_until() called unexpectedly\n");
+    exit(4);
+}
+
 // The syscall under test: 6 or 7, and for 7 whether its nodes must reach the loader.
 static int syscall_number;
 

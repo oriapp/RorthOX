@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include <stdint.h>
 #include "process.h"
 #include "task/task.h"
 #include "task/process.h"
@@ -6,6 +7,7 @@
 #include "config.h"
 #include "string/string.h"
 #include "memory/heap/kheap.h"
+#include "include/kernel/time/pit.h"
 
 static const char *const program_search_paths[] = { RORTHOX_PROGRAM_SEARCH_PATHS };
 
@@ -200,4 +202,32 @@ void *isr80h_command9_exit(struct interrupt_frame *frame)
     task_next();
 
     return 0;
+}
+
+// Stack item 0: milliseconds, 0..INT32_MAX. 0 returns 0 at once; a negative value gives
+// -EINVARG. Otherwise the caller sleeps for at least that long (pit_ms_to_ticks) while other
+// tasks run, and gets 0.
+void *isr80h_command_sleep(struct interrupt_frame *frame)
+{
+    struct task *task = task_current();
+    uint32_t milliseconds = 0;
+    int res = task_get_stack_item(task, 0, &milliseconds);
+    if (res < 0)
+    {
+        return ERROR(res);
+    }
+    if (milliseconds > INT32_MAX)
+    {
+        return ERROR(-EINVARG);
+    }
+    if (milliseconds == 0)
+    {
+        return 0;
+    }
+
+    uint32_t deadline = pit_get_ticks() + pit_ms_to_ticks(milliseconds);
+    // The task wakes in task_return with its saved registers, not back through this stack,
+    // so its result goes into the saved eax.
+    task->registers.eax = 0;
+    task_sleep_until(deadline);
 }

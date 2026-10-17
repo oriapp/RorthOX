@@ -27,6 +27,11 @@ void rorthox_putchar(char c);
 // text. The screen is shared by every program. Returns 0, or a negative error (cursor unchanged)
 // if the new place is off the visible 80x25 page: it never scrolls.
 int rorthox_terminal_move_cursor(int delta);
+// Milliseconds, not seconds. Blocks only this program for at least that long, counted in 100 Hz
+// timer ticks (rounded up, plus 2), while other programs run, then returns 0. It can wake later
+// than that. 0 returns 0 at once; a negative value returns a negative error without sleeping.
+// Keys typed meanwhile don't end the sleep; if this program has the keyboard they wait for it.
+int sleep(int milliseconds);
 
 void *rorthox_malloc(size_t size);
 void *rorthox_free(void *ptr);

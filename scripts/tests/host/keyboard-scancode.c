@@ -1,5 +1,7 @@
 /* Exercise the registered IRQ handler, not its lookup implementation. Expected keys are
- * independent of the driver's tables. ASan checks every input byte in every modifier state. */
+ * independent of the driver's tables. ASan checks every input byte in every modifier state.
+ * The handler never switches the page directory or segments itself (interrupt_handler does,
+ * and only for an IRQ from ring 3): no kernel_page or task_page call on any byte. */
 #include <stdint.h>
 #include <stddef.h>
 #include "keyboard/classic.c"
@@ -89,8 +91,10 @@ void keyboard_push(uint16_t key)
         log_keys[log_count] = key;
     log_count++;
 }
-void kernel_page() {}
-int task_page() { return 0; }
+// The IRQ1 callback must leave both to interrupt_handler.
+static int page_switches;
+void kernel_page() { page_switches++; }
+int task_page() { page_switches++; return 0; }
 
 static void send(int code)
 {
@@ -128,9 +132,10 @@ static void send(int code)
             want = 0;
     }
     input = code;
-    reads = pushed = value = 0;
-    irq();
+    reads = pushed = value = page_switches = 0;
+    irq(NULL); /* the driver doesn't read the frame */
     expect(reads == 1, "one port read", code, reads, 1);
+    expect(page_switches == 0, "no kernel_page/task_page", code, page_switches, 0);
     expect(pushed == (want != 0), "push count", code, pushed, want != 0);
     expect(value == want, "key", code, value, want);
     int caps = keyboard_get_capslock(device);

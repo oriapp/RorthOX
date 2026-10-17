@@ -77,14 +77,27 @@ void task_publish(struct task *task)
     task_tail = task;
 }
 
+// The first runnable task after the current one, wrapping from the tail to the head, so the
+// current task itself comes last. NULL if the list is empty or every task sleeps.
 struct task *task_get_next()
 {
-    if (!current_task || !current_task->next)
+    struct task *start = (current_task && current_task->next) ? current_task->next : task_head;
+    struct task *task = start;
+    while (task)
     {
-        return task_head;
+        if (task->state == TASK_RUNNABLE)
+        {
+            return task;
+        }
+
+        task = task->next ? task->next : task_head;
+        if (task == start)
+        {
+            break;
+        }
     }
 
-    return current_task->next;
+    return 0;
 }
 
 static void task_list_remove(struct task *task)
@@ -148,14 +161,55 @@ int task_free(struct task *task)
 
 void task_next()
 {
-    struct task *next_task = task_get_next();
-    if (!next_task)
+    if (!task_head)
     {
         PANIC("No more tasks\n", __FILE__, __LINE__);
     }
 
+    struct task *next_task = task_get_next();
+    if (!next_task)
+    {
+        // Every task sleeps. Halt with interrupts on, on this kernel stack: IRQs from here
+        // come back to this loop (interrupt_handler keeps the kernel addressing for ring 0), and
+        // only the PIT tick wakes tasks. Any return from the halt may be a key, an NMI or a
+        // tick with nothing due, so look again each time with IF=0. sti;hlt are back to back in
+        // IRQ_ON_AND_PAUSE, so an IRQ that comes after the last look still ends the halt.
+        // IRQ callbacks never free a task, so the list stays the same here.
+        kernel_page();
+        while (!(next_task = task_get_next()))
+        {
+            IRQ_ON_AND_PAUSE();
+        }
+    }
+
     task_switch(next_task);
     task_return(&next_task->registers);
+}
+
+void task_sleep_until(uint32_t deadline)
+{
+    struct task *task = task_current();
+    if (!task)
+    {
+        PANIC("No current task to put to sleep\n", __FILE__, __LINE__);
+    }
+
+    task->wake_tick = deadline;
+    task->state = TASK_SLEEPING;
+    task_next();
+}
+
+void task_wake_sleepers(uint32_t now)
+{
+    for (struct task *task = task_head; task; task = task->next)
+    {
+        // Due when now is at or past the deadline, also across the 2^32 wrap: delays stay
+        // below 2^31 ticks (pit.c), so a deadline still ahead is less than 2^31 away.
+        if (task->state == TASK_SLEEPING && (uint32_t)(now - task->wake_tick) < 0x80000000U)
+        {
+            task->state = TASK_RUNNABLE;
+        }
+    }
 }
 
 int task_switch(struct task *task)
@@ -380,6 +434,8 @@ int task_init(struct task *task, struct process *process)
     task->registers.esp = RORTHOX_PROGRAM_VIRTUAL_STACK_ADDRESS_START;
 
     task->process = process;
+    task->state = TASK_RUNNABLE;
+    task->wake_tick = 0;
 
     return 0;
 }

@@ -14,6 +14,7 @@ global rorthox_system:function
 global rorthox_exit:function
 global printc:function
 global rorthox_terminal_move_cursor:function
+global sleep:function
 
 ; void print(const char message);
 print:
@@ -66,6 +67,17 @@ rorthox_terminal_move_cursor:
     mov ebp, esp
     mov eax, SYSCALL_TERMINAL_MOVE_CURSOR ; Command move cursor, result in eax
     push dword[ebp+8] ; Variable "delta"
+    int SYSCALL_VECTOR
+    add esp, 4
+    pop ebp
+    ret
+
+; int sleep(int milliseconds);
+sleep:
+    push ebp
+    mov ebp, esp
+    mov eax, SYSCALL_SLEEP ; Command sleep, result in eax
+    push dword[ebp+8] ; Variable "milliseconds"
     int SYSCALL_VECTOR
     add esp, 4
     pop ebp

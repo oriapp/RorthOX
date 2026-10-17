@@ -6,7 +6,9 @@
 # 1. Host check (scripts/tests/host/task-list.c): builds kernel/task/task.c with the host C
 #    compiler against stubbed paging and heap code and frees tasks in every order from lists
 #    of 1 to 4 tasks, checking head, tail, every next/prev pair and the current task after each
-#    step. It also checks the first two task ids and their scheduling fields.
+#    step. It also checks the first two task ids and their scheduling fields, and the sleeping
+#    tasks of syscall 12: runnable-only selection, wake at the deadline (also across the 2^32
+#    wrap), the idle halt when every task sleeps, and freeing sleeping tasks.
 # 2. QEMU: copy bin/os.bin, add programs/tasktest to the copy only, and boot it. The shell starts
 #    tasktest.elf (the parent), which starts "tasktest.elf child" and exits while the child
 #    still waits for a key, so the parent leaves the middle of the list (shell, parent, child).
@@ -31,7 +33,8 @@ echo "task-list: host check of kernel/task/task.c"
 # Remove the last run's results, so the checks below only see this run.
 rm -f "$OUT/host-check" "$OUT/host-build.log" "$OUT/host-check.log" "$OUT/host-status.txt"
 host_status="not built"
-if "$HOST_CC" -std=gnu99 -g -O0 -fno-builtin -no-pie -fno-pie -w -I kernel -I build/config -I scripts/tests/host \
+if "$HOST_CC" -std=gnu99 -g -O0 -fno-builtin -no-pie -fno-pie -w -fsanitize=undefined -fno-sanitize-recover=all \
+    -I kernel -I build/config -I scripts/tests/host \
     scripts/tests/host/task-list.c scripts/tests/host/kalloc.c kernel/task/task.c kernel/memory/memory.c \
     -o "$OUT/host-check" > "$OUT/host-build.log" 2>&1; then
     if "$OUT/host-check" > "$OUT/host-check.log" 2>&1; then host_status=0; else host_status=$?; fi
@@ -43,6 +46,8 @@ fi
 echo "exit=$host_status" > "$OUT/host-status.txt"
 check "host check built and exited with status 0" "$OUT/host-status.txt" "exit=0" line
 check "host check: every task list case passed" "$OUT/host-check.log" "task-list host check: 0 of"
+check "host check: every sleeping-task case passed" "$OUT/host-check.log" "task-list host check: sleep: 0 of 118 cases failed" line
+check "no undefined behaviour" "$OUT/host-check.log" "runtime error" absent
 
 [ -f "$PROGRAM" ] || { echo "task-list: $PROGRAM not found, run 'make all' first" >&2; exit 1; }
 

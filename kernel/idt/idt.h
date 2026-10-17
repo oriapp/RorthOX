@@ -5,7 +5,11 @@
 
 struct interrupt_frame;
 typedef void*(*ISR80H_COMMAND)(struct interrupt_frame *frame);
-typedef void(*INTERRUPT_CALLBACK_FUNCTION)();
+// IRQ callbacks run with IF=0 and kernel addressing. frame->cs & 3 tells where the IRQ came
+// from: 3 = a user task, 0 = the idle loop in task_next (frame ends after flags).
+// From ring 0 a callback must return: it never frees a task or process and never switches
+// tasks (no task_next), or the idle loop keeps a stale task list and its stack never unwinds.
+typedef void(*INTERRUPT_CALLBACK_FUNCTION)(struct interrupt_frame *frame);
 
 
 struct idt_desc

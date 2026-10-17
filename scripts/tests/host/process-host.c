@@ -361,6 +361,26 @@ int paging_user_translate(uint32_t *directory, uint32_t address, int write, void
 void kernel_page() {}
 void user_registers() {}
 
+// Sleeping is not under test with these stand-ins: task_next's idle loop and syscall 12's clock
+// stop the check if they are ever reached.
+void IRQ_ON_AND_PAUSE(void)
+{
+    printf("IRQ_ON_AND_PAUSE() called unexpectedly\n");
+    exit(4);
+}
+
+uint32_t pit_get_ticks(void)
+{
+    printf("pit_get_ticks() called unexpectedly\n");
+    exit(4);
+}
+
+uint32_t pit_ms_to_ticks(uint32_t milliseconds)
+{
+    printf("pit_ms_to_ticks() called unexpectedly\n");
+    exit(4);
+}
+
 void task_return(struct registers *regs)
 {
     if (host_task_return_armed)

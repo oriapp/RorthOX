@@ -18,8 +18,8 @@
 int host_memcmp(const void *a, const void *b, unsigned long n) __asm__("memcmp");
 void *host_memcpy(void *d, const void *s, unsigned long n) __asm__("memcpy");
 
-static void cb_a(void) {}
-static void cb_b(void) {}
+static void cb_a(struct interrupt_frame *frame) {}
+static void cb_b(struct interrupt_frame *frame) {}
 
 static int failed, total;
 

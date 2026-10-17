@@ -132,14 +132,25 @@ void interrupt_handler(int interrupt, struct interrupt_frame *frame, uint32_t cr
         return;
     }
 
+    // From ring 3 the task's registers are saved and its addressing is put back before the
+    // iret, also when no callback is set (iret to ring 3 drops kernel data selectors). From
+    // ring 0 it is the idle loop in task_next: the frame holds no task state and the idle loop
+    // keeps the kernel addressing.
+    int from_user = (frame->cs & 3) == 3;
     kernel_page();
     if (interrupt_callbacks[interrupt] != 0)
     {
-        task_current_save_state(frame);
+        if (from_user)
+        {
+            task_current_save_state(frame);
+        }
         interrupt_callbacks[interrupt](frame);
     }
 
-    task_page();
+    if (from_user)
+    {
+        task_page();
+    }
     // ack interrupt
     pic_send_eoi(interrupt);
 }
