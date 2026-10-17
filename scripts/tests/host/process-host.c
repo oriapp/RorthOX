@@ -103,16 +103,22 @@ static void problem(const char *text)
 }
 
 // The file layer: one file, served from content[].
-int fopen(const char *filename, const char *mode_str)
+int fopen_status(const char *filename, const char *mode_str)
 {
     if (++host_open_calls == host_fail_open_at)
     {
         host_failed = 1;
-        return 0;
+        return -EIO;
     }
     host_open_files++;
     file_position = 0;
     return FD;
+}
+
+int fopen(const char *filename, const char *mode_str)
+{
+    int res = fopen_status(filename, mode_str);
+    return res > 0 ? res : 0;
 }
 
 int fstat(int fd, struct file_stat *stat)

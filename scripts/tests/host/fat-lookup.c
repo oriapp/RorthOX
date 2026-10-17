@@ -32,6 +32,7 @@
 #include "kalloc.h"
 #include "config.h"
 #include "status.h"
+#include "kernel.h"
 #include "string/string.h"
 #include "fs/file.h"
 #include "fs/pparser.h"
@@ -123,7 +124,7 @@ static int root_case(void)
     // Look the stale name up before anything else is allocated after the root directory buffer
     // (fopen() would put its parsed path there first).
     struct path_part stale = { "stale.bin", 0 };
-    if (fat16_get_directory_entry(disk_get(0), &stale))
+    if (fat16_get_directory_entry(disk_get(0), &stale) != ERROR(-ENOENT))
         FAIL("root: STALE.BIN, which is only in heap memory past the root directory, was found");
     if (read_back("0:/last.bin", last, last_size))
         return 1;

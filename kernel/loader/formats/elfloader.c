@@ -265,10 +265,13 @@ int elf_load(const char *filename, struct elf_file **file_out)
         goto out;
     }
 
-    res = fopen(filename, "r");
+    res = fopen_status(filename, "r");
     if (res <= 0)
     {
-        res = -EIO;
+        if (res != -ENOENT)
+        {
+            res = -EIO;
+        }
         goto out;
     }
 

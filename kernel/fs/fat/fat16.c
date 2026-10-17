@@ -666,7 +666,7 @@ struct fat_item *fat16_new_fat_item_for_directory_item(struct disk *disk, struct
 
 struct fat_item *fat16_find_item_in_directory(struct disk *disk, struct fat_directory *directory, const char *name)
 {
-    struct fat_item *f_item = 0;
+    struct fat_item *f_item = ERROR(-ENOENT);
     char tmp_filename[RORTHOX_MAX_PATH];
     for (int i = 0; i < directory->total; i++)
     {
@@ -683,7 +683,8 @@ struct fat_item *fat16_find_item_in_directory(struct disk *disk, struct fat_dire
         if (istrncmp(tmp_filename, name, sizeof(tmp_filename)) == 0)
         {
             // Found it let's create a new fat_item
-            return fat16_new_fat_item_for_directory_item(disk, &directory->item[i]);
+            f_item = fat16_new_fat_item_for_directory_item(disk, &directory->item[i]);
+            return f_item ? f_item : ERROR(-EIO);
         }
     }
 
@@ -697,8 +698,9 @@ struct fat_item *fat16_get_directory_entry(struct disk *disk, struct path_part *
     struct fat_item *root_item = fat16_find_item_in_directory(disk, &fat_private->root_directory, path->part);
     // 0:/test.txt -> test.txt will be the path part, and will return fat_item for test.txt
     // 0:/abc/test.txt -> fat_item would be root "abc"
-    if (!root_item)
+    if (ISERR(root_item))
     {
+        current_item = root_item;
         goto out;
     }
 
@@ -709,14 +711,14 @@ struct fat_item *fat16_get_directory_entry(struct disk *disk, struct path_part *
         if (current_item->type != FAT_ITEM_TYPE_DIRECTORY)
         {
             fat16_fat_item_free(current_item);
-            current_item = 0;
+            current_item = ERROR(-EIO);
             break;
         }
 
         struct fat_item *tmp_item = fat16_find_item_in_directory(disk, current_item->directory, next_part->part);
         fat16_fat_item_free(current_item);
         current_item = tmp_item;
-        if (!current_item)
+        if (ISERR(current_item))
         {
             break;
         }
@@ -745,9 +747,9 @@ void *fat16_open(struct disk *disk, struct path_part *path, FILE_MODE mode)
     }
 
     descriptor->item = fat16_get_directory_entry(disk, path);
-    if (!descriptor->item)
+    if (ISERR(descriptor->item))
     {
-        err_code = -EIO;
+        err_code = ERROR_I(descriptor->item);
         goto err_out;
     }
 

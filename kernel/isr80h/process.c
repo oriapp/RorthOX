@@ -7,6 +7,44 @@
 #include "string/string.h"
 #include "memory/heap/kheap.h"
 
+static const char *const program_search_paths[] = { RORTHOX_PROGRAM_SEARCH_PATHS };
+
+static int isr80h_load_program(const char *name, struct process **process, struct command_argument *arguments)
+{
+    char path[RORTHOX_MAX_PATH];
+    int name_length = strnlen(name, sizeof(path));
+    int bare = name_length > 0;
+    for (int i = 0; i < name_length; i++)
+    {
+        if (name[i] == '/' || name[i] == ':')
+        {
+            bare = 0;
+            break;
+        }
+    }
+
+    int count = bare ? sizeof(program_search_paths) / sizeof(program_search_paths[0]) : 1;
+    for (int i = 0; i < count; i++)
+    {
+        const char *prefix = bare ? program_search_paths[i] : "0:/";
+        int prefix_length = strnlen(prefix, sizeof(path));
+        if (prefix_length >= sizeof(path) || name_length >= sizeof(path) - prefix_length)
+        {
+            continue;
+        }
+
+        strcpy(path, prefix);
+        strncpy(path + prefix_length, name, sizeof(path) - prefix_length);
+        int res = process_load_with_arguments(path, process, arguments);
+        if (res != -ENOENT)
+        {
+            return res;
+        }
+    }
+
+    return -EIO;
+}
+
 void *isr80h_command6_process_load_start(struct interrupt_frame *frame)
 {
     uint32_t filename_user_ptr = 0;
@@ -22,22 +60,19 @@ void *isr80h_command6_process_load_start(struct interrupt_frame *frame)
         goto out;
     }
 
-    char path[RORTHOX_MAX_PATH]; // TODO: look programs up through a PATH environment variable instead of always using 0:/
-    if (3 + strnlen(filename, sizeof(filename)) + 1 > sizeof(path))
+    if (3 + strnlen(filename, sizeof(filename)) + 1 > RORTHOX_MAX_PATH)
     {
         return ERROR(-EINVARG);
     }
 
-    strcpy(path, "0:/");
-    strncpy(path+3, filename, sizeof(path) - 3);
-
     struct process *process = 0;
-    res = process_load_switch(path, &process);
+    res = isr80h_load_program(filename, &process, NULL);
     if (res < 0)
     {
         goto out;
     }
 
+    process_switch(process);
     task_switch(process->task);
     task_return(&process->task->registers); // change all the CPU registers and drop us to lower privilege state
 
@@ -115,18 +150,14 @@ void *isr80h_command7_invoke_system_command(struct interrupt_frame *frame)
     }
 
     const char *program_name = arguments->argument;
-    char path[RORTHOX_MAX_PATH];
-    if (!program_name[0] || 3 + strnlen(program_name, sizeof(arguments->argument)) + 1 > sizeof(path))
+    if (!program_name[0] || 3 + strnlen(program_name, sizeof(arguments->argument)) + 1 > RORTHOX_MAX_PATH)
     {
         kfree(arguments);
         return ERROR(-EINVARG);
     }
 
-    strcpy(path, "0:/");
-    strncpy(path+3, program_name, sizeof(path) - 3);
-
     struct process *process = 0;
-    res = process_load_with_arguments(path, &process, arguments);
+    res = isr80h_load_program(program_name, &process, arguments);
     // task_return does not return through this stack, so release the snapshot first.
     kfree(arguments);
     if (res < 0)

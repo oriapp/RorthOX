@@ -140,7 +140,7 @@ FILE_MODE file_get_mode_by_string(const char *str)
 
 // It's the interface of opening a file.
 // Its responsibale for locating the correct file system to open a file on.
-int fopen(const char *filename, const char *mode_str)
+int fopen_status(const char *filename, const char *mode_str)
 {
     int res = 0;
     struct path_root *root_path = pathparser_parse(filename, NULL);
@@ -201,6 +201,12 @@ int fopen(const char *filename, const char *mode_str)
 
 out:
     pathparser_free(root_path);
+    return res;
+}
+
+int fopen(const char *filename, const char *mode_str)
+{
+    int res = fopen_status(filename, mode_str);
     // fopen shouldnt return negative values
     if (res < 0)
         res = 0;

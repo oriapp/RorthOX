@@ -45,16 +45,22 @@ static uint32_t position;
 #define say printf
 
 // The file layer: one file, served from content[].
-int fopen(const char *filename, const char *mode_str)
+int fopen_status(const char *filename, const char *mode_str)
 {
     if (fail_open)
     {
-        return 0;
+        return -EIO;
     }
     opens++;
     is_open = 1;
     position = 0;
     return FD;
+}
+
+int fopen(const char *filename, const char *mode_str)
+{
+    int res = fopen_status(filename, mode_str);
+    return res > 0 ? res : 0;
 }
 
 int fstat(int fd, struct file_stat *stat)
