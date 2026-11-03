@@ -338,6 +338,7 @@ static int errors_mode(void)
     CHECK(rorthox_open("KEEP.TXT", RORTHOX_FILE_READ) == -EINVARG, "relative path", 0);
     CHECK(rorthox_open("0:/SUB", RORTHOX_FILE_READ) == -EINVARG && rorthox_open("0:/SUB", RORTHOX_FILE_WRITE) == -EINVARG, "directory", 0);
     CHECK(rorthox_open("0:/RO.TXT", RORTHOX_FILE_WRITE) == -ERDONLY && rorthox_open("0:/RO.TXT", RORTHOX_FILE_APPEND) == -ERDONLY, "read-only file", 0);
+    CHECK(rorthox_open("0:/shell.elf", RORTHOX_FILE_WRITE) == -ERDONLY && rorthox_open("0:/blank.elf", RORTHOX_FILE_APPEND) == -ERDONLY, "shipped programs are read-only", 0);
 
     // Buffers: nothing read, written or moved when any byte is bad.
     char *freed = malloc(4096);

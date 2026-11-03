@@ -14,6 +14,7 @@ OUT=build/tests/panic
 mkdir -p "$OUT"
 rm -f "$OUT/state.txt"
 cp bin/os.bin "$OUT/no-shell.bin"
+mattrib -i "$OUT/no-shell.bin" -r ::shell.elf
 mdel -i "$OUT/no-shell.bin" ::shell.elf
 
 # panic() calls PANIC(msg, __FILE__, __LINE__): that line of kernel/kernel.c is the location shown.

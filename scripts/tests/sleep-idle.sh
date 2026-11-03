@@ -45,6 +45,7 @@ PAUSE_RESUME=$(printf '%08x' $((0x${SYM_PAUSE:-0} + 2)))
 
 hash_before=$(sha256sum bin/os.bin | cut -d' ' -f1)
 cp bin/os.bin "$OUT/idle.bin"
+mattrib -i "$OUT/idle.bin" -r ::shell.elf
 mcopy -o -i "$OUT/idle.bin" "$PROGRAM" ::shell.elf
 mcopy -i "$OUT/idle.bin" "$PROGRAM" ::libtest.elf
 

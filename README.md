@@ -139,7 +139,9 @@ holds the program search list, `PROGRAM_SEARCH_PATHS`: 1 to 4 directory prefixes
 | 1-199 | kernel area (`kernel.bin`; the build fails if it doesn't fit) |
 | 200 onwards | FAT 1 and FAT 2 (256 sectors each), root directory, data |
 
-The build copies `shell.elf` and `blank.elf` into the root directory with mtools, so no root access is needed.
+The build copies `shell.elf` and `blank.elf` into the root directory with mtools, so no root access is needed,
+and marks them read-only: opening them for writing or appending returns `-ERDONLY`. To replace one in an image,
+clear the flag first (`mattrib -i bin/os.bin -r ::shell.elf`).
 
 A cluster is 64 KiB (128 sectors) and the root directory has 64 entries. The BPB describes a volume of about 4 GB
 (that's what `mdir` reports as free), but the image file is only about 16 MiB. Before its first write, the kernel

@@ -252,6 +252,8 @@ iso_tools:
 	printf '\370\377\377\377' | dd of=$@ bs=$(SECTOR_SIZE) seek=$(FAT1_SECTOR) conv=notrunc status=none
 	printf '\370\377\377\377' | dd of=$@ bs=$(SECTOR_SIZE) seek=$(FAT2_SECTOR) conv=notrunc status=none
 	mcopy -i $@ $(IMAGE_FILES) ::
+	# The shipped programs are read-only, so the file syscalls can't overwrite them.
+	mattrib -i $@ +r $(addprefix ::,$(notdir $(IMAGE_FILES)))
 	mdir -i $@ ::
 
 $(IMAGE_FILES): | user_programs
