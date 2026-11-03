@@ -69,6 +69,52 @@ int diskstreamer_read(struct disk_stream *stream, void *out, int total)
     return 0;
 }
 
+int diskstreamer_write(struct disk_stream *stream, const void *buffer, int total)
+{
+    if (!stream || total < 0 || stream->pos < 0 || total > INT_MAX - stream->pos ||
+        (total && !buffer))
+    {
+        return -EINVARG;
+    }
+
+    const char *in = buffer;
+    char buf[RORTHOX_SECTOR_SIZE];
+    while (total > 0)
+    {
+        int sector = stream->pos / RORTHOX_SECTOR_SIZE;
+        int offset = stream->pos % RORTHOX_SECTOR_SIZE;
+        int bytes = RORTHOX_SECTOR_SIZE - offset;
+        if (bytes > total)
+        {
+            bytes = total;
+        }
+
+        const void *data = in;
+        if (offset || bytes != RORTHOX_SECTOR_SIZE)
+        {
+            int res = disk_read_block(stream->disk, sector, 1, buf);
+            if (res < 0)
+            {
+                return res;
+            }
+            for (int i = 0; i < bytes; i++)
+            {
+                buf[offset + i] = in[i];
+            }
+            data = buf;
+        }
+        int res = disk_write_block(stream->disk, sector, 1, data);
+        if (res < 0)
+        {
+            return res;
+        }
+        stream->pos += bytes;
+        in += bytes;
+        total -= bytes;
+    }
+    return 0;
+}
+
 void diskstreamer_close(struct disk_stream *stream)
 {
     kfree(stream);
