@@ -115,6 +115,11 @@ int fopen_status(const char *filename, const char *mode_str)
     return FD;
 }
 
+int file_open(const char *filename, FILE_MODE mode)
+{
+    return mode == FILE_MODE_READ ? fopen_status(filename, "r") : -ERDONLY;
+}
+
 int fopen(const char *filename, const char *mode_str)
 {
     int res = fopen_status(filename, mode_str);

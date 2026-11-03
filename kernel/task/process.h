@@ -6,6 +6,7 @@
 
 #include "task.h"
 #include "config.h"
+#include "../../include/rorthox/file.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -75,6 +76,9 @@ struct process
 
     // The arguments of the process
     struct process_arguments arguments;
+
+    // Local handles 1..16 map to private VFS descriptors; zero means a free slot.
+    int files[RORTHOX_FILE_MAX_OPEN];
 };
 
 int process_switch(struct process *process);
@@ -93,6 +97,10 @@ int process_load_for_slot(const char *filename, struct process **process, int pr
 struct process *process_current();
 struct process *process_get(int process_id);
 int process_terminate(struct process *process);
+int process_open_file(struct process *process, const char *path, int mode);
+int process_file_descriptor(struct process *process, int handle);
+int process_close_file(struct process *process, int handle);
+void process_close_files(struct process *process);
 
 #ifdef __cplusplus
 }

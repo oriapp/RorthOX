@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include "rorthox-config.h"
+#include "../../../include/rorthox/file.h"
 
 // A linked list of arguments
 struct command_argument

@@ -4,6 +4,7 @@
 #include "io.h"
 #include "heap.h"
 #include "process.h"
+#include "file.h"
 
 void isr80h_register_commands()
 {
@@ -20,4 +21,10 @@ void isr80h_register_commands()
     isr80h_register_command(SYSTEM_COMMAND10_PRINTC, isr80h_command11_printc);
     isr80h_register_command(SYSTEM_COMMAND11_TERMINAL_MOVE_CURSOR, isr80h_command_terminal_move_cursor);
     isr80h_register_command(SYSTEM_COMMAND12_SLEEP, isr80h_command_sleep);
+    isr80h_register_command(SYSTEM_COMMAND13_FILE_OPEN, isr80h_command_file_open);
+    isr80h_register_command(SYSTEM_COMMAND14_FILE_READ, isr80h_command_file_read);
+    isr80h_register_command(SYSTEM_COMMAND15_FILE_WRITE, isr80h_command_file_write);
+    isr80h_register_command(SYSTEM_COMMAND16_FILE_SEEK, isr80h_command_file_seek);
+    isr80h_register_command(SYSTEM_COMMAND17_FILE_STAT, isr80h_command_file_stat);
+    isr80h_register_command(SYSTEM_COMMAND18_FILE_CLOSE, isr80h_command_file_close);
 }

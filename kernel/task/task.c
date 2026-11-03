@@ -310,6 +310,88 @@ static int task_copy_user(struct task *task, uint32_t address, void *buffer, uin
     return 0;
 }
 
+// Validate the whole request, looking up ownership once per region.
+int task_validate_user_span(struct task *task, uint32_t address, uint32_t size, int write)
+{
+    if (!task || !task->process || !task->page_directory || !address || !size ||
+        size - 1 > UINT32_MAX - address)
+    {
+        return -EINVARG;
+    }
+
+    while (size)
+    {
+        uint32_t available = 0;
+        int res = process_user_span(task->process, address, write, &available);
+        if (res < 0)
+        {
+            return res;
+        }
+        if (available > size)
+        {
+            available = size;
+        }
+        while (available)
+        {
+            void *physical = 0;
+            res = paging_user_translate(task->page_directory->directory_entry, address, write, &physical);
+            if (res < 0)
+            {
+                return res;
+            }
+            uint32_t fragment = PAGING_PAGE_SIZE - (address & (PAGING_PAGE_SIZE - 1));
+            if (fragment > available)
+            {
+                fragment = available;
+            }
+            available -= fragment;
+            size -= fragment;
+            if (size)
+            {
+                address += fragment;
+            }
+        }
+    }
+    return 0;
+}
+
+// Unlike the print-string helper, a path must fit including its terminating NUL.
+int task_copy_path_from_user(struct task *task, uint32_t address, char *out, uint32_t size)
+{
+    if (!task || !task->process || !task->page_directory || !address || !out || !size)
+    {
+        return -EINVARG;
+    }
+
+    while (size)
+    {
+        void *physical = 0;
+        uint32_t fragment = 0;
+        int res = task_user_fragment(task, address, size, 0, &physical, &fragment);
+        if (res < 0)
+        {
+            return res;
+        }
+        const char *in = physical;
+        for (uint32_t i = 0; i < fragment; i++)
+        {
+            out[i] = in[i];
+            if (!in[i])
+            {
+                return 0;
+            }
+        }
+        size -= fragment;
+        if (fragment > UINT32_MAX - address)
+        {
+            return -EINVARG;
+        }
+        address += fragment;
+        out += fragment;
+    }
+    return -EINVARG;
+}
+
 int task_copy_from_user(struct task *task, void *destination, uint32_t source, uint32_t size)
 {
     return task_copy_user(task, source, destination, size, 0);

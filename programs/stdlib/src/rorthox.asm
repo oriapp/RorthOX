@@ -15,6 +15,12 @@ global rorthox_exit:function
 global printc:function
 global rorthox_terminal_move_cursor:function
 global sleep:function
+global rorthox_open:function
+global rorthox_read:function
+global rorthox_write:function
+global rorthox_seek:function
+global rorthox_stat:function
+global rorthox_close:function
 
 ; void print(const char message);
 print:
@@ -78,6 +84,80 @@ sleep:
     mov ebp, esp
     mov eax, SYSCALL_SLEEP ; Command sleep, result in eax
     push dword[ebp+8] ; Variable "milliseconds"
+    int SYSCALL_VECTOR
+    add esp, 4
+    pop ebp
+    ret
+
+; int rorthox_open(const char *path, int mode);
+rorthox_open:
+    push ebp
+    mov ebp, esp
+    push dword[ebp+12]
+    push dword[ebp+8]
+    mov eax, SYSCALL_FILE_OPEN
+    int SYSCALL_VECTOR
+    add esp, 8
+    pop ebp
+    ret
+
+; int rorthox_read(int fd, void *buffer, unsigned int count);
+rorthox_read:
+    push ebp
+    mov ebp, esp
+    push dword[ebp+16]
+    push dword[ebp+12]
+    push dword[ebp+8]
+    mov eax, SYSCALL_FILE_READ
+    int SYSCALL_VECTOR
+    add esp, 12
+    pop ebp
+    ret
+
+; int rorthox_write(int fd, const void *buffer, unsigned int count);
+rorthox_write:
+    push ebp
+    mov ebp, esp
+    push dword[ebp+16]
+    push dword[ebp+12]
+    push dword[ebp+8]
+    mov eax, SYSCALL_FILE_WRITE
+    int SYSCALL_VECTOR
+    add esp, 12
+    pop ebp
+    ret
+
+; int rorthox_seek(int fd, int offset, int whence);
+rorthox_seek:
+    push ebp
+    mov ebp, esp
+    push dword[ebp+16]
+    push dword[ebp+12]
+    push dword[ebp+8]
+    mov eax, SYSCALL_FILE_SEEK
+    int SYSCALL_VECTOR
+    add esp, 12
+    pop ebp
+    ret
+
+; int rorthox_stat(int fd, struct rorthox_file_stat *out);
+rorthox_stat:
+    push ebp
+    mov ebp, esp
+    push dword[ebp+12]
+    push dword[ebp+8]
+    mov eax, SYSCALL_FILE_STAT
+    int SYSCALL_VECTOR
+    add esp, 8
+    pop ebp
+    ret
+
+; int rorthox_close(int fd);
+rorthox_close:
+    push ebp
+    mov ebp, esp
+    push dword[ebp+8]
+    mov eax, SYSCALL_FILE_CLOSE
     int SYSCALL_VECTOR
     add esp, 4
     pop ebp

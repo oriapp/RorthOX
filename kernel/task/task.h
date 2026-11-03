@@ -133,6 +133,8 @@ void task_current_save_state(struct interrupt_frame *frame);
 // Checked copies require kernel CR3, IF=0 and a kernel-owned buffer.
 int task_copy_from_user(struct task *task, void *destination, uint32_t source, uint32_t size);
 int task_copy_to_user(struct task *task, uint32_t destination, const void *source, uint32_t size);
+int task_validate_user_span(struct task *task, uint32_t address, uint32_t size, int write);
+int task_copy_path_from_user(struct task *task, uint32_t address, char *out, uint32_t size);
 int copy_string_from_task(struct task *task, void *virtual, void *phys, int max);
 int task_get_stack_item(struct task *task, int index, uint32_t *value);
 void *task_virtual_address_to_physical(struct task *task, void *virtual_address);

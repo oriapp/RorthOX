@@ -4,7 +4,7 @@ include config.mk
 CONFIG_KEYS := RESERVED_SECTORS SECTORS_PER_FAT SECTOR_SIZE KERNEL_LOAD_ADDRESS KERNEL_BOOT_STACK_TOP KERNEL_TSS_STACK_TOP KERNEL_TSS_STACK_SIZE PROGRAM_LOAD_ADDRESS PROGRAM_LOAD_LIMIT USER_STACK_TOP USER_STACK_SIZE KERNEL_CODE_SELECTOR KERNEL_DATA_SELECTOR USER_CODE_SELECTOR USER_DATA_SELECTOR TSS_SELECTOR SYSCALL_VECTOR PIC_MASTER_VECTOR_BASE PIC_SLAVE_VECTOR_BASE TOTAL_INTERRUPTS SYSCALL_SUM SYSCALL_PRINT SYSCALL_GETKEY SYSCALL_PUTCHAR SYSCALL_MALLOC SYSCALL_FREE SYSCALL_PROCESS_LOAD_START SYSCALL_INVOKE_SYSTEM_COMMAND SYSCALL_GET_PROGRAM_ARGUMENTS SYSCALL_EXIT SYSCALL_PRINTC SYSCALL_TERMINAL_MOVE_CURSOR SYSCALL_SLEEP SYSCALL_FILE_OPEN SYSCALL_FILE_READ SYSCALL_FILE_WRITE SYSCALL_FILE_SEEK SYSCALL_FILE_STAT SYSCALL_FILE_CLOSE KEY_UP KEY_DOWN KEY_LEFT KEY_RIGHT KEY_HOME KEY_END KEY_INSERT KEY_DELETE KEY_PAGE_UP KEY_PAGE_DOWN COMMAND_ARGUMENT_SIZE MAX_COMMAND_ARGUMENTS PROGRAM_SEARCH_PATHS RORTHOX_NAME RORTHOX_VERSION QEMU_RAM_MIB
 $(foreach key,$(CONFIG_KEYS),$(if $(filter command line,$(origin $(key))),$(error $(key) must be set in config.mk, not on the command line)))
 
-FILES = ./build/kernel.asm.o ./build/arch/sys.o ./build/arch/pit.o ./build/arch/sys.asm.o ./build/kernel.o ./build/arch/tty.o ./build/idt/idt.asm.o ./build/idt/idt.o ./build/memory/memory.o ./build/io/io.asm.o ./build/loader/formats/elfloader.o ./build/loader/formats/elf.o ./build/gdt/gdt.o ./build/gdt/gdt.asm.o ./build/memory/heap/heap.o ./build/memory/heap/kheap.o ./build/memory/paging/paging.o ./build/memory/paging/paging.asm.o ./build/isr80h/isr80h.o ./build/isr80h/heap.o ./build/keyboard/keyboard.o ./build/keyboard/classic.o ./build/isr80h/io.o ./build/isr80h/process.o ./build/isr80h/misc.o ./build/disk/disk.o ./build/disk/streamer.o ./build/task/process.o ./build/task/task.o ./build/task/task.asm.o ./build/task/tss.asm.o ./build/fs/pparser.o ./build/fs/file.o ./build/fs/fat/fat16.o ./build/string/string.o
+FILES = ./build/kernel.asm.o ./build/arch/sys.o ./build/arch/pit.o ./build/arch/sys.asm.o ./build/kernel.o ./build/arch/tty.o ./build/idt/idt.asm.o ./build/idt/idt.o ./build/memory/memory.o ./build/io/io.asm.o ./build/loader/formats/elfloader.o ./build/loader/formats/elf.o ./build/gdt/gdt.o ./build/gdt/gdt.asm.o ./build/memory/heap/heap.o ./build/memory/heap/kheap.o ./build/memory/paging/paging.o ./build/memory/paging/paging.asm.o ./build/isr80h/isr80h.o ./build/isr80h/heap.o ./build/keyboard/keyboard.o ./build/keyboard/classic.o ./build/isr80h/io.o ./build/isr80h/process.o ./build/isr80h/file.o ./build/isr80h/misc.o ./build/disk/disk.o ./build/disk/streamer.o ./build/task/process.o ./build/task/task.o ./build/task/task.asm.o ./build/task/tss.asm.o ./build/fs/pparser.o ./build/fs/file.o ./build/fs/fat/fat16.o ./build/string/string.o
 INCLUDES = -I./kernel -Ibuild/config
 # -MMD -MP: let the compiler record header dependencies (*.d) so editing a header rebuilds what uses it.
 FLAGS = -g -ffreestanding -falign-jumps -falign-functions -falign-labels -falign-loops -fstrength-reduce -fomit-frame-pointer -finline-functions -Wno-unused-function -fno-builtin -Werror -Wno-unused-label -Wno-cpp -Wno-unused-parameter -nostdlib -nostartfiles -nodefaultlibs -Wall -O0 -Iinc -MMD -MP
@@ -312,6 +312,9 @@ $(IMAGE_FILES): | user_programs
 
 ./build/isr80h/io.o: ./kernel/isr80h/io.c
 	i686-elf-gcc $(INCLUDES) -I ./kernel/isr80h $(FLAGS) -std=gnu99 -c ./kernel/isr80h/io.c -o ./build/isr80h/io.o
+
+./build/isr80h/file.o: ./kernel/isr80h/file.c
+	i686-elf-gcc $(INCLUDES) -I ./kernel/isr80h $(FLAGS) -std=gnu99 -c ./kernel/isr80h/file.c -o ./build/isr80h/file.o
 
 ./build/isr80h/process.o: ./kernel/isr80h/process.c
 	i686-elf-gcc $(INCLUDES) -I ./kernel/isr80h $(FLAGS) -std=gnu99 -c ./kernel/isr80h/process.c -o ./build/isr80h/process.o

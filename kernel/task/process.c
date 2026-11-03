@@ -289,8 +289,73 @@ static void process_unlink(struct process *process)
     }
 }
 
+int process_open_file(struct process *process, const char *path, int mode)
+{
+    if (!process)
+    {
+        return -EINVARG;
+    }
+    for (int i = 0; i < RORTHOX_FILE_MAX_OPEN; i++)
+    {
+        if (process->files[i] != 0)
+        {
+            continue;
+        }
+
+        // IF=0: reserve before an open that may create or truncate, publish only on success.
+        process->files[i] = -1;
+        int fd = file_open(path, mode);
+        if (fd < 0)
+        {
+            process->files[i] = 0;
+            return fd;
+        }
+        process->files[i] = fd;
+        return i + 1;
+    }
+    return -EMFILE;
+}
+
+int process_file_descriptor(struct process *process, int handle)
+{
+    if (!process || handle < 1 || handle > RORTHOX_FILE_MAX_OPEN || process->files[handle - 1] <= 0)
+    {
+        return -EBADF;
+    }
+    return process->files[handle - 1];
+}
+
+int process_close_file(struct process *process, int handle)
+{
+    int fd = process_file_descriptor(process, handle);
+    if (fd < 0)
+    {
+        return fd;
+    }
+    process->files[handle - 1] = 0;
+    return fclose(fd);
+}
+
+void process_close_files(struct process *process)
+{
+    if (!process)
+    {
+        return;
+    }
+    for (int i = 0; i < RORTHOX_FILE_MAX_OPEN; i++)
+    {
+        int fd = process->files[i];
+        process->files[i] = 0;
+        if (fd > 0)
+        {
+            fclose(fd);
+        }
+    }
+}
+
 int process_terminate(struct process *process)
 {
+    process_close_files(process);
     int res = 0;
     res = process_terminate_allocation(process);
     if (res < 0)
@@ -600,6 +665,7 @@ static void process_discard(struct process *process)
         return;
     }
 
+    process_close_files(process);
     task_discard(process->task);
     kfree(process->stack);
     if (process->ptr)
