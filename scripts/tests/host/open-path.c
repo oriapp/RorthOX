@@ -616,3 +616,19 @@ int main(int argc, char **argv)
            failures, cases, in_loader);
     return failures ? 1 : 0;
 }
+
+// These fixtures exercise reads only.
+int disk_write_block(struct disk *disk, unsigned int lba, int total, const void *buf)
+{
+    return -ERDONLY;
+}
+
+int disk_write_capacity(struct disk *disk, unsigned int *sectors)
+{
+    return -ERDONLY;
+}
+
+int disk_flush(struct disk *disk)
+{
+    return -ERDONLY;
+}

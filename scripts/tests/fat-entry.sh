@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# A FAT16 entry that isn't a data cluster must never be used as one: 0 and 1, the reserved values
-# 0xFFF0-0xFFF6, the bad cluster mark 0xFFF7 and the end of chain marks 0xFFF8-0xFFFF end a read
+# A FAT16 entry that isn't a data cluster must never be used as one: 0 and 1, values beyond the BPB
+# cluster limit (including 0xFFF0-0xFFF6), the bad cluster mark 0xFFF7 and the end of chain marks 0xFFF8-0xFFFF end a read
 # that needs another cluster with -EIO. A failed read of the FAT itself ends it with that read's
 # own error (the error used to be taken as the next cluster). FAT12's marks 0xFF0-0xFFF are
 # ordinary FAT16 clusters.
@@ -70,8 +70,8 @@ else
 fi
 [ "$host_status" = 0 ] && result ok "host check built and exited with status 0" ||
     result fail "host check built and exited with status 0 (got: $host_status)"
-grep -qxF "fat-entry host check: 0 of 59 cases failed" "$OUT/host-check.log" 2> /dev/null &&
-    result ok "host check: all 59 entry cases passed" || result fail "host check: all 59 entry cases passed"
+grep -qxF "fat-entry host check: 0 of 58 cases failed" "$OUT/host-check.log" 2> /dev/null &&
+    result ok "host check: all 58 entry cases passed" || result fail "host check: all 58 entry cases passed"
 [ "$(sha256sum bin/os.bin | cut -d' ' -f1)" = "$hash_before" ] && result ok "bin/os.bin not changed by the test" ||
     result fail "bin/os.bin not changed by the test"
 [ "$failed" -eq 0 ] && echo "fat-entry: all checks passed" || { echo "fat-entry: a check failed" >&2; exit 1; }

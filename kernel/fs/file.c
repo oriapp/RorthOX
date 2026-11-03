@@ -143,6 +143,12 @@ FILE_MODE file_get_mode_by_string(const char *str)
 int fopen_status(const char *filename, const char *mode_str)
 {
     int res = 0;
+    FILE_MODE mode = file_get_mode_by_string(mode_str);
+    if (mode != FILE_MODE_READ && file_validate_path(filename) < 0)
+    {
+        return -EINVARG;
+    }
+    struct file_descriptor *desc = 0;
     struct path_root *root_path = pathparser_parse(filename, NULL);
     if (!root_path)
     {
@@ -172,13 +178,20 @@ int fopen_status(const char *filename, const char *mode_str)
         goto out;
     }
 
-    FILE_MODE mode = file_get_mode_by_string(mode_str);
     if (mode == FILE_MODE_INVALID)
     {
         res = -EINVARG;
         goto out;
     }
 
+    if (mode != FILE_MODE_READ)
+    {
+        res = file_new_descriptor(&desc);
+        if (res < 0)
+        {
+            goto out;
+        }
+    }
     void *descriptor_private_data = disk->filesystem->open(disk, root_path->first, mode);
     if (ISERR(descriptor_private_data))
     {
@@ -186,8 +199,7 @@ int fopen_status(const char *filename, const char *mode_str)
         goto out;
     }
 
-    struct file_descriptor *desc = 0;
-    res = file_new_descriptor(&desc);
+    res = desc ? 0 : file_new_descriptor(&desc);
     if (res < 0)
     {
         disk->filesystem->close(descriptor_private_data);
@@ -200,8 +212,126 @@ int fopen_status(const char *filename, const char *mode_str)
     res = desc->index;
 
 out:
+    if (res < 0 && desc)
+    {
+        file_free_descriptor(desc);
+    }
     pathparser_free(root_path);
     return res;
+}
+
+int file_validate_path(const char *filename)
+{
+    if (!filename || strnlen(filename, RORTHOX_MAX_PATH) >= RORTHOX_MAX_PATH ||
+        strncmp(filename, "0:/", 3) != 0)
+    {
+        return -EINVARG;
+    }
+    const char *p = filename + 3;
+    do
+    {
+        int base = 0;
+        int ext = 0;
+        int dot = 0;
+        while (*p && *p != '/')
+        {
+            unsigned char c = *p++;
+            if (c == '.')
+            {
+                if (dot || !base)
+                {
+                    return -EINVARG;
+                }
+                dot = 1;
+                continue;
+            }
+            if (c <= 0x20 || c >= 0x7F)
+            {
+                return -EINVARG;
+            }
+            const char *bad = "\"*+,:;<=>?[\\]|";
+            for (int i = 0; bad[i]; i++)
+            {
+                if (c == bad[i])
+                {
+                    return -EINVARG;
+                }
+            }
+            if ((!dot && ++base > 8) || (dot && ++ext > 3))
+            {
+                return -EINVARG;
+            }
+        }
+        if (!base || (dot && !ext))
+        {
+            return -EINVARG;
+        }
+        if (!*p)
+        {
+            return 0;
+        }
+        p++;
+    } while (*p);
+    return -EINVARG;
+}
+
+int file_open(const char *filename, FILE_MODE mode)
+{
+    if (mode > FILE_MODE_APPEND || file_validate_path(filename) < 0)
+    {
+        return -EINVARG;
+    }
+    const char *modes[] = {"r", "w", "a"};
+    int fd = fopen_status(filename, modes[mode]);
+    if (fd > 0)
+    {
+        struct file_stat stat;
+        int res = fstat(fd, &stat);
+        if (res < 0)
+        {
+            fclose(fd);
+            return res;
+        }
+    }
+    return fd;
+}
+
+int file_read(int fd, void *buffer, uint32_t count)
+{
+    struct file_descriptor *desc = file_get_descriptor(fd);
+    if (!desc || !desc->filesystem->read_bytes)
+    {
+        return -EBADF;
+    }
+    if (count > 0x7FFFFFFF || (count && !buffer))
+    {
+        return -EINVARG;
+    }
+    return desc->filesystem->read_bytes(desc->disk, desc->private, buffer, count);
+}
+
+int file_write(int fd, const void *buffer, uint32_t count)
+{
+    struct file_descriptor *desc = file_get_descriptor(fd);
+    if (!desc || !desc->filesystem->write_bytes)
+    {
+        return -EBADF;
+    }
+    if (count > 0x7FFFFFFF || (count && !buffer))
+    {
+        return -EINVARG;
+    }
+    return desc->filesystem->write_bytes(desc->disk, desc->private, buffer, count);
+}
+
+int file_seek(int fd, int offset, FILE_SEEK_MODE whence)
+{
+    struct file_descriptor *desc = file_get_descriptor(fd);
+    if (!desc || !desc->filesystem->seek_signed)
+    {
+        return -EBADF;
+    }
+    return desc->filesystem->seek_signed(desc->private, offset, whence);
 }
 
 int fopen(const char *filename, const char *mode_str)

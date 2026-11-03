@@ -5,7 +5,7 @@
  * and changes the first link of pair.bin (2 clusters) on the way. Each case runs in its own process
  * and reads the whole file with one fread() from position 0.
  *
- *   marker  first link = 0x0000, 0x0001, every reserved value 0xFFF0-0xFFF6, the bad cluster mark
+ *   marker  first link = 0x0000, 0x0001, every out-of-range value 0xFFF0-0xFFF6, the bad cluster mark
  *           0xFFF7 and every end of chain mark 0xFFF8-0xFFFF: fread() returns -EIO, and no seek or
  *           sector read goes anywhere but the first cluster's data and its own FAT entry (the
  *           value is never used as a cluster or looked up as a link).
@@ -17,8 +17,8 @@
  *           nothing is sought or read after the failed read (the error is never used as a cluster).
  *   start   the first cluster of a file (from its directory entry) given straight to fat16.c's
  *           static fat16_get_cluster_for_offset() at offset 0, which is why this file includes
- *           fat16.c: -1, 0, 1, every value 0xFFF0-0xFFFF and 0x10000 give -EIO, and 2, 3,
- *           0x0FF0, 0x0FF6, 0x0FF7, 0x0FF8, 0x0FFF and 0xFFEF come back as they are; neither
+ *           fat16.c: -1, 0, 1, BPB max+1, every value 0xFFEF-0xFFFF and 0x10000 give -EIO;
+ *           2, 3, 0x0FF0, 0x0FF6, 0x0FF7, 0x0FF8, 0x0FFF and BPB max come back as they are; neither
  *           seeks or reads the disk (0 or 1 used to be read as the sectors before the data area).
  * Plus pair.bin and four.bin as they are on disk.
  *
@@ -271,8 +271,8 @@ static const unsigned int markers[MARKERS] = { 0x0000, 0x0001, 0xFFF0, 0xFFF1, 0
     0xFFF6, 0xFFF7, 0xFFF8, 0xFFF9, 0xFFFA, 0xFFFB, 0xFFFC, 0xFFFD, 0xFFFE, 0xFFFF };
 #define LINKS 5
 static const unsigned int links[LINKS] = { 0x0FF0, 0x0FF6, 0x0FF7, 0x0FF8, 0x0FFF };
-// four.bin is read in 4 cluster steps from its start: 0 + 1 + 2 + 3 FAT reads.
-#define FOUR_LOOKUPS 6
+// The iterative reader follows each of four.bin's three links once.
+#define FOUR_LOOKUPS 3
 
 static int run_case(int (*fn)(int), int arg, const char *name, int index)
 {
@@ -294,11 +294,11 @@ static int run_case(int (*fn)(int), int arg, const char *name, int index)
     return 0;
 }
 
-#define STARTS_BAD 20
+#define STARTS_BAD 22
 static const int starts_bad[STARTS_BAD] = { -1, 0x0000, 0x0001, 0xFFF0, 0xFFF1, 0xFFF2, 0xFFF3, 0xFFF4,
-    0xFFF5, 0xFFF6, 0xFFF7, 0xFFF8, 0xFFF9, 0xFFFA, 0xFFFB, 0xFFFC, 0xFFFD, 0xFFFE, 0xFFFF, 0x10000 };
+    0xFFF5, 0xFFF6, 0xFFF7, 0xFFF8, 0xFFF9, 0xFFFA, 0xFFFB, 0xFFFC, 0xFFFD, 0xFFFE, 0xFFFF, 0x10000, 0xFFEF, 61031 };
 #define STARTS_OK 8
-static const int starts_ok[STARTS_OK] = { 2, 3, 0x0FF0, 0x0FF6, 0x0FF7, 0x0FF8, 0x0FFF, 0xFFEF };
+static const int starts_ok[STARTS_OK] = { 2, 3, 0x0FF0, 0x0FF6, 0x0FF7, 0x0FF8, 0x0FFF, 61030 };
 
 // A file whose directory entry starts at <start>: <expected> from fat16_get_cluster_for_offset(),
 // and no seek or read.

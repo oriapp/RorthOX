@@ -57,7 +57,11 @@ struct filesystem
     FS_READ_FUNCTION read;
     FS_SEEK_FUNCTION seek;
     FS_STAT_FUNCTION stat;
+    // Must not fail: process.c clears the handle first; fclose frees the descriptor only on success.
     FS_CLOSE_FUNCTION close;
+    int (*read_bytes)(struct disk *disk, void *private, void *out, uint32_t count);
+    int (*write_bytes)(struct disk *disk, void *private, const void *in, uint32_t count);
+    int (*seek_signed)(void *private, int offset, FILE_SEEK_MODE whence);
     char name[20];
 };
 
@@ -82,6 +86,12 @@ int fseek(int fd, int offset, FILE_SEEK_MODE whence);
 int fread(void *ptr, uint32_t size, uint32_t nmemb, int fd);
 int fstat(int fd, struct file_stat *stat);
 int fclose(int fd);
+// Strict paths and byte counts for the file interface; buffers are kernel addresses.
+int file_open(const char *filename, FILE_MODE mode);
+int file_read(int fd, void *buffer, uint32_t count);
+int file_write(int fd, const void *buffer, uint32_t count);
+int file_seek(int fd, int offset, FILE_SEEK_MODE whence);
+int file_validate_path(const char *filename);
 
 void fs_insert_filesystem(struct filesystem *filesystem);
 struct filesystem *fs_resolve(struct disk *disk);

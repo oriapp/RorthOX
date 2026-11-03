@@ -30,7 +30,7 @@ OUT=build/tests/disk-read
 PROGRAM=programs/disktest/build/disktest.elf
 BLANK_ELF=programs/blank/build/blank.elf
 FATIMG="python3 -B scripts/tests/lib/fatimg.py"
-EIO=$(awk '$1 == "#define" && $2 == "EIO" { print $3 }' kernel/status.h)
+EIO=$(awk '$1 == "#define" && $2 == "EIO" { print $3 }' include/rorthox/status.h)
 mkdir -p "$OUT"
 [ -f bin/os.bin ] && [ -f "$PROGRAM" ] && [ -f "$BLANK_ELF" ] && [ -f build/disk/streamer.o ] ||
     { echo "disk-read: run 'make all' first" >&2; exit 1; }

@@ -299,3 +299,19 @@ int main(int argc, char **argv)
     printf("path-release host check: %d of %d cases failed\n", failures, CASES);
     return failures ? 1 : 0;
 }
+
+// These fixtures exercise reads only.
+int disk_write_block(struct disk *disk, unsigned int lba, int total, const void *buf)
+{
+    return -ERDONLY;
+}
+
+int disk_write_capacity(struct disk *disk, unsigned int *sectors)
+{
+    return -ERDONLY;
+}
+
+int disk_flush(struct disk *disk)
+{
+    return -ERDONLY;
+}

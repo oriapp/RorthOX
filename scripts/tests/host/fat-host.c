@@ -368,3 +368,19 @@ unsigned char *fat_host_read_file(const char *path, long *size)
     *size = n;
     return data;
 }
+
+// These fixtures exercise reads only.
+int disk_write_block(struct disk *disk, unsigned int lba, int total, const void *buf)
+{
+    return -ERDONLY;
+}
+
+int disk_write_capacity(struct disk *disk, unsigned int *sectors)
+{
+    return -ERDONLY;
+}
+
+int disk_flush(struct disk *disk)
+{
+    return -ERDONLY;
+}
