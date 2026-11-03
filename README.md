@@ -1,8 +1,8 @@
 # RorthOX
 
 RorthOX is my hobby operating system for 32-bit x86, written in C (gnu99, freestanding) and NASM. It boots from its
-own boot sector or through GRUB and runs a small shell and user programs in ring 3, with paging, a FAT16 disk,
-ELF loading, preemptive task switching and `int 0x80` syscalls. It's a learning project: small and
+own boot sector or through GRUB and runs a small shell and user programs in ring 3, with paging, a FAT16 disk that
+programs can read and write, ELF loading, preemptive task switching and `int 0x80` syscalls. It's a learning project: small and
 readable comes first, and it runs in QEMU (it has never been tried on real hardware).
 
 ![The shell after boot, running blank.elf with two arguments](docs/images/blank-run.png)
@@ -29,9 +29,15 @@ Everything in this list is checked by `make test` or was run in QEMU.
   port.
 - **Memory:** a block allocator for the kernel heap (100 MiB, 4 KiB blocks) that refuses requests it can't satisfy, and
   one paging directory per process. Programs that exit give their memory back.
-- **Disk and files:** ATA PIO (LBA28) reads with status checks, a path parser (`0:/dir/file`), a small VFS and a
-  read-only FAT16 driver (8.3 names, subdirectories, cluster chains, `fopen`/`fread`/`fseek`/`fstat`/`fclose` in the
-  kernel).
+- **Disk:** ATA PIO (LBA28) with polling and status checks: reads, writes (WRITE SECTORS), FLUSH CACHE, and IDENTIFY
+  DEVICE to find out whether and how far the disk can be written.
+- **FAT16:** a path parser (`0:/dir/file`), a small VFS and a FAT16 driver with 8.3 names, subdirectories and cluster
+  chains. It can create files in existing directories, truncate them, overwrite them in place and append to them.
+  Every change goes to the disk in a fixed order with a flush after each step (see
+  [Writing files](#writing-files)), and both FAT copies are kept the same.
+- **Files from programs:** syscalls 13-18 open, read, write, seek, stat and close files. Each process has its own
+  16 handles, which are closed when it exits or faults. A file written this way stays on the disk image and can be
+  read back after a reboot, and a program copied this way can be run from the shell.
 - **Programs:** ELF32 executables (each load segment gets its own zeroed memory, mapped writable only when the segment
   is) and flat binaries up to 1 MiB, loaded at 0x400000 and run in ring 3 with their own 16 KiB stack.
 - **Tasks:** 12 process slots, a round-robin task switch on every timer tick, command-line arguments passed to
@@ -40,9 +46,10 @@ Everything in this list is checked by `make test` or was run in QEMU.
   it and the other tasks keep running, and the timer tick wakes it once its deadline has passed. It comes back with
   its registers and stack as they were and gets 0. When every task is asleep, the kernel halts the CPU (`hlt` with
   interrupts on) until a tick makes one due; keys and other interrupts that come in meanwhile go back to the halt.
-- **Syscalls:** 13 calls through `int 0x80` (table below). Every argument and every string or list a syscall reads
+- **Syscalls:** 19 calls through `int 0x80` (table below). Every argument and every string or list a syscall reads
   from user memory goes through a checked copy: only memory the program owns and has mapped, so a bad pointer can't
-  crash the kernel. The call fails instead and the program carries on.
+  crash the kernel. The call fails instead and the program carries on. A file read or write checks the whole buffer
+  before it touches the disk.
 - **Console:** 80x25 VGA text with colours, scrolling and backspace across rows, and a kernel `printf`. Programs can
   move the cursor back and forth across rows without changing the text (syscall 11); a move off the visible page is
   refused. Kernel debug output also goes to port 0xE9 (QEMU's `debugcon`).
@@ -109,8 +116,8 @@ own program, stack and allocations mapped on top.
 | 0x7C00 | boot sector |
 | 0x7E00-0xE1FF | kernel heap block table (one byte per 4 KiB block) |
 | 0xB8000 | VGA text screen |
-| 0x100000-0x10DB4B | kernel image (`kernel.bin`, 56,140 bytes; the disk reserves 101,888) |
-| 0x10E000-0x11064B | kernel `.bss` |
+| 0x100000-0x111B57 | kernel image (`kernel.bin`, 72,536 bytes; the disk reserves 101,888) |
+| 0x112000-0x11464B | kernel `.bss` |
 | below 0x200000 | kernel boot stack (top 0x200000) |
 | 0x3FB000-0x3FEFFF | user stack (virtual, 16 KiB, top 0x3FF000) |
 | 0x400000-0x4FFFFF | user program load window (virtual) |
@@ -134,6 +141,11 @@ holds the program search list, `PROGRAM_SEARCH_PATHS`: 1 to 4 directory prefixes
 
 The build copies `shell.elf` and `blank.elf` into the root directory with mtools, so no root access is needed.
 
+A cluster is 64 KiB (128 sectors) and the root directory has 64 entries. The BPB describes a volume of about 4 GB
+(that's what `mdir` reports as free), but the image file is only about 16 MiB. Before its first write, the kernel
+asks the disk for its real size (IDENTIFY) and only ever allocates whole clusters that fit inside it. On the image
+the build makes right now (16,850,264 bytes) that is clusters 2 to 252, about 15.7 MiB; the image doesn't grow.
+
 ### Subsystems
 
 | Directory | What's in it |
@@ -143,13 +155,14 @@ The build copies `shell.elf` and `blank.elf` into the root directory with mtools
 | `kernel/gdt`, `kernel/idt`, `kernel/task/tss.*` | descriptor tables, 256 interrupt stubs, TSS |
 | `kernel/arch/i686` | VGA terminal and `printf`, debug port, panic screen, PIT driver (tick counter, milliseconds to ticks) |
 | `kernel/memory` | heap allocator (`heap/`), paging (`paging/`) |
-| `kernel/disk` | ATA PIO driver and byte streamer |
-| `kernel/fs` | path parser, VFS, FAT16 |
+| `kernel/disk` | ATA PIO driver (read, write, flush, IDENTIFY) and byte streamer |
+| `kernel/fs` | path parser, VFS, FAT16 (reading and writing) |
 | `kernel/loader/formats` | ELF32 loader |
 | `kernel/task` | tasks, processes, switching to ring 3, sleeping tasks and the idle loop |
-| `kernel/isr80h` | the syscalls |
+| `kernel/isr80h` | the syscalls (file syscalls in `file.c`) |
 | `kernel/keyboard` | keyboard queue and the PS/2 driver |
 | `kernel/time/rtc` | CMOS clock read at boot ("System Time") |
+| `include/rorthox` | headers shared by the kernel and programs: file modes, the stat struct, error codes |
 
 ### Syscalls
 
@@ -171,11 +184,101 @@ numbers are in `config.mk`, the handlers in `kernel/isr80h/`, the wrappers in `p
 | 10 | `printc(str, colour)` | prints a string in one of the 16 VGA colours |
 | 11 | `rorthox_terminal_move_cursor(delta)` | moves the screen cursor by `delta` cells (negative = back, across rows) without changing the text; a move off the 80x25 page returns an error and changes nothing, it never scrolls |
 | 12 | `sleep(milliseconds)` | blocks the calling program for at least that many milliseconds while other tasks run, then returns 0; 0 returns 0 at once, a negative value returns `-EINVARG` (-2) without sleeping |
+| 13 | `rorthox_open(path, mode)` | opens a file and returns a handle (1-16) |
+| 14 | `rorthox_read(fd, buffer, count)` | reads up to `count` bytes, at most 4096 per call; returns the number read, 0 at the end of the file |
+| 15 | `rorthox_write(fd, buffer, count)` | writes up to `count` bytes, at most 4096 per call; returns the number written |
+| 16 | `rorthox_seek(fd, offset, whence)` | moves the position (`RORTHOX_SEEK_SET`/`CUR`/`END`, signed offset) and returns it |
+| 17 | `rorthox_stat(fd, out)` | writes the file's size and flags (bit 0: read-only) into a `struct rorthox_file_stat` |
+| 18 | `rorthox_close(fd)` | closes a handle |
 
 `sleep` takes milliseconds, not seconds like POSIX `sleep`. The kernel turns them into timer ticks:
 `ceil(ms / 10) + 2` at 100 Hz. The two extra ticks cover a tick that may already be pending when the sleep starts
 and the partial tick that is running, so the whole ticks that follow add up to at least the time asked for, counted
 in ticks as they arrive. `sleep(1)` therefore waits 3 ticks and `sleep(1000)` 102.
+
+### Files
+
+The file syscalls are declared in `include/rorthox/file.h` (programs get it through `rorthox.h`), the error codes
+in `include/rorthox/status.h`. Errors come back as negative numbers.
+
+- **Paths** are absolute and start with `0:/` (`0:/NOTES.TXT`, `0:/DIR/A.TXT`), up to 107 characters. Every part is
+  an ASCII 8.3 name: 1-8 characters, optionally a dot and 1-3 more, printable ASCII without spaces or
+  `" * + , : ; < = > ? [ \ ] |`. Lower case is fine: names are matched without regard to case, and new files are
+  stored in upper case. Anything else is `-EINVARG` before the disk is touched.
+- **Modes:** `RORTHOX_FILE_READ` (0) opens an existing file for reading. `RORTHOX_FILE_WRITE` (1) creates the file
+  or truncates it to 0 bytes. `RORTHOX_FILE_APPEND` (2) creates the file or keeps it, and every write goes to the
+  current end of the file, wherever the position is. A handle either reads or writes: reading from a write handle,
+  or writing to a read handle, gives `-EBADF`.
+- **Handles** are 1 to 16, per process. 0 is never a handle; there's no stdin or stdout. The lowest free number is
+  used, a 17th open gives `-EMFILE` (and truncates nothing), and a child process doesn't inherit its parent's
+  handles. When a process exits or is ended by a fault, the kernel closes everything it left open.
+- **Reads and writes** move at most 4096 bytes per call and can return less than asked for, so programs loop.
+  The whole buffer the program passes is checked first: if any part of it isn't the program's own memory (or, for a
+  read, isn't writable), the call fails with nothing transferred and the position unchanged. A count of 0 does
+  nothing and returns 0 (or `-EBADF` for the wrong kind of handle). A successful write has been flushed to the disk
+  when the call returns.
+- **Seek** only goes to positions from 0 to the file size; anything outside is `-EINVARG`. A write handle can seek
+  back and overwrite bytes in place.
+- **Stat** works on an open handle, not on a path.
+- **Timestamps:** there's no clock behind the filesystem. A new file gets 1980-01-01 00:00 as its creation date, and
+  every write or truncate sets the modification and access dates to 1980-01-01 (and sets the archive bit). The
+  creation date of an existing file isn't touched.
+
+| Error | Value | When |
+|---|---|---|
+| `EIO` | -1 | disk error, broken or inconsistent FAT data, a path that goes through a file (`0:/OLD.BIN/X`), or writing after an earlier write error |
+| `EINVARG` | -2 | bad path, mode, origin, pointer or count; a directory; a seek outside the file |
+| `ENOMEM` | -3 | the kernel heap is full |
+| `ERDONLY` | -6 | write or append on a read-only file, or the disk can't be written |
+| `ENOENT` | -10 | the file (for reading) or a parent directory doesn't exist |
+| `EBADF` | -11 | not an open handle of this process, or the wrong kind of handle |
+| `ENOSPC` | -12 | no free cluster left in the writable area, or the directory is full |
+| `EMFILE` | -13 | the process already has 16 open files |
+| `EFBIG` | -14 | the file would pass 2 GiB - 1 |
+
+### Writing files
+
+The disk is driven by polling: IRQ14 stays masked, and every disk write runs inside the syscall with interrupts off.
+Before a write changes anything, the kernel checks that both FAT copies are the same (once per boot), that the
+file's cluster chain is intact and exactly as long as its size needs, and that there are enough free clusters. If
+any check fails, the call returns an error and nothing has been written.
+
+Then a write that grows the file goes to the disk in this order, with a FLUSH CACHE after each step:
+
+| Step | Written | If the machine stops right after it |
+|---|---|---|
+| 1 | new clusters zero-filled, then the data | the file is unchanged, except bytes overwritten in place (those can be partly written); the new data sits in clusters the FAT still calls free |
+| 2 | the new clusters, chained and ended, in FAT 1 | the FAT copies differ; RorthOX refuses every write on the disk until it's repaired |
+| 3 | the same in FAT 2 | the file is unchanged; the new chain is lost space that nothing points to |
+| 4 | (only if the file already had clusters) its last cluster linked to the new chain, FAT 1 then FAT 2 | between the two the FAT copies differ (as above); after both the file has more clusters than its size needs: it reads fine, but append and write on it return `-EIO`, and opening it with `RORTHOX_FILE_WRITE` frees the whole chain |
+| 5 | the directory entry: first cluster, size, date | done; only now does the call return and the position move |
+
+A write that stays inside the file's clusters is steps 1 and 5. A new file is a directory entry with size 0 and no
+cluster, written and flushed before any data. Truncating (opening an existing file with `RORTHOX_FILE_WRITE`) first
+writes and flushes the entry with size 0 and no cluster, then frees the old clusters in FAT 1 (flush) and FAT 2
+(flush). A stop after the entry leaves an empty file and lost clusters; a stop between the two FATs leaves them
+different.
+
+There's no rollback and no journal. If a disk write or flush fails, the call returns `-EIO`, whatever was already
+written stays, and every later write, create or truncate on that disk returns `-EIO` until the next boot; reads keep
+working. The "clean shutdown" bits in FAT entry 1 aren't used, so nothing marks the volume as dirty. After a crash or
+an I/O error, check the image with `fsck.fat -n` (package `dosfstools`) on a copy padded to the size the BPB gives:
+
+```sh
+cp bin/os.bin /tmp/check.img
+truncate -s 4000000000 /tmp/check.img
+fsck.fat -n /tmp/check.img
+```
+
+On a freshly built image this prints one finding, that the boot sector has the label `RORTHOX` but the root
+directory has no label entry, then "Leaving filesystem unchanged" and the summary line, and exits with 1. Any other
+finding is a real problem. `-n` never changes the copy.
+
+The FAT lookup is one scanner for reading and writing. It skips long-filename (LFN) entries and the volume label,
+follows a directory's cluster chain past its first cluster, and checks every cluster number against the volume.
+Programs started through syscalls 6 and 7 are found with the same scanner, so on an odd or hand-made image a
+program name can resolve differently than with the older lookup, which could match LFN and label entries and
+counted a directory's entries without following its cluster chain.
 
 ## Building
 
@@ -199,9 +302,9 @@ it). `make all` gives:
 | File | What |
 |---|---|
 | `bin/boot.bin` | the boot sector (512 bytes) |
-| `bin/kernel.bin` | the kernel (56,140 bytes right now) |
-| `bin/os.bin` | the disk image with `shell.elf` and `blank.elf` on it (16,833,868 bytes) |
-| `bin/rorthox.iso` | the GRUB ISO, only with `make iso` (5,179,392 bytes) |
+| `bin/kernel.bin` | the kernel (72,536 bytes right now) |
+| `bin/os.bin` | the disk image with `shell.elf` and `blank.elf` on it (16,850,264 bytes) |
+| `bin/rorthox.iso` | the GRUB ISO, only with `make iso` (5,195,776 bytes) |
 
 `./build.sh` does the same as `make all` and adds `~/opt/cross/bin` to the PATH itself. `./clean.sh` (or
 `make clean`) removes the build output, and `./uninstall-config.sh` removes the toolchain again (it asks first and
@@ -243,6 +346,10 @@ appears in the terminal. At the `>` prompt, type a program name with arguments:
 > blank.elf hello world
 ```
 
+QEMU uses `bin/os.bin` itself as the disk, so files a program writes stay in it until the image is built again
+(`make clean all` gives a fresh one). Don't run mtools on the image while QEMU has it open. The shell and
+`blank.elf` never write; only programs that call the file syscalls do.
+
 Extra QEMU flags go after the script or in `QEMU_FLAGS`, for example without a window:
 
 ```sh
@@ -277,8 +384,8 @@ qemu-system-i386 -m 128 -drive file=bin/os.bin,format=raw,index=0,media=disk \
 make test
 ```
 
-This builds everything and runs 58 tests (`scripts/smoke.sh` plus every `scripts/tests/*.sh`); it keeps going after a
-failure and prints a summary (`58 passed, 0 failed, 0 skipped`). A full run takes about 10 minutes. `make smoke`
+This builds everything and runs 60 tests (`scripts/smoke.sh` plus every `scripts/tests/*.sh`); it keeps going after a
+failure and prints a summary (`60 passed, 0 failed, 0 skipped`). A full run takes about 12 minutes. `make smoke`
 runs only the smoke test, and `./scripts/run-tests.sh scripts/tests/panic.sh` runs single tests.
 
 The tests boot RorthOX headless in QEMU and drive it through the QEMU monitor: they type with `sendkey`, read the
@@ -294,23 +401,26 @@ where it matters) to check one function against every input. Tests that need ext
 | GRUB boot | `multiboot-header`, `grub-boot` | the Multiboot header fields and their bounds in `kernel.bin` (no QEMU needed); the ISO boots through the GRUB menu and runs `blank.elf`, and a second boot from a disk whose boot sector only loops checks through QEMU's gdbstub that the Multiboot entry, not the boot sector, sets up the GDT, segments and stack |
 | Exceptions and privilege | `exception-frames`, `exceptions`, `kernel-exceptions`, `panic`, `panic-screen`, `task-flags`, `tss-io` | one frame layout for every vector; only the syscall and debugging gates are open to ring 3; a user fault ends only that program; kernel faults panic and stay halted; each task keeps its EFLAGS; ring 3 can't touch I/O ports |
 | Memory | `heap`, `heap-free`, `heap-oom`, `print-oom` | oversized requests fail; bad frees are ignored; running out of heap while starting a program is an error, not a crash |
-| Disk and FAT16 | `disk-read`, `fat-chain`, `fat-directory`, `fat-entry`, `fat-lookup`, `file-descriptors`, `file-read`, `path-release`, `open-oom` | ATA status checks; cluster chains; reserved and bad FAT values; lookups and seeks stay in bounds; a missing file is told apart from other open errors; every descriptor slot works; failed opens give their memory back |
+| Disk and FAT16 | `disk-read`, `fat-chain`, `fat-directory`, `fat-entry`, `fat-lookup`, `file-descriptors`, `file-read`, `path-release`, `open-oom` | ATA status checks; ATA writes, flushes and IDENTIFY against a model of the drive's ports (every error at every phase, nothing sent after a failure); the byte streamer only reads a sector first when it writes part of it and leaves the bytes around a write alone; cluster chains; reserved and bad FAT values; lookups and seeks stay in bounds; a missing file is told apart from other open errors; every descriptor slot works; failed opens give their memory back |
+| Writing files | `fat-write`, `file-syscalls` | `fat-write` runs the real FAT16, VFS and streamer code on the host against a disk model that tracks what was flushed: create, append, truncate and overwrite give the right bytes and leave both FATs equal, every chain exactly as long as its file and no lost clusters; 1807 crash points (cut at each flush, keeping none, all, one or all but one of the sectors written since the last flush) all leave every file with a valid chain in both FATs that covers its size, no cluster shared and the old data intact (lost clusters are allowed); with each disk write, flush and read of an append failing in turn, the call fails and the position stays put, and after a failed write or flush every later write is refused while reads still work; bad names, full directories, a full disk, broken chains and different FAT copies are refused before anything is written; nothing is allocated past the disk's real end. `file-syscalls` boots a copy of the image with `filetest.elf` and uses syscalls 13-18 from ring 3: write and read back more than 4 KiB in short pieces, append after a seek, truncate, copy `blank.elf` and run the copy, bad handles, paths, buffers and stack operands, 16 handles and the 17th refused, handles private to a process, a full disk and a full root directory, and all handles closed after an exit or a fault (read from the kernel's table). Then mtools and the FAT on the host check every file, and a second boot reads everything back. Both run `fsck.fat -n` when it's installed and expect nothing beyond the fresh image's label note |
 | Programs and processes | `elf-segments`, `elf-unwind`, `raw-program`, `load-unwind`, `process-release`, `task-list`, `syscall-path`, `program-arguments`, `command-arguments`, `argument-oom`, `user-pointers`, `program-lookup`, `program-lookup-config`, `config-values` | ELF segments get their own memory; bad ELF files are refused; raw programs must fit the load window; failed loads give everything back; finished programs free their memory; the task list stays linked; every syscall checks the user memory it reads or writes; bare names are looked up in the search list in order, the first match wins, only a missing file moves on, and `argv[0]` stays as typed; bad `PROGRAM_SEARCH_PATHS` values stop the build, and so do key codes outside 0x100-0xFFFF and duplicate key codes or syscall numbers in `config.mk` |
 | Sleeping | `sleep`, `sleep-idle`, `task-list`, `pit` | `sleep(0)` returns 0, negative and too-big values return -2; a sleep lasts at least `ceil(ms / 10) + 2` ticks while another program keeps running, then returns 0 with registers and stack unchanged; sleeping tasks are never picked, every due sleeper wakes on its tick (also across the 2^32 wrap of the tick counter), and a freed sleeper leaves nothing behind; with every task asleep the CPU sits in `hlt` in ring 0 with interrupts on and the kernel's page directory, a key or an NMI doesn't wake the sleeper (the key is read after it wakes), and the idle stack doesn't grow |
 | Console, keyboard, user library | `tty-scroll`, `tty-backspace`, `printc`, `formatting`, `keyboard-burst`, `keyboard-queue`, `keyboard-scancode`, `keyboard-symbols`, `keyboard-extended`, `readline`, `readline-edit`, `strtok` | scrolling and backspace; colours, and the key and cursor syscalls pass their values whole; bounded formatting; no lost keys; a full key queue keeps unread keys and every key value comes back unchanged; the decoder for every key with Shift, Caps and Num Lock, plus the E0/E1 sequences (fake shifts, Print Screen, Pause); the special keys and Num Lock as QEMU sends them; cursor moves stay on the page and change no text; line editing in the middle of a line, across a row edge and while the screen scrolls; `strtok` |
 
 `grub-boot` needs the GRUB packages. Without them it is reported as skipped (`1 skipped` and a `SKIPPED:` line)
-instead of failing; `RORTHOX_REQUIRE_ISO=1 make test` turns that into a failure.
+instead of failing; `RORTHOX_REQUIRE_ISO=1 make test` turns that into a failure. `fsck.fat` (package `dosfstools`)
+is optional: without it `fat-write` and `file-syscalls` say they skip that one check and still run the rest.
 
-CI (`.github/workflows/build.yml`) installs the packages including GRUB, builds the toolchain (cached), runs
-`make all iso` and `RORTHOX_REQUIRE_ISO=1 make test` on Ubuntu 24.04 for every push, and keeps the disk image, the
-ISO and the test output as artifacts.
+CI (`.github/workflows/build.yml`) installs the packages including GRUB and `dosfstools`, builds the toolchain
+(cached), runs `make all iso` and `RORTHOX_REQUIRE_ISO=1 make test` on Ubuntu 24.04 for every push to `main` and
+every pull request, and keeps the disk image, the ISO and the test output as artifacts.
 
 ## Project layout
 
 ```
 kernel/            the kernel (boot sector, entry, drivers, memory, filesystems, loader, tasks, syscalls)
 kernel/boot/grub.cfg.in   the GRUB menu for the ISO
+include/rorthox/   headers shared by the kernel and programs (file syscalls, error codes)
 programs/stdlib/   user-space runtime and syscall wrappers
 programs/shell/    the shell
 programs/blank/    a small program that prints its arguments
@@ -351,8 +461,26 @@ program and the kernel.
   (syscall 11) and overwrite text that the kernel or another program printed.
 - **Program lookup.** The search list is fixed when the kernel is built. There's no current directory and no
   environment, so there's no `PATH` to change at run time.
-- **Filesystem.** FAT16 is read-only, 8.3 names only, and only the kernel can open files (there's no file syscall).
-  A crafted disk image can make it scan for a long time; cluster chains aren't checked for loops.
+- **Filesystem.** 8.3 names only, no long file names. There's no mkdir, delete or rename, and directories don't
+  grow: when the root directory (64 entries) or a subdirectory's clusters are full, creating a file gives `-ENOSPC`.
+  Only the clusters that fit inside the real disk can be written (see [Disk image](#disk-image)), and every file,
+  even a 1-byte one, takes a whole 64 KiB cluster. There are no permissions: any program can write any file that
+  isn't marked read-only. Reads walk cluster chains with a cap at the volume's cluster count rather than detecting
+  loops, so a crafted image can still make them slow; file writes refuse looped or broken file chains.
+- **Crash safety.** Writes follow a fixed order (see [Writing files](#writing-files)), but there is no journal and
+  no rollback: a crash or a device error can leave lost clusters, FAT copies that differ (then RorthOX refuses to
+  write until the image is repaired), a file with more clusters than its size (it reads, but append and write
+  return `-EIO`), or bytes overwritten in place only partly. Nothing marks the volume dirty, so run `fsck.fat -n`
+  after a crash. The order has been checked against a disk model and in QEMU, not with power cuts on a real drive.
+- **Disk writes stop everything else.** The driver polls with IRQ14 masked and interrupts off, so a long write
+  (zero-filling a new 64 KiB cluster, several flushes) delays timer ticks, which makes the clock and sleeps run
+  late, and keys typed meanwhile can be lost. Every read or write call also follows the file's cluster chain from
+  its start, one FAT sector read per cluster, so small reads and writes of a big file take longer the bigger the
+  file is. After a timeout or a drive error the driver returns `-EIO` and doesn't
+  reset the drive; if it happened during a file write or flush, file writes stay off until the next boot.
+- **Handles and truncation.** If one handle truncates a file that another handle has open past the new end, that
+  other handle keeps its position: reads there return 0, and a write or a `RORTHOX_SEEK_CUR` by 0 from there gives
+  `-EINVARG` until the file is long enough again.
 - **No FPU state per process.** x87 registers aren't saved or reset between tasks.
 - **Fixed memory layout.** The kernel heap is at 16 MiB and the machine needs 128 MiB of RAM; there's no BIOS
   memory map, and the one GRUB passes is ignored. The boot sector loads the kernel to 1 MiB before `_start` enables
@@ -378,8 +506,6 @@ program and the kernel.
 Parts that are started but not finished:
 
 - **Isolation:** stop mapping all of memory into every process, and turn on CR0.WP.
-- **Writing files:** the VFS has write and append modes, but FAT16 refuses anything but read, and there are no file
-  syscalls yet.
 - **Real hardware:** never tried.
 
 ## Licence
