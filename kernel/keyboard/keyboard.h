@@ -29,7 +29,6 @@ struct keyboard
 
 void keyboard_init();
 int keyboard_insert(struct keyboard *keyboard);
-void keyboard_backspace(struct process *process);
 void keyboard_set_capslock(struct keyboard *keyboard, KEYBOARD_CAPS_LOCK_STATE state);
 KEYBOARD_CAPS_LOCK_STATE keyboard_get_capslock(struct keyboard *keyboard);
 // A key is a byte (1-255) or one of the RORTHOX_KEY_* values. 0 means no key.
