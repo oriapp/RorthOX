@@ -14,6 +14,9 @@
 #             is refused as a duplicate (11, 0xa), zero-padded or a word, too long to fit 32 bits,
 #             or on the make command line. 1023 compiles with the kernel's isr80h.h, 1024 stops at
 #             its command table range check.
+#   files     SYSCALL_FILE_OPEN..SYSCALL_FILE_CLOSE (13-18): each one in the C header and the NASM
+#             include, each one in the duplicate check (set to another syscall's number), and
+#             refused on the make command line.
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -97,7 +100,8 @@ accept sleep-reordered    "#define SYSCALL_SLEEP 0"                 SYSCALL_SLEE
 
 REJECTED="key-zero key-0xff key-255 key-0x10000 key-65536 key-wrap-hex key-wrap-dec key-dup key-dup-spelling \
 key-word key-zero-padded syscall-dup syscall-dup-spelling sleep-dup sleep-dup-spelling sleep-zero-padded sleep-word \
-sleep-wrap-hex sleep-wrap-dec"
+sleep-wrap-hex sleep-wrap-dec file-open-dup file-read-dup file-write-dup file-seek-dup file-stat-dup file-close-dup \
+file-read-zero-padded"
 echo "config-values: rejected values"
 reject key-zero             "$KEY_ERROR"     KEY_UP=0
 reject key-0xff             "$KEY_ERROR"     KEY_LEFT=0xFF
@@ -120,6 +124,14 @@ reject sleep-word           "$NUMERIC_ERROR" SYSCALL_SLEEP=twelve
 # 2^64 + 0x20: bash arithmetic wraps it to 32, a free number (dash saturates it).
 reject sleep-wrap-hex       "$SYSCALL_ERROR" SYSCALL_SLEEP=0x10000000000000020
 reject sleep-wrap-dec       "$SYSCALL_ERROR" SYSCALL_SLEEP=18446744073709551648
+# Each file syscall (13-18) is in the duplicate check: set to a number another syscall has.
+reject file-open-dup        "$SYSCALL_ERROR" SYSCALL_FILE_OPEN=12
+reject file-read-dup        "$SYSCALL_ERROR" SYSCALL_FILE_READ=0xd
+reject file-write-dup       "$SYSCALL_ERROR" SYSCALL_FILE_WRITE=0
+reject file-seek-dup        "$SYSCALL_ERROR" SYSCALL_FILE_SEEK=15
+reject file-stat-dup        "$SYSCALL_ERROR" SYSCALL_FILE_STAT=18
+reject file-close-dup       "$SYSCALL_ERROR" SYSCALL_FILE_CLOSE=0x11
+reject file-read-zero-padded "$NUMERIC_ERROR" SYSCALL_FILE_READ=014
 
 echo "config-values: syscall 12 (sleep) in the NASM include, on the command line and past the command table"
 # The stdlib's sleep wrapper takes its number from the NASM include.
@@ -151,6 +163,19 @@ range_case() {
 range_case sleep-range-last 1023 ok
 range_case sleep-range-past 1024 error
 
+echo "config-values: file syscalls 13-18 in the C header and the NASM include, and on the command line"
+FILE_SYSCALLS="SYSCALL_FILE_OPEN=13 SYSCALL_FILE_READ=14 SYSCALL_FILE_WRITE=15 SYSCALL_FILE_SEEK=16 SYSCALL_FILE_STAT=17 SYSCALL_FILE_CLOSE=18"
+set_values
+make -s -C "$FIX" build/config/rorthox-config.h build/config/rorthox-config.inc > "$FIX/file-emit.log" 2>&1 || true
+for pair in $FILE_SYSCALLS; do
+    key="${pair%%=*}" value="${pair#*=}"
+    grep -qxF "#define $key $value" "$FIX/build/config/rorthox-config.h" && echo "PASS $key header" >> "$RESULTS"
+    grep -qxF "%define $key $value" "$FIX/build/config/rorthox-config.inc" && echo "PASS $key nasm" >> "$RESULTS"
+    log="$FIX/$key-override.log"
+    make -s -C "$FIX" -n "$pair" build/config/rorthox-config.h > "$log" 2>&1 || true
+    grep -qF "*** $key must be set in config.mk, not on the command line" "$log" && echo "PASS $key override" >> "$RESULTS"
+done
+
 for t in $ACCEPTED; do
     check "$t: parsed with /bin/sh"     "$RESULTS" "PASS $t parsed /bin/sh" line
     check "$t: parsed with /bin/bash"   "$RESULTS" "PASS $t parsed /bin/bash" line
@@ -165,6 +190,12 @@ check "sleep: command-line value refused (/bin/sh)"         "$RESULTS" "PASS sle
 check "sleep: command-line value refused (/bin/bash)"       "$RESULTS" "PASS sleep-override /bin/bash" line
 check "sleep: 1023, the last command slot, compiles"        "$RESULTS" "PASS sleep-range-last" line
 check "sleep: 1024 stops at the command table range check"  "$RESULTS" "PASS sleep-range-past" line
+for pair in $FILE_SYSCALLS; do
+    key="${pair%%=*}"
+    check "$key: ${pair#*=} in the C header"         "$RESULTS" "PASS $key header" line
+    check "$key: ${pair#*=} in the NASM include"      "$RESULTS" "PASS $key nasm" line
+    check "$key: command-line value refused"          "$RESULTS" "PASS $key override" line
+done
 if [ "$failures" -ne 0 ]; then
     echo "config-values: $failures check(s) failed" >&2
     exit 1

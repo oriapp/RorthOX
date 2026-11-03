@@ -9,6 +9,11 @@
 # 1-256 and LBAs inside 28 bits only), and the real kernel/disk/streamer.c on a model disk (no
 # extra sector at an exact boundary, no read for 0 bytes, bad positions and lengths refused, the
 # stack doesn't grow with the length). The kernel's own streamer.o must not call itself.
+# Writes (host/disk-write.c and disk-stream.c): WRITE SECTORS, FLUSH CACHE and IDENTIFY DEVICE on
+# the same kind of port model (DRQ before every sector, errors at every phase, flush with its own
+# limit, the sector count from IDENTIFY, refusals before any port), and streamer writes that keep
+# the bytes around a partial sector, write whole sectors without reading them first and stop at
+# the first failed read or write.
 #
 # QEMU: copy bin/os.bin, add programs/disktest and a copy of blank.elf named diskbad.elf, and
 # point diskbad.elf's first cluster past the end of the image file (its size is below one
@@ -56,10 +61,13 @@ host_check() {
 
 echo "disk-read: host checks of disk.c and streamer.c"
 host_check disk-ata scripts/tests/host/disk-ata.c kernel/disk/disk.c kernel/memory/memory.c
+host_check disk-write scripts/tests/host/disk-write.c kernel/disk/disk.c kernel/memory/memory.c
 host_check disk-stream scripts/tests/host/disk-stream.c scripts/tests/host/kalloc.c kernel/disk/streamer.c \
     kernel/memory/memory.c
 check "ATA host check built and exited with status 0"      "$OUT/host-disk-ata-status.txt"    "exit=0" line
 check "ATA host check: every port case passed"             "$OUT/host-disk-ata.log"           "disk-ata host check: 0 of"
+check "ATA write host check built and exited with status 0" "$OUT/host-disk-write-status.txt" "exit=0" line
+check "ATA write host check: every write/flush/IDENTIFY case passed" "$OUT/host-disk-write.log" "disk-write host check: 0 of"
 check "streamer host check built and exited with status 0" "$OUT/host-disk-stream-status.txt" "exit=0" line
 check "streamer host check: every case passed"             "$OUT/host-disk-stream.log"        "disk-stream host check: 0 of"
 

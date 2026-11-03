@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Syscalls 0, 1, 3, 4, 5, 6, 10, 11 and 12 read their stack arguments through a checked copy, and
-# 1 (print), 6 (load) and 10 (printc) their string too: a stack pointer into a freed page, or a
+# Syscalls 0, 1, 3, 4, 5, 6, 10, 11, 12 and the file syscalls 13-18 read their stack arguments
+# through a checked copy, and 1 (print), 6 (load) and 10 (printc) their string too: a stack
+# pointer into a freed page, or a
 # freed, unowned or unterminated-at-the-end string pointer gives an error to the program
 # instead of a kernel page fault (a halt) or a read past the program's memory. A longer string
 # than print's 1024-byte buffer is cut after 1023 bytes, also when it crosses a page edge.
@@ -16,6 +17,7 @@ cp bin/os.bin "$IMAGE"
 mcopy -o -i "$IMAGE" programs/syscheck/build/syscheck.elf ::syscheck.elf
 run_syscheck ptr 'syscheck: PASS'
 check "freed stack refused by every syscall" "$OUT/session-ptr/screen.txt" 'syscheck: freed stack -2 -2 -2 -2 -2 0 0 -2 -2'
+check "freed stack refused by the file syscalls 13-18" "$OUT/session-ptr/screen.txt" 'syscheck: freed stack files -2 -2 -2 -2 -2 -2'
 check "long string cut after 1023 bytes" "$OUT/session-ptr/screen.txt" 'TRUN|'
 check "nothing past the cut printed" "$OUT/session-ptr/screen.txt" 'TRUNX' absent
 check "valid string still prints" "$OUT/session-ptr/screen.txt" 'syscheck: valid print'

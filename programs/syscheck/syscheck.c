@@ -184,9 +184,10 @@ static int command_test(const char *mode)
     free(memory); return 0;
 }
 
-/* Syscalls 0, 1, 3, 4, 5, 6, 10, 11 and 12 read their stack arguments through a checked copy, and 1, 6
-   and 10 their string too: a freed stack, and freed, unowned and unterminated-at-the-end string
-   pointers give an error instead of a kernel fault or an overread. */
+/* Syscalls 0, 1, 3, 4, 5, 6, 10, 11, 12 and 13-18 read their stack arguments through a checked
+   copy, and 1, 6 and 10 their string too: a freed stack, and freed, unowned and
+   unterminated-at-the-end string pointers give an error instead of a kernel fault or an
+   overread. */
 static int pointer_test(void)
 {
     int bad = 0;
@@ -204,6 +205,10 @@ static int pointer_test(void)
     int fr = bad_stack(SYSCALL_FREE, sp), ma = bad_stack(SYSCALL_MALLOC, sp);
     int ld = bad_stack(SYSCALL_PROCESS_LOAD_START, sp), mc = bad_stack(SYSCALL_TERMINAL_MOVE_CURSOR, sp);
     int sl = bad_stack(SYSCALL_SLEEP, sp);
+    int fo = bad_stack(SYSCALL_FILE_OPEN, sp), frd = bad_stack(SYSCALL_FILE_READ, sp);
+    int fwr = bad_stack(SYSCALL_FILE_WRITE, sp), fsk = bad_stack(SYSCALL_FILE_SEEK, sp);
+    int fst = bad_stack(SYSCALL_FILE_STAT, sp), fcl = bad_stack(SYSCALL_FILE_CLOSE, sp);
+    bad |= fo != -2 || frd != -2 || fwr != -2 || fsk != -2 || fst != -2 || fcl != -2;
     bad |= sum != -2 || put != -2 || pr != -2 || prc != -2 || fr != -2 || ma != 0 || ld != 0 || mc != -2 || sl != -2;
     /* 1100 bytes that cross a page edge: print copies at most 1023 of them, so the screen
        shows "...TRUN|" and never the X. */
@@ -216,6 +221,7 @@ static int pointer_test(void)
     printf("syscheck: long print %i\n", rc);
     /* Printed after the long string, which pushes earlier lines off the screen. */
     printf("syscheck: freed stack %i %i %i %i %i %i %i %i %i\n", sum, put, pr, prc, fr, ma, ld, mc, sl);
+    printf("syscheck: freed stack files %i %i %i %i %i %i\n", fo, frd, fwr, fsk, fst, fcl);
     bad |= rc != 0;
     /* Freed now, so nothing the program owns follows end (the unterminated case below). */
     free(two);
