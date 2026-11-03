@@ -1,9 +1,9 @@
 name: build
 
-# Pushes to main and pull requests (a PR branch runs once, through its pull request).
+# Pushes to main and features, and pull requests (a PR branch runs once, through its pull request).
 on:
   push:
-    branches: [main]
+    branches: [main, features]
   pull_request:
   workflow_dispatch:
 
