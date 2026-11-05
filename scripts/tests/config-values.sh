@@ -17,6 +17,9 @@
 #   files     SYSCALL_FILE_OPEN..SYSCALL_FILE_CLOSE (13-18): each one in the C header and the NASM
 #             include, each one in the duplicate check (set to another syscall's number), and
 #             refused on the make command line.
+#   ticks     SYSCALL_GET_TICKS (19): emitted to the C header and the NASM include, can be moved
+#             (0), refused as a duplicate (18, 0x12), zero-padded, too long to fit 32 bits, or on
+#             the make command line; 1024 stops at the kernel's command table range check.
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -88,7 +91,8 @@ reject() {
     echo "  reject $tag: $*"
 }
 
-ACCEPTED="defaults key-low key-high key-padded-hex syscalls-reordered sleep-default sleep-reordered"
+ACCEPTED="defaults key-low key-high key-padded-hex syscalls-reordered sleep-default sleep-reordered ticks-default \
+ticks-reordered"
 echo "config-values: accepted values"
 accept defaults           "#define RORTHOX_KEY_PAGE_DOWN 0x109"
 accept key-low            "#define RORTHOX_KEY_UP 0x100"            KEY_UP=0x100
@@ -97,11 +101,13 @@ accept key-padded-hex     "#define RORTHOX_KEY_HOME 0x0200"         KEY_HOME=0x0
 accept syscalls-reordered "#define SYSCALL_TERMINAL_MOVE_CURSOR 0"  SYSCALL_TERMINAL_MOVE_CURSOR=0 SYSCALL_SUM=11
 accept sleep-default      "#define SYSCALL_SLEEP 12"
 accept sleep-reordered    "#define SYSCALL_SLEEP 0"                 SYSCALL_SLEEP=0 SYSCALL_SUM=12
+accept ticks-default      "#define SYSCALL_GET_TICKS 19"
+accept ticks-reordered    "#define SYSCALL_GET_TICKS 0"             SYSCALL_GET_TICKS=0 SYSCALL_SUM=19
 
 REJECTED="key-zero key-0xff key-255 key-0x10000 key-65536 key-wrap-hex key-wrap-dec key-dup key-dup-spelling \
 key-word key-zero-padded syscall-dup syscall-dup-spelling sleep-dup sleep-dup-spelling sleep-zero-padded sleep-word \
 sleep-wrap-hex sleep-wrap-dec file-open-dup file-read-dup file-write-dup file-seek-dup file-stat-dup file-close-dup \
-file-read-zero-padded"
+file-read-zero-padded ticks-dup ticks-dup-spelling ticks-zero-padded ticks-wrap-hex ticks-wrap-dec"
 echo "config-values: rejected values"
 reject key-zero             "$KEY_ERROR"     KEY_UP=0
 reject key-0xff             "$KEY_ERROR"     KEY_LEFT=0xFF
@@ -132,6 +138,12 @@ reject file-seek-dup        "$SYSCALL_ERROR" SYSCALL_FILE_SEEK=15
 reject file-stat-dup        "$SYSCALL_ERROR" SYSCALL_FILE_STAT=18
 reject file-close-dup       "$SYSCALL_ERROR" SYSCALL_FILE_CLOSE=0x11
 reject file-read-zero-padded "$NUMERIC_ERROR" SYSCALL_FILE_READ=014
+reject ticks-dup            "$SYSCALL_ERROR" SYSCALL_GET_TICKS=18
+reject ticks-dup-spelling   "$SYSCALL_ERROR" SYSCALL_GET_TICKS=0x12
+reject ticks-zero-padded    "$NUMERIC_ERROR" SYSCALL_GET_TICKS=019
+# 2^64 + 0x30: bash arithmetic wraps it to 48, a free number (dash saturates it).
+reject ticks-wrap-hex       "$SYSCALL_ERROR" SYSCALL_GET_TICKS=0x10000000000000030
+reject ticks-wrap-dec       "$SYSCALL_ERROR" SYSCALL_GET_TICKS=18446744073709551664
 
 echo "config-values: syscall 12 (sleep) in the NASM include, on the command line and past the command table"
 # The stdlib's sleep wrapper takes its number from the NASM include.
@@ -147,27 +159,30 @@ for sh in /bin/sh /bin/bash; do
         echo "PASS sleep-override $sh" >> "$RESULTS"
 done
 # make accepts any distinct number; the kernel's range check refuses one past its command table.
-# range_case <tag> <value> ok|error: the kernel's isr80h.h compiled against that header.
+# range_case <tag> <value> ok|error [key]: the kernel's isr80h.h compiled against that header
+# (key SYSCALL_SLEEP unless given).
 range_case() {
-    local tag="$1" got
-    set_values SYSCALL_SLEEP="$2" && make -s -C "$FIX" build/config/rorthox-config.h > "$FIX/$tag.log" 2>&1 || {
+    local tag="$1" got key="${4:-SYSCALL_SLEEP}"
+    set_values "$key=$2" && make -s -C "$FIX" build/config/rorthox-config.h > "$FIX/$tag.log" 2>&1 || {
         echo "  $tag: no header"; return; }
     printf '#include "isr80h/isr80h.h"\nint range_fixture;\n' > "$FIX/$tag.c"
     if i686-elf-gcc -std=gnu99 -ffreestanding -I "$FIX/build/config" -I kernel -c "$FIX/$tag.c" -o "$FIX/$tag.o" \
             >> "$FIX/$tag.log" 2>&1; then got=ok; else got=error; fi
-    echo "  SYSCALL_SLEEP = $2: isr80h.h $got"
+    echo "  $key = $2: isr80h.h $got"
     if [ "$got" = "$3" ] && { [ "$got" = ok ] || grep -qF 'syscall outside command table' "$FIX/$tag.log"; }; then
         echo "PASS $tag" >> "$RESULTS"
     fi
 }
 range_case sleep-range-last 1023 ok
 range_case sleep-range-past 1024 error
+range_case ticks-range-past 1024 error SYSCALL_GET_TICKS
 
-echo "config-values: file syscalls 13-18 in the C header and the NASM include, and on the command line"
+echo "config-values: file syscalls 13-18 and ticks (19) in the C header and the NASM include, and on the command line"
 FILE_SYSCALLS="SYSCALL_FILE_OPEN=13 SYSCALL_FILE_READ=14 SYSCALL_FILE_WRITE=15 SYSCALL_FILE_SEEK=16 SYSCALL_FILE_STAT=17 SYSCALL_FILE_CLOSE=18"
+TICKS_SYSCALL="SYSCALL_GET_TICKS=19"
 set_values
 make -s -C "$FIX" build/config/rorthox-config.h build/config/rorthox-config.inc > "$FIX/file-emit.log" 2>&1 || true
-for pair in $FILE_SYSCALLS; do
+for pair in $FILE_SYSCALLS $TICKS_SYSCALL; do
     key="${pair%%=*}" value="${pair#*=}"
     grep -qxF "#define $key $value" "$FIX/build/config/rorthox-config.h" && echo "PASS $key header" >> "$RESULTS"
     grep -qxF "%define $key $value" "$FIX/build/config/rorthox-config.inc" && echo "PASS $key nasm" >> "$RESULTS"
@@ -190,7 +205,8 @@ check "sleep: command-line value refused (/bin/sh)"         "$RESULTS" "PASS sle
 check "sleep: command-line value refused (/bin/bash)"       "$RESULTS" "PASS sleep-override /bin/bash" line
 check "sleep: 1023, the last command slot, compiles"        "$RESULTS" "PASS sleep-range-last" line
 check "sleep: 1024 stops at the command table range check"  "$RESULTS" "PASS sleep-range-past" line
-for pair in $FILE_SYSCALLS; do
+check "ticks: 1024 stops at the command table range check"  "$RESULTS" "PASS ticks-range-past" line
+for pair in $FILE_SYSCALLS $TICKS_SYSCALL; do
     key="${pair%%=*}"
     check "$key: ${pair#*=} in the C header"         "$RESULTS" "PASS $key header" line
     check "$key: ${pair#*=} in the NASM include"      "$RESULTS" "PASS $key nasm" line

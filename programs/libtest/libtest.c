@@ -68,6 +68,18 @@
  * libtest.elf idlechild <ticks> <current_task>
  *     Prints "lt-ic: task <its task> sleeping", sleeps 6000 ms, prints its result and ticks and
  *     "lt-ic: sleep ok" (r 0, n >= 602), and ends.
+ *
+ * libtest.elf clock
+ *     The tick syscall (19), for scripts/tests/clock.sh. Every rorthox_get_ticks() call runs with
+ *     the register and stack markers of printc. Prints "\nlt-t: start <ticks>", then:
+ *     "lt-t: sleeps ok" if each of three sleep(50) took at least 7 and at most 100 ticks by
+ *     rorthox_get_ticks(); "lt-t: advanced 5 times" if a busy loop saw the value go up 5 times,
+ *     each time by 1..100, within 2000000 calls; "lt-t: garbage esp ok" if int 0x80 with eax 19
+ *     and esp set to 0, 0xdeadbeef, 0xfffffffc or 0x3ff001 (none of them a stack the program owns),
+ *     repeated until at least 30 ticks have passed ("lt-t: garbage esp rounds <n> ticks <t>"),
+ *     always returned a value between the calls before and after it and gave the same esp back; and
+ *     "lt-t: ebx esi edi ebp esp and stack kept". Ends with "libtest clock: done" (or FAIL lines
+ *     and "libtest clock: FAIL").
  */
 #include "rorthox.h"
 #include "stdlib.h"
@@ -739,6 +751,145 @@ static int idle_child(int argc, char **argv)
     return !ok;
 }
 
+// ---- ticks (syscall 19) ----
+
+static unsigned int ticks_checked(void)
+{
+    return (unsigned int)call_checked(rorthox_get_ticks, 0, 0);
+}
+
+// int 0x80 with eax = 19 and esp = bad. The value in eax, and the esp the kernel gave back in
+// *esp_back. esi keeps the real esp: the syscall must give it back unchanged.
+static unsigned int ticks_with_esp(unsigned int bad, unsigned int *esp_back)
+{
+    unsigned int result, back;
+    __asm__ volatile("mov %%esp, %%esi\n\t"
+                     "mov %%edx, %%esp\n\t"
+                     "mov %[number], %%eax\n\t"
+                     "int %[vector]\n\t"
+                     "mov %%esp, %%edx\n\t"
+                     "mov %%esi, %%esp"
+                     : "=&a"(result), "=d"(back)
+                     : "d"(bad), [number] "i"(SYSCALL_GET_TICKS), [vector] "i"(RORTHOX_SYSCALL_VECTOR)
+                     : "esi", "memory", "cc");
+    *esp_back = back;
+    return result;
+}
+
+// libtest.elf clock: see the top of the file.
+static int clock_ticks(void)
+{
+    char line[160];
+    int failed = 0;
+    unsigned int start = ticks_checked();
+    strcpy(line, "\nlt-t: start");
+    add_hex(line, start);
+    add(line, "\n");
+    print(line);
+
+    // Each sleep(50) waits for at least 7 delivered ticks.
+    int ok = 1;
+    for (int i = 0; i < 3; i++)
+    {
+        unsigned int before = ticks_checked();
+        int r = sleep(50);
+        unsigned int took = ticks_checked() - before;
+        if (r != 0 || took < least_ticks(50) || took > 100)
+        {
+            fail("clock", "sleep(50) ticks", 50, (int)took, (int)least_ticks(50));
+            ok = 0;
+        }
+    }
+    print(ok ? "lt-t: sleeps ok\n" : "lt-t: FAIL sleeps\n");
+    failed |= !ok;
+
+    // Busy loop: the value goes up as ticks are delivered, never down, never by much.
+    unsigned int last = ticks_checked(), calls = 0;
+    int changes = 0;
+    ok = 1;
+    while (changes < 5 && calls < 2000000)
+    {
+        unsigned int now = ticks_checked();
+        calls++;
+        if (now != last)
+        {
+            if (now - last > 100)
+            {
+                fail("clock", "jump from", last, (int)now, (int)(last + 1u));
+                ok = 0;
+            }
+            last = now;
+            changes++;
+        }
+    }
+    strcpy(line, ok && changes == 5 ? "lt-t: advanced 5 times\n" : "lt-t: FAIL advanced");
+    if (!(ok && changes == 5))
+    {
+        add_int(line, changes);
+        add(line, " times in");
+        add_int(line, (int)calls);
+        add(line, " calls\n");
+        ok = 0;
+    }
+    print(line);
+    failed |= !ok;
+
+    // A garbage esp: the handler reads nothing from the user stack. Repeated until at least 30
+    // ticks have passed (at most 100000 rounds), so timer IRQs also come in while esp is garbage
+    // (right after the iret, or between the mov and the int). Stops at the first wrong value.
+    static const unsigned int bad[] = { 0, 0xdeadbeef, 0xfffffffc, 0x3ff001 };
+    ok = 1;
+    unsigned int first = ticks_checked(), rounds = 0, passed = 0;
+    while (ok && passed < 30 && rounds < 100000)
+    {
+        for (unsigned i = 0; ok && i < sizeof(bad) / sizeof(bad[0]); i++)
+        {
+            unsigned int esp_back;
+            unsigned int before = ticks_checked();
+            unsigned int got = ticks_with_esp(bad[i], &esp_back);
+            unsigned int after = ticks_checked();
+            if (before == 0 || got - before > after - before || esp_back != bad[i])
+            {
+                strcpy(line, "libtest clock: FAIL garbage esp");
+                add_hex(line, bad[i]);
+                add(line, " got");
+                add_hex(line, got);
+                add(line, " between");
+                add_hex(line, before);
+                add_hex(line, after);
+                add(line, " esp back");
+                add_hex(line, esp_back);
+                add(line, "\n");
+                print(line);
+                ok = 0;
+            }
+        }
+        rounds++;
+        passed = ticks_checked() - first;
+    }
+    strcpy(line, "lt-t: garbage esp rounds");
+    add_int(line, (int)rounds);
+    add(line, " ticks");
+    add_int(line, (int)passed);
+    add(line, "\n");
+    print(line);
+    ok &= passed >= 30;
+    print(ok ? "lt-t: garbage esp ok\n" : "lt-t: FAIL garbage esp\n");
+    failed |= !ok;
+
+    if (registers_changed)
+    {
+        fail("clock", "registers changed, mask", registers_changed, registers_changed, 0);
+        failed = 1;
+    }
+    else
+    {
+        print("lt-t: ebx esi edi ebp esp and stack kept\n");
+    }
+    print(failed ? "libtest clock: FAIL\n" : "libtest clock: done\n");
+    return failed;
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 0)
@@ -778,6 +929,10 @@ int main(int argc, char **argv)
     {
         return edit_line();
     }
-    print("libtest: usage libtest.elf printc|strtok|keys|cursor|readline|sleep\n");
+    if (strncmp(mode, "clock", 6) == 0)
+    {
+        return clock_ticks();
+    }
+    print("libtest: usage libtest.elf printc|strtok|keys|cursor|readline|sleep|clock\n");
     return 1;
 }
