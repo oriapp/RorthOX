@@ -41,33 +41,35 @@
  *     row and scrolls the screen. Then prints "|" (where the cursor is after the read), and
  *     "\nlt-r: [<line>]" and "libtest readline: done".
  *
- * libtest.elf sleep <current_task> <state offset>
+ * libtest.elf sleep
  *     Sleep (syscall 12), for scripts/tests/sleep.sh. Times its sleeps with the tick syscall (19).
- *     The arguments are hex: the address of the kernel's current_task and the offset of the state
- *     field in struct task (ring 3 can read kernel memory). Prints "libtest sleep: armed" and
- *     waits for a key.
+ *     Prints "libtest sleep: armed" and waits for a key.
  *     Then "lt-s: zero 0 negative -2 high -2" (sleep(0), sleep(-1), sleep(0x80000000)), two
  *     sleep(50) with their results and ticks, "lt-s: short sleeps ok" if both returned 0 after at
- *     least 7 ticks, starts "libtest.elf sleeppeer" and runs sleep(1000): "lt-s: slept r <r>
+ *     least 7 ticks, starts "libtest.elf sleeppeer" and runs sleep(1000), then calls
+ *     lt_sleeper_woke() (a debugger stop for sleep.sh): "lt-s: slept r <r>
  *     ticks <n> from <t0> to <t1>" and "lt-s: long sleep ok" for r 0 and n >= 102. Every sleep
  *     runs with the register and stack markers of printc; "lt-s: ebx esi edi ebp esp and stack
  *     kept". Ends with "libtest sleep: done" (or FAIL lines and "libtest sleep: FAIL").
  *
- * libtest.elf sleeppeer <task> <state offset>
- *     Started by sleep. Waits until that task's state is 1 (sleeping), then counts the ticks it
- *     runs on until the state changes: "lt-p: ran on <n> ticks while the sleeper slept, from <first>
- *     to <last>".
+ * libtest.elf sleeppeer
+ *     Started by sleep. Runs for PEER_TICKS ticks (by the tick syscall), which spans the sleeper's
+ *     sleep(1000), and calls lt_peer_sample(n, tick) once for every new tick it sees (n = 1, 2,
+ *     ...). It knows nothing about the sleeper: sleep.sh breaks at lt_peer_sample and looks at
+ *     the sleeper's task from the host, then acknowledges the sample by writing n into
+ *     lt_peer_ack. At the end it calls lt_peer_done(samples) and prints "lt-p: ran from <first>
+ *     to <last> samples <n> acknowledged <a>".
  *
  * Started by the kernel as shell.elf (no arguments at all), for scripts/tests/sleep-idle.sh
- *     Prints "libtest idle: armed" and reads a line with the hex address of current_task.
- *     Prints "lt-i: task <its task>" and "lt-i: sleeping", sleeps 5000 ms as
- *     the only task, reads one key and prints "lt-i: woke r <r> ticks <n> key <key>" and
+ *     Prints "libtest idle: armed" and "lt-i: sleeping", sleeps 5000 ms as the only task (timed
+ *     with the tick syscall, like every sleep here), reads one key and prints
+ *     "lt-i: woke r <r> ticks <n> key <key>" and
  *     "lt-i: first sleep ok" (r 0, n >= 502, key 'k'). Then starts "libtest.elf idlechild",
  *     prints "lt-i: second sleeping", sleeps 3000 ms, "lt-i: second sleep ok" (n >= 302) and
  *     "libtest idle: done", and sleeps on forever (the last process must not exit).
  *
- * libtest.elf idlechild <current_task>
- *     Prints "lt-ic: task <its task> sleeping", sleeps 6000 ms, prints its result and ticks and
+ * libtest.elf idlechild
+ *     Prints "lt-ic: sleeping", sleeps 6000 ms, prints its result and ticks and
  *     "lt-ic: sleep ok" (r 0, n >= 602), and ends.
  *
  * libtest.elf clock
@@ -453,21 +455,6 @@ static int edit_line(void)
 
 // ---- sleep (syscall 12) ----
 
-static unsigned int hex_value(const char *s)
-{
-    unsigned int v = 0;
-    for (; *s; s++)
-    {
-        int d = *s >= '0' && *s <= '9' ? *s - '0' : *s >= 'a' && *s <= 'f' ? *s - 'a' + 10 : -1;
-        if (d < 0)
-        {
-            break;
-        }
-        v = v * 16 + d;
-    }
-    return v;
-}
-
 static void add(char *line, const char *s)
 {
     strcpy(line + strlen(line), s);
@@ -511,14 +498,21 @@ static unsigned int least_ticks(int milliseconds)
     return (milliseconds + 9) / 10 + 2;
 }
 
-// libtest.elf sleep <current_task> <state offset>: see the top of the file.
+// sleep.sh breaks here (by symbol) once the sleeper's sleep(1000) has returned and checks from
+// the host that the sleeper runs again: runnable, past its deadline, in its own page directory.
+__attribute__((noinline, noipa)) void lt_sleeper_woke(void)
+{
+    __asm__ volatile("" : : : "memory");
+}
+
+// libtest.elf sleep: see the top of the file.
 static int sleeper(int argc, char **argv)
 {
     char line[160];
     int failed = 0;
-    if (argc != 4)
+    if (argc != 2)
     {
-        print("libtest sleep: usage libtest.elf sleep <current_task> <state offset>\n");
+        print("libtest sleep: usage libtest.elf sleep\n");
         return 1;
     }
     print("libtest sleep: armed\n");
@@ -552,17 +546,13 @@ static int sleeper(int argc, char **argv)
     print(ok ? "lt-s: short sleeps ok\n" : "lt-s: FAIL short sleeps\n");
     failed |= !ok;
 
-    // The peer watches this task's state while it sleeps and times its own run.
-    unsigned int me = *(volatile unsigned int *)hex_value(argv[2]);
-    strcpy(line, "libtest.elf sleeppeer");
-    add_hex(line, me);
-    add(line, " ");
-    add(line, argv[3]);
-    rorthox_system_run(line);
+    // The peer runs while this task sleeps; sleep.sh watches both from the host.
+    rorthox_system_run("libtest.elf sleeppeer");
 
     int r;
     unsigned int start = rorthox_get_ticks();
     r = sleep_checked(1000);
+    lt_sleeper_woke();
     unsigned int end = rorthox_get_ticks();
     strcpy(line, "lt-s: slept r");
     add_int(line, r);
@@ -591,54 +581,58 @@ static int sleeper(int argc, char **argv)
     return failed;
 }
 
-// libtest.elf sleeppeer <task> <state offset>: started by the sleeper. Waits for that
-// task to sleep, then counts the ticks it runs on until the task is runnable again.
-// The tick read sits between two state reads that both say sleeping, so the task slept at that tick.
-static int asleep_at(volatile unsigned int *state, unsigned int *now)
+// libtest.elf sleeppeer: started by the sleeper, see the top of the file. Long enough to span
+// the sleeper's sleep(1000), which starts within a few ticks of this program.
+#define PEER_TICKS 250
+
+// The number of the last sample sleep.sh's debugger has looked at, written by the debugger.
+volatile unsigned int lt_peer_ack;
+
+// sleep.sh breaks here (by symbol) once per new tick the peer sees and reads the sleeper's task
+// while the VM is stopped. Kept out of line and out of interprocedural optimisation, so it has
+// one address and its arguments are on the stack at the breakpoint.
+__attribute__((noinline, noipa)) void lt_peer_sample(unsigned int number, unsigned int tick)
 {
-    if (*state != 1)
-    {
-        return 0;
-    }
-    *now = rorthox_get_ticks();
-    return *state == 1;
+    __asm__ volatile("" : : "r"(number), "r"(tick) : "memory");
+}
+
+// sleep.sh breaks here once at the end: no samples follow.
+__attribute__((noinline, noipa)) void lt_peer_done(unsigned int samples)
+{
+    __asm__ volatile("" : : "r"(samples) : "memory");
 }
 
 static int sleep_peer(int argc, char **argv)
 {
     char line[160];
-    if (argc != 4)
+    if (argc != 2)
     {
         return 1;
     }
-    volatile unsigned int *state = (volatile unsigned int *)(hex_value(argv[2]) + hex_value(argv[3]));
-    unsigned int start = rorthox_get_ticks();
-    unsigned int now;
-    while (!asleep_at(state, &now))
+    unsigned int first = rorthox_get_ticks();
+    unsigned int last = first;
+    unsigned int samples = 0, acknowledged = 0;
+    while (last - first < PEER_TICKS)
     {
-        if (rorthox_get_ticks() - start > 1000)
+        unsigned int now = rorthox_get_ticks();
+        if (now == last)
         {
-            print("lt-p: the sleeper never slept\n");
-            return 1;
+            continue;
         }
+        last = now;
+        samples++;
+        lt_peer_sample(samples, now);
+        acknowledged += lt_peer_ack == samples;
     }
-    unsigned int first = now;
-    unsigned int last = now;
-    int count = 1;
-    while (last - first < 3000 && asleep_at(state, &now))
-    {
-        if (now != last)
-        {
-            count++;
-            last = now;
-        }
-    }
-    strcpy(line, "lt-p: ran on");
-    add_int(line, count);
-    add(line, " ticks while the sleeper slept, from");
+    lt_peer_done(samples);
+    strcpy(line, "lt-p: ran from");
     add_int(line, first);
     add(line, " to");
     add_int(line, last);
+    add(line, " samples");
+    add_int(line, samples);
+    add(line, " acknowledged");
+    add_int(line, acknowledged);
     add(line, "\n");
     print(line);
     return 0;
@@ -648,23 +642,8 @@ static int sleep_peer(int argc, char **argv)
 static int idle_boot(void)
 {
     char line[160];
-    char input[64];
     int failed = 0;
     print("libtest idle: armed\n");
-    rorthox_terminal_readline(input, sizeof(input), true);
-    char *current_text = strtok(input, " ");
-    if (!current_text)
-    {
-        print("\nlibtest idle: FAIL no addresses\n");
-        while (1)
-        {
-            sleep(100000);
-        }
-    }
-    strcpy(line, "\nlt-i: task");
-    add_hex(line, *(volatile unsigned int *)hex_value(current_text));
-    add(line, "\n");
-    print(line);
 
     // Alone: the kernel halts until the deadline. A key typed meanwhile waits in the queue.
     print("lt-i: sleeping\n");
@@ -684,9 +663,7 @@ static int idle_boot(void)
     failed |= !ok;
 
     // With a child that sleeps longer: both asleep, this one wakes first.
-    strcpy(line, "libtest.elf idlechild ");
-    add(line, current_text);
-    rorthox_system_run(line);
+    rorthox_system_run("libtest.elf idlechild");
     print("lt-i: second sleeping\n");
     t = timed_sleep(3000, &r);
     strcpy(line, "lt-i: second woke r");
@@ -713,18 +690,15 @@ static int idle_boot(void)
     return 0;
 }
 
-// libtest.elf idlechild <current_task>: started by idle_boot.
+// libtest.elf idlechild: started by idle_boot.
 static int idle_child(int argc, char **argv)
 {
     char line[160];
-    if (argc != 3)
+    if (argc != 2)
     {
         return 1;
     }
-    strcpy(line, "lt-ic: task");
-    add_hex(line, *(volatile unsigned int *)hex_value(argv[2]));
-    add(line, " sleeping\n");
-    print(line);
+    print("lt-ic: sleeping\n");
     int r;
     unsigned int t = timed_sleep(6000, &r);
     strcpy(line, "lt-ic: woke r");

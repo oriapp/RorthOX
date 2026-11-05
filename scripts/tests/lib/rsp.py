@@ -194,8 +194,9 @@ class Rsp:
     def step(self):
         return self._check_stop(self.request("s"))
 
-    def cont(self, timeout):
-        """Continue until a breakpoint hits; returns the new eip."""
+    def cont(self, timeout, on_running=None):
+        """Continue until a breakpoint hits; returns the new eip. on_running() is called after the
+        continue packet is acknowledged; the guest may not run yet at that point."""
         eip = self.reg("eip")
         if eip in self.breakpoints:
             # QEMU would stop again on the same instruction: step past it first.
@@ -203,6 +204,8 @@ class Rsp:
             self.step()
             self.add_breakpoint(eip)
         self._send_packet("c")
+        if on_running:
+            on_running()
         try:
             self._check_stop(self._read_packet(timeout))
         except TimeoutError:

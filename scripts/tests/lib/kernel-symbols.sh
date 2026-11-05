@@ -1,34 +1,37 @@
-# Kernel addresses and struct task offsets for the sleep tests. Source it after qemu-lib.sh,
+# Kernel addresses and struct offsets for the sleep tests. Source it after qemu-lib.sh,
 # then call kernel_symbols <outdir>. Sets (hex, without 0x):
 #   SYM_TICKS          the PIT tick counter (jiffies, static in pit.c)
 #   SYM_CURRENT_TASK   current_task
+#   SYM_TASK_HEAD      task_head, the first task in the task list
 #   SYM_PAUSE          IRQ_ON_AND_PAUSE
 #   SYM_KERNEL_CHUNK   kernel_chunk (static in kernel.c), the kernel's page directory
-#   TASK_REGISTERS_OFFSET, TASK_STATE_OFFSET, TASK_WAKE_OFFSET   offsets in struct task
+#   TASK_REGISTERS_OFFSET, TASK_STATE_OFFSET, TASK_WAKE_OFFSET, TASK_NEXT_OFFSET,
+#   TASK_PROCESS_OFFSET, TASK_DIRECTORY_OFFSET   offsets in struct task
+#   PROCESS_FILENAME_OFFSET                      offset in struct process
 # Statics are not in build/kernel.map, so the kernel objects are linked once more as an ELF.
 # That link uses ld directly while bin/kernel.bin is linked through gcc, so the result is checked
 # against the real link: every global named in build/kernel.map must have the same address in the
 # ELF, and the ELF's loaded bytes must be bin/kernel.bin byte for byte (this covers the statics).
-# Returns 1 if something is missing (a symbol or the struct task fields) or the check fails.
+# Returns 1 if something is missing (a symbol or the struct fields) or the check fails.
 #
-# The tests that use these addresses (sleep.sh, sleep-idle.sh) read jiffies only from the host
-# (QEMU monitor). libtest's sleep modes time themselves with the tick syscall (19), but still read
-# current_task and struct task from ring 3 through the user page tables, which map all kernel
-# memory read-only. Once user tasks can no longer read kernel memory, those reads page fault and
-# the tests fail (they can't pass by accident).
+# Only the host uses these: sleep.sh and sleep-idle.sh read jiffies, the task list and struct task
+# through the QEMU monitor and gdbstub while the VM is stopped. The user programs they run get no
+# kernel address and never read kernel memory (they time themselves with the tick syscall).
 kernel_symbols() {
     local out="$1" elf="$1/kernel.elf" fix="$1/task-offsets" map=build/kernel.map linked=ok
-    SYM_TICKS='' SYM_CURRENT_TASK='' SYM_PAUSE='' SYM_KERNEL_CHUNK=''
-    TASK_REGISTERS_OFFSET='' TASK_STATE_OFFSET='' TASK_WAKE_OFFSET=''
+    SYM_TICKS='' SYM_CURRENT_TASK='' SYM_TASK_HEAD='' SYM_PAUSE='' SYM_KERNEL_CHUNK=''
+    TASK_REGISTERS_OFFSET='' TASK_STATE_OFFSET='' TASK_WAKE_OFFSET='' TASK_NEXT_OFFSET=''
+    TASK_PROCESS_OFFSET='' TASK_DIRECTORY_OFFSET='' PROCESS_FILENAME_OFFSET=''
     i686-elf-ld -L build/config -T kernel/linker.ld --oformat elf32-i386 build/kernelfull.o -o "$elf" ||
         return 1
     i686-elf-nm "$elf" > "$out/kernel-nm.txt"
     sym() { awk -v n="$1" '$3 == n { print $1; exit }' "$out/kernel-nm.txt"; }
     SYM_TICKS=$(sym jiffies)
     SYM_CURRENT_TASK=$(sym current_task)
+    SYM_TASK_HEAD=$(sym task_head)
     SYM_PAUSE=$(sym IRQ_ON_AND_PAUSE)
     SYM_KERNEL_CHUNK=$(sym kernel_chunk)
-    echo "  jiffies $SYM_TICKS, current_task $SYM_CURRENT_TASK, IRQ_ON_AND_PAUSE $SYM_PAUSE, kernel_chunk $SYM_KERNEL_CHUNK"
+    echo "  jiffies $SYM_TICKS, current_task $SYM_CURRENT_TASK, task_head $SYM_TASK_HEAD, IRQ_ON_AND_PAUSE $SYM_PAUSE, kernel_chunk $SYM_KERNEL_CHUNK"
 
     # Cross-check with the real link. Map lines "0x<address> <name>" are the global symbols;
     # addresses are compared as numbers (leading zeros dropped).
@@ -48,7 +51,7 @@ kernel_symbols() {
             echo "$bad" | head -n 10 | sed 's/^/    /'
             linked=bad
         fi
-        for s in current_task IRQ_ON_AND_PAUSE; do
+        for s in current_task task_head IRQ_ON_AND_PAUSE; do
             grep -qx "ok $s" "$out/map-check.txt" ||
                 { echo "  ERROR: $s is not at the same address in $map and the relinked kernel"; linked=bad; }
         done
@@ -63,12 +66,17 @@ kernel_symbols() {
         echo "  ERROR: the relinked kernel image differs from bin/kernel.bin"; linked=bad
     fi
 
-    # The offsets as the sizes of three arrays, compiled with the kernel's own header.
+    # The offsets as the sizes of arrays, compiled with the kernel's own headers.
     cat > "$fix.c" << 'EOF'
 #include "task/task.h"
+#include "task/process.h"
 char task_registers_offset[offsetof(struct task, registers) + 1];
 char task_state_offset[offsetof(struct task, state) + 1];
 char task_wake_offset[offsetof(struct task, wake_tick) + 1];
+char task_next_offset[offsetof(struct task, next) + 1];
+char task_process_offset[offsetof(struct task, process) + 1];
+char task_directory_offset[offsetof(struct task, page_directory) + 1];
+char process_filename_offset[offsetof(struct process, filename) + 1];
 EOF
     if i686-elf-gcc -std=gnu99 -ffreestanding -fno-common -I kernel -I build/config -c "$fix.c" -o "$fix.o" \
             > "$fix.log" 2>&1; then
@@ -76,11 +84,19 @@ EOF
         TASK_REGISTERS_OFFSET=$(off task_registers_offset)
         TASK_STATE_OFFSET=$(off task_state_offset)
         TASK_WAKE_OFFSET=$(off task_wake_offset)
+        TASK_NEXT_OFFSET=$(off task_next_offset)
+        TASK_PROCESS_OFFSET=$(off task_process_offset)
+        TASK_DIRECTORY_OFFSET=$(off task_directory_offset)
+        PROCESS_FILENAME_OFFSET=$(off process_filename_offset)
     else
         echo "  struct task offsets: the fixture does not compile, see $fix.log"
     fi
-    echo "  struct task: registers at $TASK_REGISTERS_OFFSET, state at $TASK_STATE_OFFSET, wake_tick at $TASK_WAKE_OFFSET"
+    echo "  struct task: registers at $TASK_REGISTERS_OFFSET, state at $TASK_STATE_OFFSET, wake_tick at $TASK_WAKE_OFFSET," \
+        "next at $TASK_NEXT_OFFSET, process at $TASK_PROCESS_OFFSET, page_directory at $TASK_DIRECTORY_OFFSET;" \
+        "struct process: filename at $PROCESS_FILENAME_OFFSET"
     [ "$linked" = ok ] &&
-        [ -n "$SYM_TICKS" ] && [ -n "$SYM_CURRENT_TASK" ] && [ -n "$SYM_PAUSE" ] && [ -n "$SYM_KERNEL_CHUNK" ] &&
-        [ -n "$TASK_STATE_OFFSET" ] && [ -n "$TASK_WAKE_OFFSET" ] && [ -n "$TASK_REGISTERS_OFFSET" ]
+        [ -n "$SYM_TICKS" ] && [ -n "$SYM_CURRENT_TASK" ] && [ -n "$SYM_TASK_HEAD" ] && [ -n "$SYM_PAUSE" ] &&
+        [ -n "$SYM_KERNEL_CHUNK" ] && [ -n "$TASK_STATE_OFFSET" ] && [ -n "$TASK_WAKE_OFFSET" ] &&
+        [ -n "$TASK_REGISTERS_OFFSET" ] && [ -n "$TASK_NEXT_OFFSET" ] && [ -n "$TASK_PROCESS_OFFSET" ] &&
+        [ -n "$TASK_DIRECTORY_OFFSET" ] && [ -n "$PROCESS_FILENAME_OFFSET" ]
 }
