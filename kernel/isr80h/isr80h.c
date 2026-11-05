@@ -27,4 +27,5 @@ void isr80h_register_commands()
     isr80h_register_command(SYSTEM_COMMAND16_FILE_SEEK, isr80h_command_file_seek);
     isr80h_register_command(SYSTEM_COMMAND17_FILE_STAT, isr80h_command_file_stat);
     isr80h_register_command(SYSTEM_COMMAND18_FILE_CLOSE, isr80h_command_file_close);
+    isr80h_register_command(SYSTEM_COMMAND19_GET_TICKS, isr80h_command19_get_ticks);
 }

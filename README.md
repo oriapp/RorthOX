@@ -46,7 +46,7 @@ Everything in this list is checked by `make test` or was run in QEMU.
   it and the other tasks keep running, and the timer tick wakes it once its deadline has passed. It comes back with
   its registers and stack as they were and gets 0. When every task is asleep, the kernel halts the CPU (`hlt` with
   interrupts on) until a tick makes one due; keys and other interrupts that come in meanwhile go back to the halt.
-- **Syscalls:** 19 calls through `int 0x80` (table below). Every argument and every string or list a syscall reads
+- **Syscalls:** 20 calls through `int 0x80` (table below). Every argument and every string or list a syscall reads
   from user memory goes through a checked copy: only memory the program owns and has mapped, so a bad pointer can't
   crash the kernel. The call fails instead and the program carries on. A file read or write checks the whole buffer
   before it touches the disk.
@@ -192,11 +192,16 @@ numbers are in `config.mk`, the handlers in `kernel/isr80h/`, the wrappers in `p
 | 16 | `rorthox_seek(fd, offset, whence)` | moves the position (`RORTHOX_SEEK_SET`/`CUR`/`END`, signed offset) and returns it |
 | 17 | `rorthox_stat(fd, out)` | writes the file's size and flags (bit 0: read-only) into a `struct rorthox_file_stat` |
 | 18 | `rorthox_close(fd)` | closes a handle |
+| 19 | `rorthox_get_ticks()` | returns delivered timer ticks since boot as a `uint32_t`, with no arguments |
 
 `sleep` takes milliseconds, not seconds like POSIX `sleep`. The kernel turns them into timer ticks:
 `ceil(ms / 10) + 2` at 100 Hz. The two extra ticks cover a tick that may already be pending when the sleep starts
 and the partial tick that is running, so the whole ticks that follow add up to at least the time asked for, counted
 in ticks as they arrive. `sleep(1)` therefore waits 3 ticks and `sleep(1000)` 102.
+
+`rorthox_get_ticks()` counts delivered PIT ticks since boot, nominally 100 Hz, not wall-clock time. It wraps
+modulo 2^32; use unsigned subtraction (`uint32_t elapsed = now - start`) for bounded intervals. Every value is
+valid, including values with the high bit set: this call does not return errors.
 
 ### Files
 

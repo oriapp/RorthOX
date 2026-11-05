@@ -7,6 +7,7 @@ extern "C" {
 
 struct interrupt_frame;
 void *isr80h_command0_sum(struct interrupt_frame *frame);
+void *isr80h_command19_get_ticks(struct interrupt_frame *frame);
 
 #ifdef __cplusplus
 }

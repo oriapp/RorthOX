@@ -2,6 +2,7 @@
 #include "idt/idt.h"
 #include "task/task.h"
 #include "kernel.h"
+#include "include/kernel/time/pit.h"
 
 void *isr80h_command0_sum(struct interrupt_frame *frame)
 {
@@ -18,4 +19,9 @@ void *isr80h_command0_sum(struct interrupt_frame *frame)
     }
 
     return (void*)(v1 + v2);
+}
+
+void *isr80h_command19_get_ticks(struct interrupt_frame *frame)
+{
+    return (void*)pit_get_ticks();
 }

@@ -21,6 +21,7 @@ global rorthox_write:function
 global rorthox_seek:function
 global rorthox_stat:function
 global rorthox_close:function
+global rorthox_get_ticks:function
 
 ; void print(const char message);
 print:
@@ -160,6 +161,15 @@ rorthox_close:
     mov eax, SYSCALL_FILE_CLOSE
     int SYSCALL_VECTOR
     add esp, 4
+    pop ebp
+    ret
+
+; uint32_t rorthox_get_ticks(void);
+rorthox_get_ticks:
+    push ebp
+    mov ebp, esp
+    mov eax, SYSCALL_GET_TICKS
+    int SYSCALL_VECTOR
     pop ebp
     ret
 

@@ -2,6 +2,7 @@
 #define RORTHOX_RORTHOX_H
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include "rorthox-config.h"
 #include "../../../include/rorthox/file.h"
 
@@ -33,6 +34,9 @@ int rorthox_terminal_move_cursor(int delta);
 // than that. 0 returns 0 at once; a negative value returns a negative error without sleeping.
 // Keys typed meanwhile don't end the sleep; if this program has the keyboard they wait for it.
 int sleep(int milliseconds);
+// Delivered timer ticks since boot, nominally 100 Hz. Wraps modulo 2^32; use unsigned subtraction.
+// Every uint32_t value is valid, including values with the high bit set.
+uint32_t rorthox_get_ticks(void);
 
 void *rorthox_malloc(size_t size);
 void *rorthox_free(void *ptr);

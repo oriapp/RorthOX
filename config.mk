@@ -55,6 +55,7 @@ SYSCALL_FILE_WRITE = 15
 SYSCALL_FILE_SEEK = 16
 SYSCALL_FILE_STAT = 17
 SYSCALL_FILE_CLOSE = 18
+SYSCALL_GET_TICKS = 19
 
 # Dedicated navigation and editing keys (outside the byte-valued key range).
 KEY_UP = 0x100
