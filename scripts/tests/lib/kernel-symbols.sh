@@ -11,10 +11,11 @@
 # ELF, and the ELF's loaded bytes must be bin/kernel.bin byte for byte (this covers the statics).
 # Returns 1 if something is missing (a symbol or the struct task fields) or the check fails.
 #
-# The tests that use these addresses (sleep.sh, sleep-idle.sh, and libtest's sleep modes) read
-# jiffies, current_task and struct task from ring 3 through the user page tables, which map all
-# kernel memory read-only. Once user tasks can no longer read kernel memory, those reads page
-# fault and the tests fail (they can't pass by accident); they then need another clock source.
+# The tests that use these addresses (sleep.sh, sleep-idle.sh) read jiffies only from the host
+# (QEMU monitor). libtest's sleep modes time themselves with the tick syscall (19), but still read
+# current_task and struct task from ring 3 through the user page tables, which map all kernel
+# memory read-only. Once user tasks can no longer read kernel memory, those reads page fault and
+# the tests fail (they can't pass by accident).
 kernel_symbols() {
     local out="$1" elf="$1/kernel.elf" fix="$1/task-offsets" map=build/kernel.map linked=ok
     SYM_TICKS='' SYM_CURRENT_TASK='' SYM_PAUSE='' SYM_KERNEL_CHUNK=''

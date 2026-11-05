@@ -4,8 +4,8 @@
 # until a timer tick makes a task due, and IRQs that come in meanwhile return to that loop.
 #
 # A copy of bin/os.bin gets programs/libtest as shell.elf (and as libtest.elf), so the program the
-# kernel starts is the only task. With no arguments it reads the addresses of the kernel's tick
-# counter and current_task from the keyboard, sleeps 5000 ms alone, then starts
+# kernel starts is the only task. With no arguments it reads the address of the kernel's current_task
+# from the keyboard, times its sleeps with the tick syscall (19), sleeps 5000 ms alone, then starts
 # "libtest.elf idlechild", which sleeps 6000 ms, and sleeps 3000 ms itself (both asleep, different
 # deadlines), then sleeps forever. The program checks its own results (0, enough ticks, the key).
 # Meanwhile the VM is stopped a few times and the QEMU monitor shows, every time:
@@ -156,7 +156,7 @@ esp_of() {
 echo "sleep-idle: boot (libtest.elf as shell.elf)"
 qemu_start "$OUT/idle.bin" "$OUT"
 if wait_screen "libtest idle: armed" "$BOOT_TIMEOUT"; then
-    type_line "$SYM_TICKS $SYM_CURRENT_TASK"
+    type_line "$SYM_CURRENT_TASK"
     if wait_screen "lt-i: sleeping" "$STEP_TIMEOUT"; then
         keep
         me=$(sed -n 's/.*lt-i: task \([0-9a-f]\{8\}\).*/\1/p' "$OUT/screen.txt" | head -n 1)

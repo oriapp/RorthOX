@@ -9,8 +9,9 @@
 #    task to sleep until now + ticks (also across the 2^32 wrap) with its saved eax already 0.
 #    Refused and zero requests don't sleep, don't switch tasks and change nothing in the task.
 # 2. QEMU: copy bin/os.bin, add programs/libtest to the copy only, and run
-#    "libtest.elf sleep <jiffies> <current_task> <state offset>" from the shell (addresses from the
-#    kernel objects; ring 3 can read kernel memory, so the program times its sleeps in ticks):
+#    "libtest.elf sleep <current_task> <state offset>" from the shell (address and offset from the
+#    kernel objects; ring 3 can read kernel memory). The program times its sleeps in ticks with
+#    the tick syscall (19):
 #      - sleep(0) is 0, sleep(-1) and sleep(0x80000000) are -2;
 #      - two sleep(50) return 0 after at least 7 ticks each;
 #      - it starts "libtest.elf sleeppeer", which waits until the sleeper's task state is
@@ -88,7 +89,7 @@ echo "sleep: boot"
 : > "$OUT/screens.txt"
 qemu_start "$OUT/sleep.bin" "$OUT"
 if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT"; then
-    type_line "libtest.elf sleep $SYM_TICKS $SYM_CURRENT_TASK ${TASK_STATE_OFFSET:-0}"
+    type_line "libtest.elf sleep $SYM_CURRENT_TASK ${TASK_STATE_OFFSET:-0}"
     if wait_screen "libtest sleep: armed" "$STEP_TIMEOUT"; then
         qemu_cmd "sendkey a"
         wait_screen "lt-s: short sleeps" "$STEP_TIMEOUT" && keep
