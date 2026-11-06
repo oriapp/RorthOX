@@ -145,7 +145,7 @@ ifneq ($(shell printf '%s\n' $(foreach key,$(NUMERIC_CONFIG_KEYS),'$(strip $($(k
 $(error numeric config.mk values must be hexadecimal (0x...) or decimal without leading zeros)
 endif
 
-ELF_ADDRESS_KEYS := PROGRAM_LOAD_ADDRESS PROGRAM_LOAD_LIMIT KERNEL_TSS_STACK_TOP KERNEL_TSS_STACK_SIZE KERNEL_BOOT_STACK_TOP USER_STACK_TOP
+ELF_ADDRESS_KEYS := PROGRAM_LOAD_ADDRESS PROGRAM_LOAD_LIMIT KERNEL_TSS_STACK_TOP KERNEL_TSS_STACK_SIZE KERNEL_BOOT_STACK_TOP USER_STACK_TOP USER_STACK_SIZE
 ifneq ($(shell for n in $(foreach key,$(ELF_ADDRESS_KEYS),$(strip $($(key)))); do \
 	[ $${#n} -le 10 ] || exit 1; \
 	[ $$((n)) -le 4294967295 ] && [ $$((n % 4096)) -eq 0 ] || exit 1; \
@@ -160,6 +160,9 @@ ifneq ($(shell [ $$(( $(strip $(KERNEL_TSS_STACK_SIZE)) )) -gt 0 ] && \
 	[ $$(( $(strip $(PROGRAM_LOAD_ADDRESS)) )) -ge $$(( $(strip $(USER_STACK_TOP)) )) ] && \
 	[ $$(( $(strip $(PROGRAM_LOAD_ADDRESS)) )) -ge $$(( $(strip $(KERNEL_BOOT_STACK_TOP)) )) ] && echo valid),valid)
 $(error ELF window must be above user/boot stacks and below the nonempty kernel entry-stack reservation)
+endif
+ifneq ($(shell [ $$(( $(strip $(USER_STACK_TOP)) - $(strip $(USER_STACK_SIZE)) )) -ge $$(( $(strip $(KERNEL_BOOT_STACK_TOP)) )) ] && echo valid),valid)
+$(error user stack must not overlap the kernel boot stack)
 endif
 
 ifneq ($(shell [ $$(( $(COMMAND_ARGUMENT_SIZE) )) -ge 2 ] && echo valid),valid)

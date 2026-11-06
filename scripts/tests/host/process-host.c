@@ -194,6 +194,10 @@ static int known_directory(struct paging_4gb_chunk *directory)
 // The paging layer. One allocation per directory (the real one makes 1026).
 struct paging_4gb_chunk *paging_new_4gb(uint8_t flags)
 {
+    if (flags != (PAGING_IS_PRESENT | PAGING_IS_WRITEABLE))
+    {
+        problem("new directories must default to supervisor-writable identity mappings");
+    }
     struct paging_4gb_chunk *chunk = kzalloc(sizeof(struct paging_4gb_chunk));
     if (!chunk)
     {
@@ -263,9 +267,9 @@ int paging_map_to(struct paging_4gb_chunk *directory, void *virt, void *phys, vo
         problem("paging_map_to() on a page directory that is not live");
         return -EINVARG;
     }
-    if (flags == 0)
+    if (flags == (PAGING_IS_PRESENT | PAGING_IS_WRITEABLE) && virt == phys)
     {
-        // Unmapping (process_free): forget the mapping, never fails.
+        // Supervisor identity restoration revokes ownership (free or failed map), never fails.
         for (int i = 0; i < mapping_count; i++)
         {
             if (mappings[i].directory == directory && mappings[i].virt == virt)
@@ -344,7 +348,7 @@ int host_translate_calls;
 int paging_user_translate(uint32_t *directory, uint32_t address, int write, void **out)
 {
     host_translate_calls++;
-    int flags = PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL;
+    int flags = PAGING_IS_PRESENT | PAGING_IS_WRITEABLE;
     void *physical = (void *)(unsigned long)address;
     for (int i = mapping_count - 1; i >= 0; i--)
     {

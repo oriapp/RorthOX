@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# KEY_* and SYSCALL_* values in config.mk. Build checks only, no QEMU.
+# KEY_*, SYSCALL_* and user-stack boundaries in config.mk. Build checks only, no QEMU.
 #
 # A copy of Makefile and config.mk in build/tests gets the values below.
 #   accepted  make (with /bin/sh and with SHELL=/bin/bash) parses them, and the rorthox-config.h it
@@ -92,7 +92,7 @@ reject() {
 }
 
 ACCEPTED="defaults key-low key-high key-padded-hex syscalls-reordered sleep-default sleep-reordered ticks-default \
-ticks-reordered"
+ticks-reordered stack-at-boot"
 echo "config-values: accepted values"
 accept defaults           "#define RORTHOX_KEY_PAGE_DOWN 0x109"
 accept key-low            "#define RORTHOX_KEY_UP 0x100"            KEY_UP=0x100
@@ -103,11 +103,13 @@ accept sleep-default      "#define SYSCALL_SLEEP 12"
 accept sleep-reordered    "#define SYSCALL_SLEEP 0"                 SYSCALL_SLEEP=0 SYSCALL_SUM=12
 accept ticks-default      "#define SYSCALL_GET_TICKS 19"
 accept ticks-reordered    "#define SYSCALL_GET_TICKS 0"             SYSCALL_GET_TICKS=0 SYSCALL_SUM=19
+accept stack-at-boot      "#define USER_PROGRAM_STACK_SIZE 0x1FF000" USER_STACK_SIZE=0x1FF000
 
 REJECTED="key-zero key-0xff key-255 key-0x10000 key-65536 key-wrap-hex key-wrap-dec key-dup key-dup-spelling \
 key-word key-zero-padded syscall-dup syscall-dup-spelling sleep-dup sleep-dup-spelling sleep-zero-padded sleep-word \
 sleep-wrap-hex sleep-wrap-dec file-open-dup file-read-dup file-write-dup file-seek-dup file-stat-dup file-close-dup \
-file-read-zero-padded ticks-dup ticks-dup-spelling ticks-zero-padded ticks-wrap-hex ticks-wrap-dec"
+file-read-zero-padded ticks-dup ticks-dup-spelling ticks-zero-padded ticks-wrap-hex ticks-wrap-dec \
+stack-over-boot stack-wrap stack-part-page"
 echo "config-values: rejected values"
 reject key-zero             "$KEY_ERROR"     KEY_UP=0
 reject key-0xff             "$KEY_ERROR"     KEY_LEFT=0xFF
@@ -144,6 +146,9 @@ reject ticks-zero-padded    "$NUMERIC_ERROR" SYSCALL_GET_TICKS=019
 # 2^64 + 0x30: bash arithmetic wraps it to 48, a free number (dash saturates it).
 reject ticks-wrap-hex       "$SYSCALL_ERROR" SYSCALL_GET_TICKS=0x10000000000000030
 reject ticks-wrap-dec       "$SYSCALL_ERROR" SYSCALL_GET_TICKS=18446744073709551664
+reject stack-over-boot      '*** user stack must not overlap the kernel boot stack' USER_STACK_SIZE=0x200000
+reject stack-wrap           '*** ELF window and stack boundaries must be page-aligned 32-bit values' USER_STACK_SIZE=0x10000000000004000
+reject stack-part-page      '*** ELF window and stack boundaries must be page-aligned 32-bit values' USER_STACK_SIZE=0x4001
 
 echo "config-values: syscall 12 (sleep) in the NASM include, on the command line and past the command table"
 # The stdlib's sleep wrapper takes its number from the NASM include.

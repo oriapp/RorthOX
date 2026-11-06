@@ -102,7 +102,7 @@ void kernel_main()
     tss_load(RORTHOX_TSS_SELECTOR); // GDT real offset
 
     // Setup paging
-    kernel_chunk = paging_new_4gb(PAGING_IS_WRITEABLE | PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL);
+    kernel_chunk = paging_new_4gb(PAGING_IS_WRITEABLE | PAGING_IS_PRESENT);
     if (!kernel_chunk)
     {
         panic("Failed to set up kernel paging");

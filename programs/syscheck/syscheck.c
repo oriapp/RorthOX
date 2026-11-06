@@ -195,7 +195,7 @@ static int pointer_test(void)
     if (!freed || !end || !two) return 1;
     strcpy(freed, "syscheck: stale\n");
     free(freed);
-    /* ESP in the freed page (not present any more): every syscall must refuse its arguments.
+    /* ESP in the freed page (supervisor-only now): every syscall must refuse its arguments.
        malloc and load return 0 on any error. */
     unsigned int sp = (unsigned int)freed + 64;
     int sum = bad_stack(SYSCALL_SUM, sp), put = bad_stack(SYSCALL_PUTCHAR, sp);

@@ -392,7 +392,7 @@ static int good_case(const char *what)
     {
         return 1;
     }
-    // Ending the process frees the program data first, then the page directory (as exit does).
+    // Exit must destroy the page directory before freeing the program backing.
     host_paging_problems = 0;
     process_terminate(out);
     struct host_snapshot after;
@@ -401,10 +401,10 @@ static int good_case(const char *what)
         say("%s: after exit: %s\n", what, message);
         return 1;
     }
-    if (after.live != before.live || kalloc_bad_frees() || kalloc_poison_errors() || process_get(1))
+    if (after.live != before.live || kalloc_bad_frees() || kalloc_poison_errors() || process_get(1) || host_paging_problems)
     {
-        say("%s: after exit %d allocations left over (bad frees %d, writes after kfree %d)\n", what,
-            after.live - before.live, kalloc_bad_frees(), kalloc_poison_errors());
+        say("%s: after exit %d allocations left over (bad frees %d, writes after kfree %d, paging problems %d)\n", what,
+            after.live - before.live, kalloc_bad_frees(), kalloc_poison_errors(), host_paging_problems);
         return 1;
     }
     return 0;

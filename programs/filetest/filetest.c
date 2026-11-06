@@ -247,7 +247,7 @@ static void deep_path(char *out, int extra)
 }
 
 // The word after a 4096-byte allocation, made unowned by freeing the allocation behind it. The
-// freed page keeps the given value in every word, which is what an unchecked read would see.
+// supervisor-only freed page keeps the given value, which an unchecked kernel read would see.
 static unsigned int edge(char **keep, unsigned int fill)
 {
     char *a = malloc(4096);
@@ -364,10 +364,18 @@ static int errors_mode(void)
     CHECK(rorthox_write(wfd, freed, 10) == -EINVARG && rorthox_write(wfd, (void *)0x100000, 1) == -EINVARG &&
           rorthox_write(wfd, 0, 1) == -EINVARG, "write from bad memory", 0);
     CHECK(rorthox_write(wfd, p, 0x80000000U) == -EINVARG, "count above INT32_MAX", 0);
-    // The stack's last page is owned, the readable page after it isn't: the first 4096 bytes alone
-    // would copy.
+    // The stack's last page is owned; the page after it is supervisor-only.
     CHECK(rorthox_write(wfd, (void *)(RORTHOX_PROGRAM_VIRTUAL_STACK_ADDRESS_START - 4096), 4097) == -EINVARG,
           "write past the end of the stack", 0);
+    // Both pages are user-mapped, but the tail is outside exact allocation ownership.
+    char *tail = malloc(4097);
+    CHECK(tail != 0, "malloc", 0);
+    memset(tail, 'Z', 4097);
+    CHECK(rorthox_read(fd, tail, 4098) == -EINVARG, "read into mapped but unowned padding", 0);
+    CHECK(tail[0] == 'Z' && tail[4096] == 'Z', "a refused padding read wrote", 0);
+    CHECK(rorthox_seek(fd, 0, RORTHOX_SEEK_CUR) == 0, "a refused padding read moved", 0);
+    CHECK(rorthox_write(wfd, tail, 4098) == -EINVARG, "write from mapped but unowned padding", 0);
+    free(tail);
     CHECK(rorthox_stat(wfd, &st) == 0 && st.filesize == 0, "a failed write wrote", st.filesize);
     CHECK(rorthox_write(wfd, "const", 5) == 5, "write from read-only memory", 0);
     CHECK(rorthox_close(fd) == 0 && rorthox_close(wfd) == 0, "close", 0);

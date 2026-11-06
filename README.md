@@ -42,7 +42,10 @@ Everything in this list is checked by `make test` or was run in QEMU.
 - **Programs:** ELF32 executables (each load segment gets its own zeroed memory, mapped writable only when the segment
   is) and flat binaries up to 1 MiB, loaded at 0x400000 and run in ring 3 with their own 16 KiB stack. Program page
   padding is zeroed before the program runs. Checked syscall copies still accept only the requested allocation bytes,
-  raw file bytes, ELF segment bytes and the stack, not page padding. This does not provide process isolation yet.
+  raw file bytes, ELF segment bytes and the stack, not page padding.
+- **Process memory isolation:** ring 3 can access only its own program pages, stack pages and live allocation pages.
+  Kernel memory and other processes' backing pages are supervisor-only. Permissions work in 4 KiB pages, so a program
+  can access its own zeroed page padding directly, though syscalls reject that padding. CR0.WP is still pending.
 - **Tasks:** 12 process slots, a round-robin task switch on every timer tick, command-line arguments passed to
   `main(argc, argv)`.
 - **Sleeping:** a program can call `sleep(milliseconds)` (syscall 12). Only that program blocks: the scheduler skips
@@ -111,8 +114,11 @@ has to be attached as the primary ATA disk. The Multiboot information GRUB passe
 
 ### Memory map
 
-All addresses are physical. The kernel and every process see an identity map of the full 4 GiB, with each process's
-own program, stack and allocations mapped on top.
+Addresses below are physical unless marked virtual. The kernel directory has a supervisor-writable identity map of
+all 4 GiB. Each process owns a separate directory and page tables with the same supervisor defaults, overlaid with
+user mappings only for its program, stack and live allocations. User access requires permission in both the directory
+entry and the individual page entry. Freeing an allocation restores supervisor-writable identity pages before reuse;
+it does not leave holes in the kernel mappings needed during entry and return.
 
 | Address | What |
 |---|---|
@@ -453,14 +459,17 @@ iso.sh             make iso with the cross compiler on the PATH
 
 ## Known limitations
 
-RorthOX is not a secure system. It has some targeted checks, but no real isolation between programs or between a
-program and the kernel.
+RorthOX is not a secure system. Process page permissions and checked syscalls limit memory access, but they do not
+isolate every resource or protect against every kernel bug.
 
-- **No process isolation.** Every task's page tables start with a read-only, user-readable identity map of all
-  4 GiB, so a program can read kernel memory and other programs' memory. CR0.WP is off, and turning it on needs a
-  change to how the interrupt stack is mapped. (The IDT gates and the TSS descriptor are DPL 0, except the syscall
-  and the `int3`/`into` debugging traps, so a program can't raise an IRQ or another exception vector with `int`:
-  it gets a #GP instead.)
+- **Kernel memory protection is incomplete.** CR0.WP is still off; enabling supervisor write protection is the next
+  step (5F). Kernel identity aliases remain writable, even for physical backing of read-only ELF pages. There is no
+  SMEP to stop kernel execution from user pages, and no NX. Page 0 is present for ring 0, so a kernel NULL dereference
+  is not caught by paging. `malloc` returns physical heap addresses; the layout is not hidden.
+  Kernel memory and other processes' memory stay mapped (supervisor-only) in every process, so nothing guards
+  against speculative-execution reads like Meltdown.
+  The IDT gates and the TSS descriptor are DPL 0, except the syscall and the `int3`/`into` debugging traps, so a program
+  can't raise an IRQ or another exception vector with `int`: it gets a #GP instead.
 - **Command length.** A command with more than 32 words (program name included) is refused. The shell doesn't print
   errors, so it just shows a new prompt.
 - **Resources.** There's no per-process memory limit: one program can take most of the kernel heap. Raw programs
@@ -502,6 +511,7 @@ program and the kernel.
 - **Fixed memory layout.** The kernel heap is at 16 MiB and the machine needs 128 MiB of RAM; there's no BIOS
   memory map, and the one GRUB passes is ignored. The boot sector loads the kernel to 1 MiB before `_start` enables
   A20, so it relies on the firmware having A20 on (QEMU's does).
+- **Shared clock.** Every process can read the same delivered tick counter; timing is not isolated between processes.
 - **Sleep timing.** A sleep is counted in 10 ms timer ticks as they arrive, not in calibrated time: it is at least
   `ceil(ms / 10) + 2` ticks, so even `sleep(1)` waits 3 ticks. Under QEMU's TCG a late tick can make a sleep
   up to one tick shorter than QEMU's virtual clock says, and the tick catch-up of KVM's in-kernel PIT isn't taken
@@ -522,7 +532,7 @@ program and the kernel.
 
 Parts that are started but not finished:
 
-- **Isolation:** stop mapping all of memory into every process, and turn on CR0.WP.
+- **Supervisor write protection:** turn on CR0.WP (5F); user-page isolation is in place.
 - **Real hardware:** never tried.
 
 ## Licence

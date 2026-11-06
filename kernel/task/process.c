@@ -69,6 +69,7 @@ static void *process_zalloc_user(size_t size)
     return kzalloc(size);
 }
 
+// User mappings are changed with IF=0, under kernel CR3, while the task directory is inactive.
 void *process_malloc(struct process *process, size_t size)
 {
     void *ptr = process_zalloc_user(size);
@@ -86,6 +87,12 @@ void *process_malloc(struct process *process, size_t size)
     int res = paging_map_to(process->task->page_directory, ptr, ptr, paging_align_address(ptr+size), PAGING_IS_WRITEABLE | PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL);
     if (res < 0)
     {
+        // A partial map must not leave user access to blocks returned to the heap.
+        res = paging_map_to(process->task->page_directory, ptr, ptr, paging_align_address(ptr+size), PAGING_IS_PRESENT | PAGING_IS_WRITEABLE);
+        if (res < 0)
+        {
+            PANIC("process_malloc: Cannot restore supervisor mapping", __FILE__, __LINE__);
+        }
         goto out_err;
     }
 
@@ -105,6 +112,8 @@ _Static_assert(RORTHOX_HEAP_ADDRESS >= RORTHOX_PROGRAM_VIRTUAL_ADDRESS_LIMIT,
     "heap allocations must not overlap the program window or user stack");
 _Static_assert(RORTHOX_HEAP_BLOCK_SIZE == PAGING_PAGE_SIZE,
     "heap blocks must match pages to keep allocation ownership separate");
+_Static_assert(USER_PROGRAM_STACK_SIZE % PAGING_PAGE_SIZE == 0,
+    "user stack backing must contain whole pages");
 
 static int process_region_span(uint32_t address, uint32_t start, uint32_t size, uint32_t *available)
 {
@@ -208,7 +217,7 @@ void process_free(struct process *process, void *ptr)
         return;
     }
 
-    //Unlink the pages from the process for the given address
+    // Revoke user access before removing ownership or reusing the backing blocks.
     struct process_allocation *allocation = process_get_allocation_by_addr(process, ptr);
     if (!allocation)
     {
@@ -216,7 +225,7 @@ void process_free(struct process *process, void *ptr)
         return;
     }
 
-    int res = paging_map_to(process->task->page_directory, allocation->ptr, allocation->ptr, paging_align_address(allocation->ptr + allocation->size), 0x00);
+    int res = paging_map_to(process->task->page_directory, allocation->ptr, allocation->ptr, paging_align_address(allocation->ptr + allocation->size), PAGING_IS_PRESENT | PAGING_IS_WRITEABLE);
     if (res < 0)
     {
         return;
@@ -374,6 +383,9 @@ int process_terminate(struct process *process)
         goto out;
     }
 
+    // Kernel CR3 is active: destroy user mappings before releasing their backing.
+    task_free(process->task);
+
     res = process_free_program_data(process);
     if (res < 0)
     {
@@ -383,9 +395,6 @@ int process_terminate(struct process *process)
 
     // Free the process stack memory.
     kfree(process->stack);
-
-    // Free the task
-    task_free(process->task);
 
     // Unlink the process from the processes array
     process_unlink(process);
@@ -669,6 +678,7 @@ int process_load_switch(const char *filename, struct process **process)
 }
 
 // Discard an unpublished process with no outstanding argument allocations.
+// Its directory was never active; destroy even partial user maps before freeing backing.
 static void process_discard(struct process *process)
 {
     if (!process)

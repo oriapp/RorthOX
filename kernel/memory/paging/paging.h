@@ -18,6 +18,8 @@ extern "C" {
 #define PAGING_TOTAL_ENTRIES_PER_TABLE 1024
 #define PAGING_PAGE_SIZE 4096
 
+// Each chunk owns its directory and all 1024 page tables; none are shared.
+// Free only after leaving its CR3. The kernel chunk lives for the whole boot.
 struct paging_4gb_chunk
 {
     uint32_t *directory_entry;
@@ -27,6 +29,9 @@ struct paging_4gb_chunk *paging_new_4gb(uint8_t flags);
 void paging_switch(struct paging_4gb_chunk *directory);
 void enable_paging();
 
+// Mutate inactive task directories only, with IF=0 and kernel CR3 loaded.
+// Reloading task CR3 invalidates translations before return; no global pages,
+// CR4.PGE stays 0. paging_set refuses the currently loaded directory.
 int paging_set(uint32_t *directory, void *virt, uint32_t val);
 bool paging_is_aligned(void *addr);
 

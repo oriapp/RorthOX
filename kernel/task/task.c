@@ -131,6 +131,7 @@ static void task_list_remove(struct task *task)
     task->next = 0;
 }
 
+// The caller must have left this task's CR3 before destroying its owned tables.
 void task_discard(struct task *task)
 {
     if (!task)
@@ -498,8 +499,9 @@ void task_run_first_ever_task()
 int task_init(struct task *task, struct process *process)
 {
     memset(task, 0, sizeof(struct task));
-    // Map the entire 4GB address space to its self
-    task->page_directory = paging_new_4gb(PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL); // Is it vulnerable? should it be access from all?
+    // Keep kernel storage supervisor-writable, including entry and return stacks.
+    // Only owned user pages are overlaid, under kernel CR3 before task CR3 reload.
+    task->page_directory = paging_new_4gb(PAGING_IS_PRESENT | PAGING_IS_WRITEABLE);
     if (!task->page_directory)
     {
         return -EIO;
@@ -539,6 +541,7 @@ int task_get_stack_item(struct task *task, int index, uint32_t *value)
     return task_copy_from_user(task, value, task->registers.esp + offset, sizeof(*value));
 }
 
+// Unchecked translation: use checked copies for user pointers, not this helper.
 void *task_virtual_address_to_physical(struct task *task, void *virtual_address)
 {
     return paging_get_physical_address(task->page_directory->directory_entry, virtual_address);

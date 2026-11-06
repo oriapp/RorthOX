@@ -13,7 +13,7 @@ struct paging_4gb_chunk *paging_new_4gb(uint8_t flags)
     }
 
     int total_tables = 0;
-    int offset = 0;
+    uint32_t offset = 0;
     for (int i = 0; i < PAGING_TOTAL_ENTRIES_PER_TABLE; i++)
     {
         uint32_t *entry = kzalloc(sizeof(uint32_t) * PAGING_TOTAL_ENTRIES_PER_TABLE);
@@ -24,7 +24,7 @@ struct paging_4gb_chunk *paging_new_4gb(uint8_t flags)
 
         for (int b = 0; b < PAGING_TOTAL_ENTRIES_PER_TABLE; b++)
         {
-            entry[b] = (offset + (b * PAGING_PAGE_SIZE)) | flags;
+            entry[b] = (offset + ((uint32_t)b * PAGING_PAGE_SIZE)) | flags;
         }
         offset += (PAGING_TOTAL_ENTRIES_PER_TABLE * PAGING_PAGE_SIZE);
         directory[i] = (uint32_t)entry | flags | PAGING_IS_WRITEABLE;
@@ -176,7 +176,7 @@ out:
 
 int paging_set(uint32_t *directory, void *virt, uint32_t val)
 {
-    if (!paging_is_aligned(virt))
+    if (directory == current_directory || !paging_is_aligned(virt))
     {
         return -EINVARG;
     }
@@ -190,12 +190,23 @@ int paging_set(uint32_t *directory, void *virt, uint32_t val)
     }
 
     uint32_t entry = directory[directory_index];
+    uint32_t user = PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL;
+    if ((val & user) == user)
+    {
+        if (!(entry & PAGING_IS_PRESENT) || (entry & PAGING_PAGE_SIZE_FLAG))
+        {
+            return -EINVARG;
+        }
+        // Effective user access still requires U in the individual leaf.
+        directory[directory_index] |= PAGING_ACCESS_FROM_ALL;
+    }
     uint32_t *table = (uint32_t *)(entry & 0xFFFFF000);
     table[table_index] = val;
 
     return 0;
 }
 
+// Unchecked translation: not a user-pointer validation or copy path.
 void *paging_get_physical_address(uint32_t *directory, void *virt)
 {
     void *virt_addr_new = (void*) paging_align_to_lower_page(virt);
