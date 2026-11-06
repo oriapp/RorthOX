@@ -136,7 +136,13 @@ start=$SECONDS
 play never  never-new         wait_screen_lines 2 "line:never" "line:Blank loaded"
 elapsed=$((SECONDS - start))
 if ((elapsed >= 1 && elapsed <= 4)); then echo "about 2 s" > "$OUT/never-time.txt"; else echo "$elapsed s" > "$OUT/never-time.txt"; fi
-play never  unknown           wait_screen_lines 5 "word:never"
+start=$SECONDS
+play scroll unknown           wait_screen_lines 5 "word:never"
+play scroll empty-line        wait_screen_lines 5 "line:"
+play scroll empty-prompt      wait_screen_lines 5 "line:second: done" "prompt:"
+elapsed=$((SECONDS - start))
+# Five frames each, half a second apart: polling on would take 2 s or more.
+if ((elapsed <= 1)); then echo "at once" > "$OUT/unknown-time.txt"; else echo "$elapsed s" > "$OUT/unknown-time.txt"; fi
 for f in "$OUT"/*.log; do sed "s|^|  $(basename "$f" .log): |" "$f"; done
 
 check "scroll: old count accepts the half-done scroll"    "$OUT/scroll-old-count.txt"  "status=0 screen=2" line
@@ -156,8 +162,12 @@ check "prompt: line: does not accept \"> \" in front"      "$OUT/prompt-line.txt
 check "never: gives up with status 1"                     "$OUT/never-new.txt"         "status=1 screen=1" line
 check "never: says what it waited for"                    "$OUT/never-new.log" "  gave up after 2 s waiting for: line:never line:Blank loaded" line
 check "never: waited about 2 s"                           "$OUT/never-time.txt"        "about 2 s" line
-check "unknown condition: fails at once"                  "$OUT/unknown.txt"           "status=1 screen=1" line
+check "unknown condition: fails on the first screen"        "$OUT/unknown.txt"           "status=1 screen=1" line
 check "unknown condition: names it"                       "$OUT/unknown.log" "  unknown screen condition \"word:never\"" line
+check "empty line: text: fails on the first screen"       "$OUT/empty-line.txt"        "status=1 screen=1" line
+check "empty prompt: text: fails, even with a good row"  "$OUT/empty-prompt.txt"      "status=1 screen=1" line
+check "empty text: names it"                              "$OUT/empty-line.log" "  empty screen condition \"line:\"" line
+check "unknown and empty conditions fail at once"         "$OUT/unknown-time.txt"      "at once" line
 
 # Cleanup hook. The child script sources qemu-lib.sh with a stand-in QEMU that records its pid.
 echo "screen-waits: cleanup hook"
@@ -184,10 +194,11 @@ started() {
 [ "$mode" = default ] || Q_CLEANUP=hook
 case "$mode" in
     term-now|term-running) trap 'exit 1' TERM INT ;;
+    term-launch) trap 'exit 1' TERM INT; QEMU_TIMEOUT=2; export TMPDIR="$d/tmp" ;;
 esac
 qemu_start "$d/disk.img" "$d/out"
 case "$mode" in
-    term-now)     kill -TERM $$ ;;
+    term-now|term-launch) kill -TERM $$ ;;
     term-running) started; kill -TERM $$ ;;
     error)        started; false ;;
     *)            started; echo "$Q_TMP" > "$d/monitor-dir"; exit 3 ;;
@@ -195,16 +206,37 @@ esac
 sleep 30
 exit 8
 EOF
-for mode in normal default error term-running term-now; do
+# term-launch: TERM between starting QEMU in the background and Q_PID=$!, through a copy of
+# qemu-lib.sh with a kill there. Neither the exit trap nor Q_PID is set yet: QEMU must still start
+# and end at QEMU_TIMEOUT (2 s), and no shell may stay blocked opening the monitor pipe.
+for mode in normal default error term-running term-now term-launch; do
     d="$OUT/hook-$mode"
     mkdir -p "$d"
     : > "$d/disk.img"
     printf '#!/usr/bin/env bash\necho $$ >> "%s/pids"\nexec sleep 7391\n' "$PWD/$d" > "$d/qemu"
     chmod +x "$d/qemu"
-    if timeout 30 bash "$OUT/child.sh" "$mode" "$PWD/$d" "$PWD" > "$d/child.log" 2>&1; then
+    repo="$PWD"
+    if [ "$mode" = term-launch ]; then
+        repo="$PWD/$d/repo"
+        mkdir -p "$repo/scripts" "$d/tmp"
+        ln -sfn "$PWD/build" "$repo/build"
+        sed 's/^    Q_PID=\$!$/    kill -TERM $$; Q_PID=$!/' scripts/qemu-lib.sh > "$repo/scripts/qemu-lib.sh"
+        grep -qF 'kill -TERM $$; Q_PID=' "$repo/scripts/qemu-lib.sh" || echo "no kill put in" > "$d/inject.txt"
+    fi
+    if timeout 30 bash "$OUT/child.sh" "$mode" "$PWD/$d" "$repo" > "$d/child.log" 2>&1; then
         status=0
     else
         status=$?
+    fi
+    if [ "$mode" = term-launch ]; then
+        for ((i = 0; i < 80; i++)); do
+            alive=0
+            for p in $(cat "$d/pids" 2> /dev/null); do kill -0 "$p" 2> /dev/null && alive=1; done
+            [ -s "$d/pids" ] && [ "$alive" = 0 ] && break
+            sleep 0.1
+        done
+        echo "blocked=$(pgrep -f "child.sh term-launch" | wc -l)" > "$d/blocked.txt"
+        pkill -f "child.sh term-launch" || :
     fi
     left=0
     for p in $(cat "$d/pids" 2> /dev/null); do
@@ -214,10 +246,14 @@ for mode in normal default error term-running term-now; do
     if [ -s "$d/monitor-dir" ] && [ -e "$(cat "$d/monitor-dir")" ]; then echo "monitor dir left" >> "$d/result.txt"; fi
     sed "s|^|  $mode: |" "$d/result.txt" "$d/child.log" "$d/hook.txt" 2> /dev/null || true
 done
-for mode in normal default error term-running term-now; do
+for mode in normal default error term-running term-now term-launch; do
     r="$OUT/hook-$mode/result.txt"
     check "$mode: no stand-in QEMU left" "$r" "left=0" line
 done
+check "term-launch: the kill is in the lib copy"     "$OUT/hook-term-launch/inject.txt"  "no kill" absent
+check "term-launch: exits through the TERM trap"     "$OUT/hook-term-launch/result.txt"  "exit=1" line
+check "term-launch: QEMU still started"              "$OUT/hook-term-launch/result.txt"  "started=1" line
+check "term-launch: no shell blocked on the pipe"    "$OUT/hook-term-launch/blocked.txt" "blocked=0" line
 for mode in normal error term-running term-now; do
     h="$OUT/hook-$mode/hook.txt"
     check "$mode: hook ran after QEMU was stopped" "$h" "hook: qemu alive=no" line

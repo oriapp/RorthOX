@@ -55,13 +55,17 @@ qemu_start() {
     # QEMU reads monitor commands from a named pipe, so this script can send them one at a time.
     Q_TMP="$(mktemp -d)"
     mkfifo "$Q_TMP/monitor"
+    # Open the pipe both ways first: QEMU's "<" then opens at once instead of waiting for a writer,
+    # so a TERM before Q_PID is set can't leave that shell blocked forever (QEMU then ends at
+    # QEMU_TIMEOUT). QEMU doesn't get this descriptor.
+    exec 3<> "$Q_TMP/monitor"
     timeout "$QEMU_TIMEOUT" "$QEMU" -m "$QEMU_RAM_MIB" -display none -no-reboot \
         -drive "file=$Q_IMAGE,format=raw,index=0,media=disk" \
         -debugcon "file:$Q_OUT/debugcon.log" -serial none -monitor stdio \
-        ${QEMU_FLAGS:-} < "$Q_TMP/monitor" > "$Q_OUT/monitor.log" 2>&1 &
+        ${QEMU_FLAGS:-} < "$Q_TMP/monitor" > "$Q_OUT/monitor.log" 2>&1 3<&- &
     Q_PID=$!
     trap 'qemu_exit' EXIT
-    exec 3> "$Q_TMP/monitor"
+    exec 3> "$Q_TMP/monitor"   # write-only now, so a command fails once QEMU is gone
     trap '' PIPE   # if QEMU is gone, writing a command fails instead of killing the script
 }
 
@@ -125,10 +129,19 @@ wait_screen() {
 }
 
 # screen_lines_match <file> <condition>...: 0 if <file> meets every condition (see wait_screen_lines),
-# 1 if not, 2 for an unknown condition.
+# 1 if not, 2 for an unknown condition or an empty text (which would match any blank row).
 screen_lines_match() {
     local file="$1" cond arg
     shift
+    # Check every condition before looking at the screen: a bad one must fail at once, not after
+    # the good ones before it have matched.
+    for cond in "$@"; do
+        case "$cond" in
+            line:?* | prompt:?* | regex:?*) ;;
+            line: | prompt: | regex:) echo "  empty screen condition \"$cond\"" >&2; return 2 ;;
+            *) echo "  unknown screen condition \"$cond\"" >&2; return 2 ;;
+        esac
+    done
     [ -f "$file" ] || return 1
     for cond in "$@"; do
         arg="${cond#*:}"
@@ -136,7 +149,6 @@ screen_lines_match() {
             line:*)   grep -qxF -- "$arg" "$file" || return 1 ;;
             prompt:*) grep -qxF -e "$arg" -e "> $arg" "$file" || return 1 ;;
             regex:*)  grep -qxE -- "$arg" "$file" || return 1 ;;
-            *) echo "  unknown screen condition \"$cond\"" >&2; return 2 ;;
         esac
     done
     return 0
