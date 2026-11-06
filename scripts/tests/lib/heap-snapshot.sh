@@ -7,6 +7,8 @@
 #                                     while the program waits for its first key: start the debugger,
 #                                     wait until the VM runs on (keys sent while it is stopped are lost)
 #   heap_snapshot_wait <dir>          wait for the debugger to end (the program called heap_snapshot_end)
+#   heap_snapshot_detached <seconds>  wait at most <seconds> for the debugger to end, without collecting
+#                                     its status; another debugger (guest-state.sh) may attach after it
 #   heap_snapshot_checks <label> <dir>
 # Every wait is bounded; without a debugger the program fails its own acknowledgement checks.
 . ./scripts/tests/lib/kernel-symbols.sh
@@ -40,7 +42,9 @@ heap_snapshot_running() {
         lines=$(wc -l < "$Q_OUT/monitor.log")
         qemu_cmd "info status"
         screen_snapshot
-        tail -n +"$((lines + 1))" "$Q_OUT/monitor.log" | grep -q "VM status: running" && return 0
+        # grep reads the whole tail: with -q it could stop early, tail would then die of SIGPIPE
+        # and pipefail would turn a match into a failure.
+        tail -n +"$((lines + 1))" "$Q_OUT/monitor.log" | grep "VM status: running" > /dev/null && return 0
         sleep 0.2
     done
     echo "  the VM did not run on after the debugger attached"
@@ -69,6 +73,15 @@ heap_snapshot_wait() {
     HEAP_DEBUGGER=
     echo "exit=$status" > "$dir/heap-status.txt"
     sed 's/^/  /' "$dir/heap-debugger.log"
+}
+
+heap_snapshot_detached() {
+    local deadline=$((SECONDS + $1))
+    [ -n "${HEAP_DEBUGGER:-}" ] || return 0
+    while kill -0 "$HEAP_DEBUGGER" 2> /dev/null; do
+        ((SECONDS < deadline)) || { echo "  the heap debugger did not end within $1 s"; return 1; }
+        sleep 0.1
+    done
 }
 
 heap_snapshot_checks() {

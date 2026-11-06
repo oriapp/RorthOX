@@ -14,10 +14,15 @@
 # only answers in oomtest's own task (ring 3, its own page directory), and it checks that the heap
 # table is still the last copy when oomtest makes the syscall. Every copy must be acknowledged, so a
 # case can't pass without the debugger.
+# Between the steps scripts/tests/lib/guest-state.sh stops the guest at key requests (never while the
+# heap debugger is attached): the heap gets nearly full only once the shell is back at its own key
+# request (done printing, nothing more to allocate) and oomtest has the keyboard; an "arg..." case
+# must still be oomtest's after the failed syscall with no new task; after oomtest and after blank.elf
+# the shell is alone, the same task, and has the keyboard.
 # The script stops after the first failing case. bin/os.bin itself must not change.
 #
 # Needs python3. Env: BOOT_TIMEOUT=60 (seconds to wait for the shell)   RUN_TIMEOUT=60 (for each oomtest run)
-#      EXIT_TIMEOUT=15 (for each process to end, and for blank.elf to start)
+#      EXIT_TIMEOUT=15 (for each process to end, for blank.elf to start, and for each rendezvous)
 #      OOM_CASES="table second ..." (run only these cases, in this order)
 #      OOM_SUITE=heap-oom (name used for the output directory and the messages; open-oom.sh
 #      runs the open cases through this script)
@@ -30,6 +35,7 @@ EXIT_TIMEOUT="${EXIT_TIMEOUT:-15}"
 QEMU_TIMEOUT="${QEMU_TIMEOUT:-180}"
 . ./scripts/qemu-lib.sh
 . ./scripts/tests/lib/heap-snapshot.sh
+. ./scripts/tests/lib/guest-state.sh
 
 SUITE="${OOM_SUITE:-heap-oom}"
 OUT="build/tests/$SUITE"
@@ -67,69 +73,75 @@ done
     { echo "$SUITE: $BLANK_ELF puts $blank_h blocks in the parsed path's hole; oomtest.c counts need H <= 2" >&2; exit 1; }
 [ "$QEMU_RAM_MIB" -ge 128 ] || { echo "$SUITE: needs QEMU_RAM_MIB >= 128 (is $QEMU_RAM_MIB)" >&2; exit 1; }
 
-# wait_lines <regex> <count> <seconds>: wait until <count> screen lines match <regex>.
-wait_lines() {
-    local regex="$1" count="$2" deadline=$((SECONDS + $3)) n
-    while ((SECONDS < deadline)); do
-        qemu_running || { echo "  QEMU is not running, stopped waiting for /$regex/ x$count"; return 1; }
-        screen_snapshot
-        n=$(grep -cE -- "$regex" "$Q_OUT/screen.txt" 2> /dev/null || true)
-        if [ "${n:-0}" -ge "$count" ]; then
-            echo "  /$regex/ x$count on screen after ${SECONDS} s"
-            return 0
-        fi
-        sleep 0.5
-    done
-    echo "  gave up waiting for /$regex/ x$count after $3 s"
-    return 1
-}
-
 echo "$SUITE: kernel symbols for the debugger"
 heap_snapshot_setup "$OUT" || { echo "$SUITE: cannot read the heap settings" >&2; exit 1; }
+guest_state_setup "$OUT"
+
+# state <dir> <tag> [options]: the guest-state rendezvous, results in <dir>/state-<tag>.txt.
+state() {
+    local dir="$1" tag="$2"
+    shift 2
+    guest_state "$HEAP_GDB_DIR/gdb" "$dir/state-$tag.txt" "$tag" timeout="$EXIT_TIMEOUT" "$@"
+}
 
 image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
 cp bin/os.bin "$OUT/$SUITE.bin"
 mcopy -i "$OUT/$SUITE.bin" "$PROGRAM" ::
 
+# stop_checks <dir> <tag> <label>: every check of one rendezvous (lib/guest-state.sh).
+stop_checks() {
+    local f="$1/state-$2.txt"
+    check "$3: stopped at the task's getkey"           "$f" "PASS $2_rendezvous" line
+    check "$3: task list and slots consistent"        "$f" "PASS $2_list_consistent" line
+    check "$3: number of tasks"                        "$f" "PASS $2_task_count" line
+    check "$3: keyboard owner"                         "$f" "PASS $2_keyboard_owner" line
+    [ "$2" = boot ] || check "$3: the same shell task, process and id" "$f" "PASS $2_same_shell" line
+}
+
 # run_case <case>: one fresh boot. Adds to $failures.
 run_case() {
     local name="$1" dir="$OUT/$1" returned=0
     mkdir -p "$dir"
+    rm -f "$dir"/state-*.txt "$dir"/state-*.txt.log "$dir/shell.txt" "$dir"/screen-*.txt
     : > "$dir/screen-before-blank.txt"
     echo "$SUITE: case $name (blank.elf is $blank_size bytes, $blank_d blocks of segment memory)"
     QEMU_FLAGS="$HEAP_QEMU_FLAGS" qemu_start "$OUT/$SUITE.bin" "$dir"
     heap_snapshot_trap
-    if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT"; then
+    if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" &&
+        state "$dir" boot save="$dir/shell.txt" owner=first screen="$dir/screen-boot.txt"; then
         type_line "oomtest.elf $name $blank_size $blank_d"
-        # The heap gets nearly full only after a key, once the shell is back at its prompt
-        # (a second line starting with ">", the first one is the typed command) and idle, and
-        # the debugger is attached. One syscall is checked against the last copy.
-        if wait_screen "oomtest $name: ready" "$RUN_TIMEOUT" && wait_lines '^>' 2 "$EXIT_TIMEOUT" &&
+        # The heap gets nearly full only after a key, once the shell is back at its own key request
+        # (its prompt printed, nothing left to allocate) with oomtest owning the keyboard, and the
+        # heap debugger is attached. One syscall is checked against the last copy.
+        if wait_screen_lines "$RUN_TIMEOUT" "prompt:oomtest $name: ready" &&
+            state "$dir" ready tasks=2 shell="$dir/shell.txt" owner=last &&
             heap_snapshot_attach "$PROGRAM" "$dir" 1; then
             qemu_cmd "sendkey g"
             # "armed": the free blocks are set up. It waits for a second key before the syscall,
             # so the line is on screen even if the kernel crashes in the syscall.
-            if wait_lines "oomtest $name: (armed|done)" 1 "$RUN_TIMEOUT" &&
-                ! grep -qF "oomtest $name: done" "$dir/screen.txt"; then
+            if wait_screen_lines "$RUN_TIMEOUT" "regex:(> )?oomtest $name: (armed with free blocks -?[0-9]+|done)" &&
+                ! grep -qxE "(> )?oomtest $name: done" "$dir/screen.txt"; then
                 qemu_cmd "sendkey r"
             fi
             # The "arg..." cases wait for one more key after the syscall: the failed launch must
-            # leave the keyboard with oomtest.
-            if wait_lines "oomtest $name: (press a key|done)" 1 "$RUN_TIMEOUT" &&
-                ! grep -qF "oomtest $name: done" "$dir/screen.txt"; then
+            # leave the keyboard with oomtest, and no new task.
+            if wait_screen_lines "$RUN_TIMEOUT" "regex:(> )?oomtest $name: (press a key|done)" &&
+                ! grep -qxE "(> )?oomtest $name: done" "$dir/screen.txt" &&
+                heap_snapshot_detached "$EXIT_TIMEOUT" &&
+                state "$dir" press at=last tasks=2 shell="$dir/shell.txt" owner=last; then
                 qemu_cmd "sendkey k"
             fi
-            if wait_screen "oomtest $name: done" "$RUN_TIMEOUT"; then
+            if wait_screen_lines "$RUN_TIMEOUT" "prompt:oomtest $name: done"; then
                 returned=1
-                if grep -qF "oomtest $name: PASS" "$dir/screen.txt" &&
-                    wait_lines 'Process was terminated' 1 "$EXIT_TIMEOUT"; then
-                    # No other program may have started before the shell starts blank.elf.
-                    cp "$dir/screen.txt" "$dir/screen-before-blank.txt"
+                # The shell alone again: oomtest has ended and the failed syscall left no program
+                # running, so anything such a program printed is on the saved screen.
+                if grep -qxE "(> )?oomtest $name: PASS" "$dir/screen.txt" &&
+                    heap_snapshot_detached "$EXIT_TIMEOUT" &&
+                    state "$dir" ended shell="$dir/shell.txt" owner=first screen="$dir/screen-before-blank.txt"; then
                     type_line "blank.elf after-$name"
-                    if wait_screen "Blank loaded" "$EXIT_TIMEOUT"; then
-                        wait_lines 'Process was terminated' 2 "$EXIT_TIMEOUT" || true
-                    fi
+                    wait_screen_lines "$EXIT_TIMEOUT" "prompt:after-$name" &&
+                        state "$dir" after shell="$dir/shell.txt" owner=first || true
                 fi
             fi
         fi
@@ -141,12 +153,13 @@ run_case() {
     qemu_stop || true
     heap_snapshot_wait "$dir"
 
-    terminated=$(grep -cF "Process was terminated" "$dir/screen.txt" 2> /dev/null || true)
-    echo "terminated=${terminated:-0}" > "$dir/terminated.txt"
+    # Each process was seen gone at a rendezvous (the shell alone in the task list).
+    ended=$(cat "$dir"/state-ended.txt "$dir"/state-after.txt 2> /dev/null | grep -cxE 'PASS (ended|after)_task_count' || true)
+    echo "ended=${ended:-0}" > "$dir/ended.txt"
 
     check "$name: kernel reached the end of init (debugcon)"  "$dir/debugcon.log"   "Thats cool"
     check "$name: no kernel panic (debugcon)"                  "$dir/debugcon.log"   "PANIC" absent
-    check "$name: shell started (banner on screen)"            "$dir/screen.txt"     "${RORTHOX_NAME} v${RORTHOX_VERSION}"
+    check "$name: shell started (banner on screen)"            "$dir/screen-boot.txt" "${RORTHOX_NAME} v${RORTHOX_VERSION}"
     check "$name: command echoed by the shell"                 "$dir/screen.txt"     "> oomtest.elf $name $blank_size $blank_d"
     check "$name: oomtest waited for the key"                  "$dir/screen.txt"     "oomtest $name: ready"
     check "$name: free blocks set up exactly"                  "$dir/screen.txt"     "oomtest $name: armed with free blocks"
@@ -157,11 +170,17 @@ run_case() {
     check "$name: oomtest finished"                            "$dir/screen.txt"     "oomtest $name: done"
     check "$name: no program started by the failed syscall"    "$dir/screen-before-blank.txt" "Blank loaded" absent
     case "$name" in
-        arg*) check "$name: oomtest still got the keyboard"   "$dir/screen.txt"     "oomtest $name: got the key" ;;
+        arg*) check "$name: oomtest still got the keyboard"   "$dir/screen.txt"     "oomtest $name: got the key"
+              stop_checks "$dir" press "$name: after the failed syscall (no new task, oomtest owns the keyboard)" ;;
     esac
     check "$name: blank.elf started from the shell afterwards" "$dir/screen.txt"     "Blank loaded"
     check "$name: blank.elf got its argument"                  "$dir/screen.txt"     "after-$name" line
-    check "$name: both processes ended"                        "$dir/terminated.txt" "terminated=2" line
+    check "$name: kernel symbols for the rendezvous found"     "$OUT/symbols.txt"    "found" line
+    stop_checks "$dir" boot  "$name: boot (the shell alone)"
+    stop_checks "$dir" ready "$name: shell back at its key request before the heap fills, oomtest owns the keyboard"
+    stop_checks "$dir" ended "$name: oomtest ended (the shell alone, owns the keyboard)"
+    stop_checks "$dir" after "$name: blank.elf ended (the shell alone)"
+    check "$name: both processes ended (each seen gone)"       "$dir/ended.txt"      "ended=2" line
     heap_snapshot_checks "$name: " "$dir"
 }
 

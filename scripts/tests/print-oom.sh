@@ -9,10 +9,15 @@
 # printoom.elf counts free blocks in copies of the kernel's heap table that a debugger writes into
 # it through QEMU's gdbstub (scripts/tests/lib/heap-snapshot.sh); when print and printc are called,
 # the debugger checks that the heap table is still the copy taken just before (no block free).
+# scripts/tests/lib/guest-state.sh stops the guest at key requests (never while the heap debugger
+# is attached): the heap gets full only once the shell is back at its own key request and
+# printoom.elf has the keyboard, and after printoom.elf and blank.elf the shell is alone, the same
+# task, and has the keyboard. The "no second copy" count is taken on the screen saved at the
+# rendezvous after printoom.elf, where nothing is printing or scrolling.
 # bin/os.bin itself must not change.
 #
 # Needs python3. Env: BOOT_TIMEOUT=60 (seconds to wait for the shell)   RUN_TIMEOUT=60 (for printoom.elf)
-#      EXIT_TIMEOUT=30 (for each process to end, and for blank.elf to start)
+#      EXIT_TIMEOUT=30 (for each process to end, for blank.elf to start, and for each rendezvous)
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -21,31 +26,24 @@ RUN_TIMEOUT="${RUN_TIMEOUT:-60}"
 EXIT_TIMEOUT="${EXIT_TIMEOUT:-30}"
 . ./scripts/qemu-lib.sh
 . ./scripts/tests/lib/heap-snapshot.sh
+. ./scripts/tests/lib/guest-state.sh
 
 OUT=build/tests/print-oom
 PROGRAM=programs/printoom/build/printoom.elf
 mkdir -p "$OUT"
+rm -f "$OUT"/state-*.txt "$OUT"/state-*.txt.log "$OUT/shell.txt" "$OUT"/screen-*.txt
 [ -f "$PROGRAM" ] || { echo "print-oom: $PROGRAM not found, run 'make all' first" >&2; exit 1; }
 [ "$QEMU_RAM_MIB" -ge 128 ] || { echo "print-oom: needs QEMU_RAM_MIB >= 128 (is $QEMU_RAM_MIB)" >&2; exit 1; }
 
-# wait_lines <regex> <count> <seconds>: wait until <count> screen lines match <regex>.
-wait_lines() {
-    local regex="$1" count="$2" deadline=$((SECONDS + $3)) n
-    while ((SECONDS < deadline)); do
-        qemu_running || { echo "  QEMU is not running, stopped waiting for /$regex/ x$count"; return 1; }
-        screen_snapshot
-        n=$(grep -cE -- "$regex" "$Q_OUT/screen.txt" 2> /dev/null || true)
-        if [ "${n:-0}" -ge "$count" ]; then
-            echo "  /$regex/ x$count on screen after ${SECONDS} s"
-            return 0
-        fi
-        sleep 0.5
-    done
-    echo "  gave up waiting for /$regex/ x$count after $3 s"
-    return 1
-}
-
 heap_snapshot_setup "$OUT" || { echo "print-oom: cannot read the heap settings" >&2; exit 1; }
+guest_state_setup "$OUT"
+
+# state <tag> [options]: the guest-state rendezvous, results in $OUT/state-<tag>.txt.
+state() {
+    local tag="$1"
+    shift
+    guest_state "$HEAP_GDB_DIR/gdb" "$OUT/state-$tag.txt" "$tag" timeout="$EXIT_TIMEOUT" "$@"
+}
 
 image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
@@ -54,18 +52,21 @@ mcopy -i "$OUT/print-oom.bin" "$PROGRAM" ::
 
 QEMU_FLAGS="$HEAP_QEMU_FLAGS" qemu_start "$OUT/print-oom.bin" "$OUT"
 heap_snapshot_trap
-if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT"; then
+if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" &&
+    state boot save="$OUT/shell.txt" owner=first screen="$OUT/screen-boot.txt"; then
     type_line "printoom.elf"
-    # The heap gets full only after a key, once the shell is back at its prompt (a second line
-    # starting with ">", the first one is the typed command) and idle, and the debugger is
-    # attached. Two syscalls (print, printc) are checked against their copies.
-    if wait_screen "printoom: ready" "$RUN_TIMEOUT" && wait_lines '^>' 2 "$EXIT_TIMEOUT" &&
+    # The heap gets full only after a key, once the shell is back at its own key request (its
+    # prompt printed, nothing left to allocate) with printoom owning the keyboard, and the heap
+    # debugger is attached. Two syscalls (print, printc) are checked against their copies.
+    if wait_screen_lines "$RUN_TIMEOUT" "prompt:printoom: ready" &&
+        state ready tasks=2 shell="$OUT/shell.txt" owner=last &&
         heap_snapshot_attach "$PROGRAM" "$OUT" 2; then
         qemu_cmd "sendkey g"
-        if wait_screen "printoom: done" "$RUN_TIMEOUT" && wait_lines 'Process was terminated' 1 "$EXIT_TIMEOUT"; then
-            cp "$OUT/screen.txt" "$OUT/screen-printoom.txt"
+        if wait_screen_lines "$RUN_TIMEOUT" "prompt:printoom: done" && heap_snapshot_detached "$EXIT_TIMEOUT" &&
+            state ended shell="$OUT/shell.txt" owner=first screen="$OUT/screen-printoom.txt"; then
             type_line "blank.elf after"
-            wait_lines 'Process was terminated' 2 "$EXIT_TIMEOUT" || true
+            wait_screen_lines "$EXIT_TIMEOUT" "prompt:after" &&
+                state after shell="$OUT/shell.txt" owner=first || true
         fi
     fi
 fi
@@ -77,7 +78,7 @@ echo "good=${good:-0}" > "$OUT/good.txt"
 
 check "kernel reached the end of init (debugcon)"    "$OUT/debugcon.log"        "Thats cool"
 check "no kernel panic (debugcon)"                    "$OUT/debugcon.log"        "PANIC" absent
-check "shell started (banner on screen)"              "$OUT/screen.txt"          "${RORTHOX_NAME} v${RORTHOX_VERSION}"
+check "shell started (banner on screen)"              "$OUT/screen-boot.txt"     "${RORTHOX_NAME} v${RORTHOX_VERSION}"
 check "printoom.elf waited for the key"               "$OUT/screen-printoom.txt" "printoom: ready"
 check "no setup failure"                              "$OUT/screen-printoom.txt" "printoom: FAIL setup" absent
 check "print returned 0 with the heap full"           "$OUT/screen-printoom.txt" "printoom: FAIL print result" absent
@@ -90,6 +91,20 @@ check "printoom passed"                               "$OUT/screen-printoom.txt"
 check "printoom finished"                             "$OUT/screen-printoom.txt" "printoom: done"
 check "blank.elf started from the shell afterwards"   "$OUT/screen.txt"          "Blank loaded"
 check "blank.elf got its argument"                    "$OUT/screen.txt"          "after" line
+check "kernel symbols for the rendezvous found"       "$OUT/symbols.txt"         "found" line
+# stop_checks <tag> <label>: every check of one rendezvous (lib/guest-state.sh).
+stop_checks() {
+    local f="$OUT/state-$1.txt"
+    check "$2: stopped at the task's getkey"           "$f" "PASS $1_rendezvous" line
+    check "$2: task list and slots consistent"        "$f" "PASS $1_list_consistent" line
+    check "$2: number of tasks"                        "$f" "PASS $1_task_count" line
+    check "$2: keyboard owner"                         "$f" "PASS $1_keyboard_owner" line
+    [ "$1" = boot ] || check "$2: the same shell task, process and id" "$f" "PASS $1_same_shell" line
+}
+stop_checks boot  "boot (the shell alone)"
+stop_checks ready "shell back at its key request before the heap fills, printoom owns the keyboard"
+stop_checks ended "printoom ended (the shell alone, owns the keyboard)"
+stop_checks after "blank.elf ended (the shell alone)"
 heap_snapshot_checks "" "$OUT"
 
 hash_after=$(image_hash)
