@@ -3,6 +3,12 @@
 #
 #   qemu_start <image> <outdir>   boot <image>; the kernel's debugcon output goes to <outdir>/debugcon.log
 #   wait_screen <text> <seconds>  poll the VGA text screen until <text> shows up (returns 1 on timeout)
+#   wait_screen_lines <seconds> <condition>...
+#                                 poll until one screen snapshot meets every condition (returns 1 on timeout):
+#                                   line:<text>    a whole row is exactly <text>
+#                                   prompt:<text>  a whole row is <text> or "> <text>" (the shell's prompt can
+#                                                  land in front of a program's line)
+#                                   regex:<ere>    a whole row matches the extended regular expression <ere>
 #   type_line <text>              type <text> and Enter on the PS/2 keyboard
 #   qemu_cmd <monitor command>    send any QEMU monitor command
 #   screen_snapshot               refresh <outdir>/screen.txt from guest memory
@@ -11,8 +17,14 @@
 #                                 one check, printed as ok/FAIL; failures are counted in $failures
 #   finish <name>                 print the screen and the result; exits 1 if a check failed
 #
+# qemu_start sets an EXIT trap that stops QEMU. A test that owns more (a debugger, a socket directory)
+# sets Q_CLEANUP to the name of a function; the trap calls it after QEMU is stopped.
+#
 # The screen is read straight from the VGA text buffer at 0xB8000 ("pmemsave"), so tests never depend on
 # fixed delays: they wait until the expected text is there, which also works on a slow machine.
+# A substring or a count of rows is not proof that something new happened: the typed command's echo
+# contains its own arguments, older rows stay on the screen, and while the screen scrolls one row is
+# briefly on it twice. Wait for whole rows that only the expected step prints (wait_screen_lines).
 #
 # Env: QEMU=qemu-system-i386   QEMU_FLAGS="extra flags"   QEMU_TIMEOUT=180 (hard limit per QEMU run, seconds)
 # Needs only qemu-system-i386 and the base system tools (timeout, mkfifo, od, awk, grep, sed).
@@ -23,6 +35,7 @@ CONFIG_ENV="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/build/config/rortho
 
 QEMU="${QEMU:-qemu-system-i386}"
 QEMU_TIMEOUT="${QEMU_TIMEOUT:-180}"
+Q_POLL="${Q_POLL:-0.5}"
 failures=0
 
 # VGA text memory is (character, attribute) pairs, 80 columns x 25 rows. Keep the characters,
@@ -47,13 +60,20 @@ qemu_start() {
         -debugcon "file:$Q_OUT/debugcon.log" -serial none -monitor stdio \
         ${QEMU_FLAGS:-} < "$Q_TMP/monitor" > "$Q_OUT/monitor.log" 2>&1 &
     Q_PID=$!
+    trap 'qemu_exit' EXIT
     exec 3> "$Q_TMP/monitor"
     trap '' PIPE   # if QEMU is gone, writing a command fails instead of killing the script
-    trap 'qemu_kill' EXIT
+}
+
+# The EXIT trap: stop QEMU, then run the test's own cleanup (Q_CLEANUP), if any.
+qemu_exit() {
+    qemu_kill
+    if [ -n "${Q_CLEANUP:-}" ]; then "$Q_CLEANUP" || :; fi
 }
 
 qemu_kill() {
-    if [ -n "${Q_PID:-}" ]; then kill "$Q_PID" 2> /dev/null; wait "$Q_PID" 2> /dev/null; fi
+    # Under set -e a failing kill or wait here would end the EXIT trap before the cleanup is done.
+    if [ -n "${Q_PID:-}" ]; then kill "$Q_PID" 2> /dev/null || :; wait "$Q_PID" 2> /dev/null || :; fi
     Q_PID=
     [ -n "${Q_TMP:-}" ] && rm -rf "$Q_TMP"
     return 0
@@ -101,6 +121,46 @@ wait_screen() {
         sleep 0.5
     done
     echo "  gave up waiting for \"$text\" after $2 s"
+    return 1
+}
+
+# screen_lines_match <file> <condition>...: 0 if <file> meets every condition (see wait_screen_lines),
+# 1 if not, 2 for an unknown condition.
+screen_lines_match() {
+    local file="$1" cond arg
+    shift
+    [ -f "$file" ] || return 1
+    for cond in "$@"; do
+        arg="${cond#*:}"
+        case "$cond" in
+            line:*)   grep -qxF -- "$arg" "$file" || return 1 ;;
+            prompt:*) grep -qxF -e "$arg" -e "> $arg" "$file" || return 1 ;;
+            regex:*)  grep -qxE -- "$arg" "$file" || return 1 ;;
+            *) echo "  unknown screen condition \"$cond\"" >&2; return 2 ;;
+        esac
+    done
+    return 0
+}
+
+# wait_screen_lines <seconds> <condition>...: every try checks all conditions on one snapshot.
+wait_screen_lines() {
+    local limit="$1" deadline=$((SECONDS + $1)) status
+    shift
+    while ((SECONDS < deadline)); do
+        if ! qemu_running; then
+            echo "  QEMU is not running, stopped waiting for: $*"
+            return 1
+        fi
+        screen_snapshot
+        if screen_lines_match "$Q_OUT/screen.txt" "$@"; then status=0; else status=$?; fi
+        if [ "$status" -eq 0 ]; then
+            echo "  on screen after ${SECONDS} s: $*"
+            return 0
+        fi
+        if [ "$status" -eq 2 ]; then return 1; fi
+        sleep "$Q_POLL"
+    done
+    echo "  gave up after $limit s waiting for: $*"
     return 1
 }
 

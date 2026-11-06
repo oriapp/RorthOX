@@ -402,12 +402,15 @@ qemu-system-i386 -m 128 -drive file=bin/os.bin,format=raw,index=0,media=disk \
 make test
 ```
 
-This builds everything and runs 66 tests (`scripts/smoke.sh` plus every `scripts/tests/*.sh`); it keeps going after a
-failure and prints a summary (`66 passed, 0 failed, 0 skipped`). A full run takes about 14 minutes. `make smoke`
+This builds everything and runs 67 tests (`scripts/smoke.sh` plus every `scripts/tests/*.sh`); it keeps going after a
+failure and prints a summary (`67 passed, 0 failed, 0 skipped`). A full run takes about 14 minutes. `make smoke`
 runs only the smoke test, and `./scripts/run-tests.sh scripts/tests/panic.sh` runs single tests.
 
 The tests boot RorthOX headless in QEMU and drive it through the QEMU monitor: they type with `sendkey`, read the
-screen straight from video memory and wait for text instead of sleeping. Some stop the CPU through QEMU's gdbstub to
+screen straight from video memory and wait for text instead of sleeping. `wait_screen_lines` in `scripts/qemu-lib.sh`
+waits for whole rows that only the awaited step prints, all on one snapshot: a substring can be the typed command's
+own echo, and a count of rows proves nothing new, since older rows stay on the screen and while the screen scrolls
+one row is briefly on it twice. Some stop the CPU through QEMU's gdbstub to
 check registers and memory (the out-of-memory test programs get their copies of the kernel's heap table that way: no
 test program reads kernel memory itself), and some compile the real kernel source with the host C compiler (with AddressSanitizer
 where it matters) to check one function against every input. Tests that need extra programs (`programs/*test*`,
@@ -430,6 +433,10 @@ where it matters) to check one function against every input. Tests that need ext
 `debugger-step` checks the tests' own gdbstub helper against a fake stub, without QEMU: QEMU can report a single
 step as finished without having run the instruction, so stepping off a breakpoint is retried a few times and then
 fails instead of hitting the same breakpoint twice.
+`screen-waits` checks the tests' screen waits and cleanup without QEMU: on scripted screens (a typed command's echo,
+the step before's result, a half printed row, a scroll half done) the old ways to wait (a substring, a count of rows)
+accept too early, the new ones wait for the step's own rows on one screen and give up when they never come; and a
+test that ends normally, by an error or by TERM right after starting QEMU leaves no QEMU and runs its own cleanup.
 
 `grub-boot` needs the GRUB packages. Without them it is reported as skipped (`1 skipped` and a `SKIPPED:` line)
 instead of failing; `RORTHOX_REQUIRE_ISO=1 make test` turns that into a failure. `fsck.fat` (package `dosfstools`)
