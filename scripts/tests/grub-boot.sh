@@ -2,8 +2,10 @@
 # Boot the real BIOS GRUB ISO, then prove that its Multiboot entry (not the disk
 # boot sector) installs the bootstrap state. Programs still come from ATA FAT16.
 # Missing optional ISO tools: exit 77 locally, or fail with RORTHOX_REQUIRE_ISO=1.
+# Env: BOOT_TIMEOUT=60 (seconds from power-on to the Multiboot entry under the debugger)
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 
 OUT=build/tests/grub-boot
 rm -rf "$OUT"
@@ -66,6 +68,13 @@ ISO_FLAGS="${QEMU_FLAGS:-} -boot d -cdrom bin/rorthox.iso"
 QEMU_FLAGS="$ISO_FLAGS" qemu_start bin/os.bin "$OUT/normal"
 trap cleanup EXIT
 wait_screen "GNU GRUB" 20 || fail "GRUB menu not visible"
+# GRUB draws the header before the entries: wait until one snapshot has both.
+deadline=$((SECONDS + 20))
+until grep -qF "$RORTHOX_NAME" "$Q_OUT/screen.txt" && grep -qF "GNU GRUB" "$Q_OUT/screen.txt"; do
+    ((SECONDS < deadline)) && qemu_running || fail "GRUB menu entry not drawn"
+    sleep 0.2
+    screen_snapshot
+done
 qemu_cmd stop
 screen_snapshot
 cp "$Q_OUT/screen.txt" "$OUT/grub-menu.txt"
@@ -93,8 +102,10 @@ QEMU_FLAGS="$ISO_FLAGS -S -gdb unix:$GDB_DIR/entry,server=on,wait=off" \
 # qemu_start installs its own EXIT trap; restore socket cleanup after each boot.
 trap cleanup EXIT
 status=0
-timeout 55 python3 -B scripts/tests/lib/multiboot_entry.py "$GDB_DIR/entry" \
-    build/kernel.map bin/kernel.bin "$OUT/entry" > "$OUT/entry/rsp.log" 2>&1 || status=$?
+# BIOS, GRUB, the menu countdown and loading the kernel all run before the entry breakpoint;
+# under slow emulation that alone can pass 25 s. The other steps keep the old 30 s on top.
+timeout $((BOOT_TIMEOUT + 30)) python3 -B scripts/tests/lib/multiboot_entry.py "$GDB_DIR/entry" \
+    build/kernel.map bin/kernel.bin "$OUT/entry" "$BOOT_TIMEOUT" > "$OUT/entry/rsp.log" 2>&1 || status=$?
 cat "$OUT/entry/rsp.log"
 echo "exit=$status" > "$OUT/entry/rsp-status.txt"
 [ "$status" -eq 0 ] || fail "Multiboot machine-state checks failed (exit $status)"

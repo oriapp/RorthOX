@@ -7,7 +7,7 @@ from rsp import EFLAGS_DF, EFLAGS_IF, Results, Rsp, RspError, read_config, read_
 
 
 def main():
-    sock, map_path, kernel_path, out_path = sys.argv[1:]
+    sock, map_path, kernel_path, out_path, boot_timeout = sys.argv[1:]
     out = pathlib.Path(out_path)
     symbols, sections = read_map(map_path)
     cfg = read_config("build/config/rorthox-config.inc")
@@ -40,7 +40,7 @@ def main():
     # GRUB itself uses 1 MiB before loading the kernel; watch only the handoff
     # here, then guard against entering the raw path after the handoff.
     g.add_breakpoint(entry)
-    eip = g.cont(25)
+    eip = g.cont(int(boot_timeout))
     require("at_multiboot_entry", eip == entry, hex(eip))
     regs, cr0, _ = state("entry")
     require("entry_magic", regs["eax"] == 0x2BADB002, hex(regs["eax"]))
