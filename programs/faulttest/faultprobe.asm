@@ -13,6 +13,8 @@ global fault_out:function
 global fault_in_pic:function
 global fault_out_pic:function
 global fault_in_high:function
+global fault_write:function
+global fault_exec:function
 
 ; Each routine is one instruction that ends the program with a CPU exception.
 ; If the kernel ever resumes the program after it, the routine returns and
@@ -84,4 +86,20 @@ fault_out_pic:
 fault_in_high:
     mov edx, 0xffff
     in al, dx
+    ret
+
+; Isolation probes (scripts/tests/isolation.sh). Each faults on a page the program may not use;
+; if the kernel lets the access through, the routine returns.
+
+; void fault_write(void *ptr): writes 0x5a5a5a5a to *ptr. The pointer stays in EAX
+fault_write:
+    mov eax, [esp+4]
+    mov dword [eax], 0x5a5a5a5a
+    ret
+
+; void fault_exec(void *ptr): calls ptr. A page fault on the instruction fetch leaves CR2 and the
+; saved EIP equal to the pointer, with the return address into fault_exec on the user stack
+fault_exec:
+    mov eax, [esp+4]
+    call eax
     ret
