@@ -394,8 +394,8 @@ qemu-system-i386 -m 128 -drive file=bin/os.bin,format=raw,index=0,media=disk \
 make test
 ```
 
-This builds everything and runs 62 tests (`scripts/smoke.sh` plus every `scripts/tests/*.sh`); it keeps going after a
-failure and prints a summary (`62 passed, 0 failed, 0 skipped`). A full run takes about 12 minutes. `make smoke`
+This builds everything and runs 63 tests (`scripts/smoke.sh` plus every `scripts/tests/*.sh`); it keeps going after a
+failure and prints a summary (`63 passed, 0 failed, 0 skipped`). A full run takes about 12 minutes. `make smoke`
 runs only the smoke test, and `./scripts/run-tests.sh scripts/tests/panic.sh` runs single tests.
 
 The tests boot RorthOX headless in QEMU and drive it through the QEMU monitor: they type with `sendkey`, read the
@@ -417,6 +417,10 @@ where it matters) to check one function against every input. Tests that need ext
 | Programs and processes | `elf-segments`, `elf-unwind`, `raw-program`, `load-unwind`, `process-release`, `task-list`, `syscall-path`, `program-arguments`, `command-arguments`, `argument-oom`, `user-pointers`, `program-lookup`, `program-lookup-config`, `config-values` | ELF segments get their own memory; bad ELF files are refused; raw programs must fit the load window; failed loads give everything back; finished programs free their memory; the task list stays linked; every syscall checks the user memory it reads or writes; bare names are looked up in the search list in order, the first match wins, only a missing file moves on, and `argv[0]` stays as typed; bad `PROGRAM_SEARCH_PATHS` values stop the build, and so do key codes outside 0x100-0xFFFF and duplicate key codes or syscall numbers in `config.mk` |
 | Sleeping | `sleep`, `sleep-idle`, `task-list`, `pit`, `clock` | `sleep(0)` returns 0, negative and too-big values return -2; a sleep lasts at least `ceil(ms / 10) + 2` ticks while another program keeps running, then returns 0 with registers and stack unchanged; sleeping tasks are never picked, every due sleeper wakes on its tick (also across the 2^32 wrap of the tick counter), and a freed sleeper leaves nothing behind; with every task asleep the CPU sits in `hlt` in ring 0 with interrupts on and the kernel's page directory, a key or an NMI doesn't wake the sleeper (the key is read after it wakes), and the idle stack doesn't grow; `rorthox_get_ticks()` goes up as ticks arrive, returns every value unchanged (also with the high bit set) and reads nothing from the user stack, not even with a garbage `esp` |
 | Console, keyboard, user library | `tty-scroll`, `tty-backspace`, `printc`, `formatting`, `keyboard-burst`, `keyboard-queue`, `keyboard-scancode`, `keyboard-symbols`, `keyboard-extended`, `readline`, `readline-edit`, `strtok` | scrolling and backspace; colours, and the key and cursor syscalls pass their values whole; bounded formatting; no lost keys; a full key queue keeps unread keys and every key value comes back unchanged; the decoder for every key with Shift, Caps and Num Lock, plus the E0/E1 sequences (fake shifts, Print Screen, Pause); the special keys and Num Lock as QEMU sends them; cursor moves stay on the page and change no text; line editing in the middle of a line, across a row edge and while the screen scrolls; `strtok` |
+
+`debugger-step` checks the tests' own gdbstub helper against a fake stub, without QEMU: QEMU can report a single
+step as finished without having run the instruction, so stepping off a breakpoint is retried a few times and then
+fails instead of hitting the same breakpoint twice.
 
 `grub-boot` needs the GRUB packages. Without them it is reported as skipped (`1 skipped` and a `SKIPPED:` line)
 instead of failing; `RORTHOX_REQUIRE_ISO=1 make test` turns that into a failure. `fsck.fat` (package `dosfstools`)

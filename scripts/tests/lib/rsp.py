@@ -194,6 +194,19 @@ class Rsp:
     def step(self):
         return self._check_stop(self.request("s"))
 
+    # QEMU (seen with 8.2.2) can end a single step before the instruction ran and still report it
+    # as a finished step, with eip unchanged. Stepping off a breakpoint tries again a few times.
+    STEP_OFF_TRIES = 5
+
+    def _step_off(self, eip):
+        for _ in range(self.STEP_OFF_TRIES):
+            self.step()
+            now = self.reg("eip")
+            if now != eip:
+                return
+        raise RspError("stepping off the breakpoint at %#x: eip %#x before, %#x after %d steps" %
+                       (eip, eip, now, self.STEP_OFF_TRIES))
+
     def cont(self, timeout, on_running=None):
         """Continue until a breakpoint hits; returns the new eip. on_running() is called after the
         continue packet is acknowledged; the guest may not run yet at that point."""
@@ -201,7 +214,7 @@ class Rsp:
         if eip in self.breakpoints:
             # QEMU would stop again on the same instruction: step past it first.
             self.remove_breakpoint(eip)
-            self.step()
+            self._step_off(eip)
             self.add_breakpoint(eip)
         self._send_packet("c")
         if on_running:
