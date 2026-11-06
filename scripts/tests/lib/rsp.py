@@ -281,8 +281,8 @@ def read_map(path):
     return symbols, sections
 
 
-def read_elf_symbols(path):
-    """{name: value} from the symbol table of a 32-bit little-endian ELF file."""
+def read_elf_symbols(path, sizes=False):
+    """{name: value} from the symbol table of a 32-bit little-endian ELF file, {name: (value, size)} with sizes."""
     with open(path, "rb") as f:
         elf = f.read()
     if elf[:6] != b"\x7fELF\x01\x01":
@@ -296,9 +296,9 @@ def read_elf_symbols(path):
             continue
         strtab = headers[sh[6]]
         for off in range(sh[4], sh[4] + sh[5], 16):
-            name, value = struct.unpack_from("<II", elf, off)
+            name, value, size = struct.unpack_from("<III", elf, off)
             start = strtab[4] + name
-            symbols[elf[start:elf.index(b"\0", start)].decode("latin-1")] = value
+            symbols[elf[start:elf.index(b"\0", start)].decode("latin-1")] = (value, size) if sizes else value
     return symbols
 
 

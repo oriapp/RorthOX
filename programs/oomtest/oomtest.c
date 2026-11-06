@@ -42,15 +42,19 @@
  * taken, and the keyboard must stay with oomtest: after the results it prints "press a key" and
  * waits for one more key.
  *
- * The free blocks are counted straight from the kernel's heap table at RORTHOX_HEAP_TABLE_ADDRESS.
- * That only works because user programs can read all memory today; it is a test-only shortcut.
+ * The heap table is kernel memory, so the free blocks are counted in copies of it that the test
+ * script's debugger writes into this program (../heapsnapshot/heap_snapshot.h): a fresh copy for
+ * every step of the setup, one before the syscall and one after it. The copy before the syscall is
+ * taken after the command node is allocated (the run cases make it the way rorthox_system_run()
+ * does, then call rorthox_system()); the debugger stops at rorthox_system and requires the heap
+ * table to be that copy, so nothing allocates between the last count and the syscall.
  *
  * Usage: oomtest.elf <case> <size of blank.elf in bytes> <D>. The program prints
  * "oomtest <case>: ready" and waits for a key, so the test script can make sure the shell is idle
- * first. While the heap is nearly full nothing else must allocate, so the only line printed then
- * is "armed" (print borrows one block and gives it back). After "armed" it waits for a second
- * key before the syscall. Every run ends with "oomtest <case>: done"; the result is
- * "oomtest <case>: PASS" or "oomtest <case>: FAIL ..." lines.
+ * and the debugger runs first. While the heap is nearly full nothing else must allocate, so the
+ * only line printed then is "armed" (print copies its text on the kernel stack). After "armed" it
+ * waits for a second key before the syscall. Every run ends with "oomtest <case>: done"; the
+ * result is "oomtest <case>: PASS" or "oomtest <case>: FAIL ..." lines.
  */
 #include "rorthox.h"
 #include "stdlib.h"
@@ -58,10 +62,9 @@
 #include "memory.h"
 #include "config.h"
 #include "status.h"
+#include "../heapsnapshot/heap_snapshot.h"
 
 #define BLOCK RORTHOX_HEAP_BLOCK_SIZE
-#define TOTAL_BLOCKS (RORTHOX_HEAP_SIZE_BYTES / RORTHOX_HEAP_BLOCK_SIZE)
-#define TABLE ((const volatile unsigned char *)RORTHOX_HEAP_TABLE_ADDRESS)
 #define MAX_PLUGS 64
 #define SNAPSHOT_BLOCKS ((RORTHOX_MAX_COMMAND_ARGUMENTS * sizeof(struct command_argument) + BLOCK - 1) / BLOCK)
 
@@ -127,36 +130,6 @@ static void say(const char *name, const char *text, int a, int b)
     }
     strcpy(line + strlen(line), "\n");
     print(line);
-}
-
-static int count_free(void)
-{
-    int n = 0;
-    for (int i = 0; i < TOTAL_BLOCKS; i++)
-    {
-        if (TABLE[i] == 0)
-        {
-            n++;
-        }
-    }
-    return n;
-}
-
-// Find the free run starting at or after block *start. Returns its length, 0 if there is none.
-static int next_run(int *start)
-{
-    int i = *start;
-    while (i < TOTAL_BLOCKS && TABLE[i] != 0)
-    {
-        i++;
-    }
-    int j = i;
-    while (j < TOTAL_BLOCKS && TABLE[j] == 0)
-    {
-        j++;
-    }
-    *start = i;
-    return j - i;
 }
 
 static int number(const char *s)
@@ -262,14 +235,23 @@ int main(int argc, char **argv)
     rorthox_getkeyblock();
 
     // Fill every free run but the last one exactly (first fit takes the lowest run that is big
-    // enough, which is the lowest run), then fill the last run up to want_free blocks.
+    // enough, which is the lowest run), then fill the last run up to want_free blocks. Every step
+    // looks at a fresh copy of the heap table.
     int setup = 0;
     int start = 0;
-    int length = next_run(&start);
-    while (length > 0)
+    int length = 0;
+    if (heap_snapshot() < 0)
+    {
+        setup = 7;
+    }
+    else
+    {
+        length = heap_snapshot_next_run(&start);
+    }
+    while (!setup && length > 0)
     {
         int after = start + length;
-        int next_length = next_run(&after);
+        int next_length = heap_snapshot_next_run(&after);
         if (next_length == 0)
         {
             break;
@@ -287,6 +269,11 @@ int main(int argc, char **argv)
             break;
         }
         plug_count++;
+        if (heap_snapshot() < 0)
+        {
+            setup = 7;
+            break;
+        }
         start = after;
         length = next_length;
     }
@@ -304,37 +291,65 @@ int main(int argc, char **argv)
     }
     // Now exactly one free run of want_free blocks must be left.
     int run_start = 0;
-    int free_before = count_free();
-    if (!setup && (free_before != want_free || next_run(&run_start) != want_free))
+    int free_before = -1;
+    if (!setup && heap_snapshot() < 0)
     {
-        setup = 5;
+        setup = 7;
     }
-
-    // Say the setup is right before the syscall, so a crash still shows which case was armed.
-    // print takes one scratch block from the start of the free run and gives it back, so the
-    // run must be the same afterwards.
     if (!setup)
     {
-        say(c->name, "armed with free blocks ", free_before, NONE);
-        run_start = 0;
-        if (count_free() != want_free || next_run(&run_start) != want_free)
+        free_before = heap_snapshot_free();
+        if (free_before != want_free || heap_snapshot_next_run(&run_start) != want_free)
+        {
+            setup = 5;
+        }
+    }
+
+    // The run cases start "blank.elf" as rorthox_system_run() does: its command node takes the
+    // first block of the run, then rorthox_system(). The last copy comes after that node, and the
+    // debugger checks that the heap table is still that copy when rorthox_system is called.
+    int node = c->arguments ? 0 : 1;
+    if (!setup && !c->arguments)
+    {
+        char buf[1024];
+        strncpy(buf, "blank.elf", sizeof(buf));
+        command = rorthox_parse_command(buf, sizeof(buf));
+        if (!command)
         {
             setup = 6;
         }
-        else
-        {
-            // Second key: the script has seen "armed", so it is on screen even if the kernel dies next.
-            rorthox_getkeyblock();
-        }
+    }
+    if (!setup && heap_snapshot_before((void *)rorthox_system) < 0)
+    {
+        setup = 7;
+    }
+    run_start = 0;
+    if (!setup && (heap_snapshot_free() != want_free - node || heap_snapshot_next_run(&run_start) != want_free - node))
+    {
+        setup = 6;
+    }
+
+    // Say the setup is right before the syscall, so a crash still shows which case was armed.
+    // Second key: the script has seen "armed", so it is on screen even if the kernel dies next.
+    if (!setup)
+    {
+        say(c->name, "armed with free blocks ", free_before, NONE);
+        rorthox_getkeyblock();
     }
 
     int result = 0;
     int free_after = free_before;
+    int after_copy = 0;
     if (!setup)
     {
-        result = c->arguments ? rorthox_system(command) : rorthox_system_run("blank.elf");
-        free_after = count_free();
+        result = rorthox_system(command);
+        after_copy = heap_snapshot();
+        if (!after_copy)
+        {
+            free_after = heap_snapshot_free();
+        }
     }
+    heap_snapshot_done();
 
     // Give the memory back before printing the results.
     if (filler)
@@ -354,6 +369,11 @@ int main(int argc, char **argv)
         return 1;
     }
     say(c->name, "free blocks after the syscall ", free_after, NONE);
+    if (after_copy < 0)
+    {
+        say(c->name, "FAIL no heap copy after the syscall", NONE, NONE);
+        failed = 1;
+    }
     if (result != c->result)
     {
         say(c->name, "FAIL result ", result, c->result);

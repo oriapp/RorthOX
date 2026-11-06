@@ -1,4 +1,4 @@
-FILES=./build/oomtest.o
+FILES=./build/oomtest.o ./build/heap_snapshot.o
 CONFIG_DIR ?= $(abspath ../../build/config)
 # The kernel directory is for config.h (the heap geometry) and status.h (the error codes).
 INCLUDES= -I ../stdlib/src -I$(CONFIG_DIR) -I ../../kernel
@@ -10,6 +10,9 @@ all: ./build/oomtest.elf
 
 ./build/oomtest.o: ./oomtest.c $(CONFIG_DIR)/rorthox-config.h
 	i686-elf-gcc ${INCLUDES} -I./ $(FLAGS) -std=gnu99 -c ./oomtest.c -o ./build/oomtest.o
+
+./build/heap_snapshot.o: ../heapsnapshot/heap_snapshot.c $(CONFIG_DIR)/rorthox-config.h
+	i686-elf-gcc ${INCLUDES} -I./ $(FLAGS) -std=gnu99 -c ../heapsnapshot/heap_snapshot.c -o ./build/heap_snapshot.o
 
 .PHONY: all clean
 

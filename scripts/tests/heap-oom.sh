@@ -8,9 +8,15 @@
 # file, the process). It checks the syscall's result and how many blocks are still taken
 # afterwards. No program may start from the failed syscall, and then blank.elf must start from
 # the shell.
+# The heap table is kernel memory, so oomtest.elf must not read it. It counts free blocks in copies
+# of the table that a debugger
+# writes into the program through QEMU's gdbstub (scripts/tests/lib/heap-snapshot.sh). The debugger
+# only answers in oomtest's own task (ring 3, its own page directory), and it checks that the heap
+# table is still the last copy when oomtest makes the syscall. Every copy must be acknowledged, so a
+# case can't pass without the debugger.
 # The script stops after the first failing case. bin/os.bin itself must not change.
 #
-# Env: BOOT_TIMEOUT=60 (seconds to wait for the shell)   RUN_TIMEOUT=60 (for each oomtest run)
+# Needs python3. Env: BOOT_TIMEOUT=60 (seconds to wait for the shell)   RUN_TIMEOUT=60 (for each oomtest run)
 #      EXIT_TIMEOUT=15 (for each process to end, and for blank.elf to start)
 #      OOM_CASES="table second ..." (run only these cases, in this order)
 #      OOM_SUITE=heap-oom (name used for the output directory and the messages; open-oom.sh
@@ -23,6 +29,7 @@ RUN_TIMEOUT="${RUN_TIMEOUT:-60}"
 EXIT_TIMEOUT="${EXIT_TIMEOUT:-15}"
 QEMU_TIMEOUT="${QEMU_TIMEOUT:-180}"
 . ./scripts/qemu-lib.sh
+. ./scripts/tests/lib/heap-snapshot.sh
 
 SUITE="${OOM_SUITE:-heap-oom}"
 OUT="build/tests/$SUITE"
@@ -77,6 +84,9 @@ wait_lines() {
     return 1
 }
 
+echo "$SUITE: kernel symbols for the debugger"
+heap_snapshot_setup "$OUT" || { echo "$SUITE: cannot read the heap settings" >&2; exit 1; }
+
 image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
 cp bin/os.bin "$OUT/$SUITE.bin"
@@ -88,12 +98,15 @@ run_case() {
     mkdir -p "$dir"
     : > "$dir/screen-before-blank.txt"
     echo "$SUITE: case $name (blank.elf is $blank_size bytes, $blank_d blocks of segment memory)"
-    qemu_start "$OUT/$SUITE.bin" "$dir"
+    QEMU_FLAGS="$HEAP_QEMU_FLAGS" qemu_start "$OUT/$SUITE.bin" "$dir"
+    heap_snapshot_trap
     if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT"; then
         type_line "oomtest.elf $name $blank_size $blank_d"
         # The heap gets nearly full only after a key, once the shell is back at its prompt
-        # (a second line starting with ">", the first one is the typed command) and idle.
-        if wait_screen "oomtest $name: ready" "$RUN_TIMEOUT" && wait_lines '^>' 2 "$EXIT_TIMEOUT"; then
+        # (a second line starting with ">", the first one is the typed command) and idle, and
+        # the debugger is attached. One syscall is checked against the last copy.
+        if wait_screen "oomtest $name: ready" "$RUN_TIMEOUT" && wait_lines '^>' 2 "$EXIT_TIMEOUT" &&
+            heap_snapshot_attach "$PROGRAM" "$dir" 1; then
             qemu_cmd "sendkey g"
             # "armed": the free blocks are set up. It waits for a second key before the syscall,
             # so the line is on screen even if the kernel crashes in the syscall.
@@ -126,6 +139,7 @@ run_case() {
         failures=$((failures + 1))
     fi
     qemu_stop || true
+    heap_snapshot_wait "$dir"
 
     terminated=$(grep -cF "Process was terminated" "$dir/screen.txt" 2> /dev/null || true)
     echo "terminated=${terminated:-0}" > "$dir/terminated.txt"
@@ -148,6 +162,7 @@ run_case() {
     check "$name: blank.elf started from the shell afterwards" "$dir/screen.txt"     "Blank loaded"
     check "$name: blank.elf got its argument"                  "$dir/screen.txt"     "after-$name" line
     check "$name: both processes ended"                        "$dir/terminated.txt" "terminated=2" line
+    heap_snapshot_checks "$name: " "$dir"
 }
 
 for name in $CASES; do
