@@ -98,12 +98,16 @@ qemu_stop || true
     echo "changed" > "$OUT/image.txt"
 
 S="$OUT/screen.txt"
+# The shell's "> " can land in front of the line the program prints after a sleep: compare
+# the program's lines without it (each line still has to match exactly).
+sed 's/^> //' "$S" > "$OUT/lines.txt" 2> /dev/null || : > "$OUT/lines.txt"
+L="$OUT/lines.txt"
 check "no kernel panic (debugcon)"                        "$OUT/debugcon.log" "PANIC" absent
-check "three sleep(50) took 7..100 ticks each"            "$S" "lt-t: sleeps ok" line
-check "busy loop: the value went up 5 times, 1..100 each" "$S" "lt-t: advanced 5 times" line
-check "garbage esp: ticks returned, esp given back"       "$S" "lt-t: garbage esp ok" line
-check "registers and stack kept by the wrapper"           "$S" "lt-t: ebx esi edi ebp esp and stack kept" line
-check "the program finished"                              "$S" "libtest clock: done" line
+check "three sleep(50) took 7..100 ticks each"            "$L" "lt-t: sleeps ok" line
+check "busy loop: the value went up 5 times, 1..100 each" "$L" "lt-t: advanced 5 times" line
+check "garbage esp: ticks returned, esp given back"       "$L" "lt-t: garbage esp ok" line
+check "registers and stack kept by the wrapper"           "$L" "lt-t: ebx esi edi ebp esp and stack kept" line
+check "the program finished"                              "$L" "libtest clock: done" line
 check "no FAIL line"                                      "$S" "FAIL" absent
 check "blank.elf started from the shell afterwards"       "$S" "after" line
 check "bin/os.bin not changed by the test"                "$OUT/image.txt" "unchanged" line
