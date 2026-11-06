@@ -1,14 +1,49 @@
 # Shared ring-3 probe session. The caller sets OUT and prepares IMAGE.
 # Each invocation of a QEMU-bearing test must run under timeout 120.
+# wait_exits [child line]: until syscheck has exited (an exit row below "syscheck: continued") and,
+# with a child line, the child too (an exit row below that line). Counting exit rows is not
+# enough: while the tty scrolls, one row can show up twice for a moment. The last row is still
+# filled then, at rest it is blank. The two lines can come in either order, so two exit rows
+# below the later one also count.
 wait_exits() {
-    local count="$1" deadline=$((SECONDS + 15))
+    local child="${1:-}" deadline=$((SECONDS + 15))
     while ((SECONDS < deadline)); do
         qemu_running || return 1
         screen_snapshot
-        if [ "$(grep -cF 'Process was terminated' "$Q_OUT/screen.txt" || true)" -ge "$count" ]; then return 0; fi
+        if awk -v child="$child" '
+            { row[NR] = $0 }
+            index($0, "syscheck: continued") { c = NR }
+            child != "" && index($0, child) { x = NR }
+            END {
+                if (NR != 25 || row[NR] != "" || !c || (child != "" && !x)) exit 1
+                first = c; last = c
+                if (child != "") { if (x < c) first = x; else last = x }
+                for (i = first + 1; i <= NR; i++)
+                    if (index(row[i], "Process was terminated")) { if (i < last) between++; else below++ }
+                exit !(child == "" ? below : (between && below) || below >= 2)
+            }' "$Q_OUT/screen.txt"; then
+            return 0
+        fi
         sleep 0.2
     done
-    echo "FAIL waiting for $count process exits"
+    echo "FAIL waiting for the syscheck exits"
+    return 1
+}
+# wait_recovery: until one snapshot shows the recovery run itself: "Blank loaded", the argv line
+# "recovery" (the echoed "blank.elf recovery" doesn't match) and an exit below it. Counting exit
+# rows is not enough: while the tty scrolls, one row can show up twice for a moment.
+wait_recovery() {
+    local deadline=$((SECONDS + 15))
+    while ((SECONDS < deadline)); do
+        qemu_running || return 1
+        screen_snapshot
+        if grep -qF 'Blank loaded' "$Q_OUT/screen.txt" &&
+            awk '$0 == "recovery" { r = 1 } r && /Process was terminated/ { f = 1 } END { exit !f }' "$Q_OUT/screen.txt"; then
+            return 0
+        fi
+        sleep 0.2
+    done
+    echo "FAIL waiting for the recovery program"
     return 1
 }
 # outside_bytes <file>: the 16 physical bytes at 0x800000, memory no program owns, read by the
@@ -58,12 +93,12 @@ run_syscheck() {
         free*|cmdfree*) check "$mode rejection" "$out/screen.txt" 'syscheck: freed result -2' ;;
     esac
     check "$mode no panic" "$out/debugcon.log" '[PANIC]' absent
-    local exits=1
-    case "$expected" in 'syscheck: child PASS'|'raw: ran') exits=2;; esac
-    wait_exits "$exits" || return 1
+    local child=
+    case "$expected" in 'syscheck: child PASS'|'raw: ran') child=$expected;; esac
+    wait_exits "$child" || return 1
     # A fresh positive control proves the shell/keyboard survived, not just the caller.
     type_line 'blank.elf recovery'
-    wait_exits "$((exits+1))" || return 1
+    wait_recovery || return 1
     check "$mode recovery argument" "$out/screen.txt" 'recovery' line
     check "$mode recovery program" "$out/screen.txt" 'Blank loaded'
     qemu_stop
