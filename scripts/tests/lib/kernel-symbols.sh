@@ -1,27 +1,35 @@
-# Kernel addresses and struct offsets for the sleep tests. Source it after qemu-lib.sh,
+# Kernel addresses and struct offsets for the debugger-side tests. Source it after qemu-lib.sh,
 # then call kernel_symbols <outdir>. Sets (hex, without 0x):
 #   SYM_TICKS          the PIT tick counter (jiffies, static in pit.c)
 #   SYM_CURRENT_TASK   current_task
 #   SYM_TASK_HEAD      task_head, the first task in the task list
 #   SYM_PAUSE          IRQ_ON_AND_PAUSE
 #   SYM_KERNEL_CHUNK   kernel_chunk (static in kernel.c), the kernel's page directory
+#   SYM_TASK_TAIL, SYM_CURRENT_PROCESS (the keyboard owner), SYM_PROCESSES (static in process.c,
+#   the process slots), SYM_ISR80H_HANDLER
 #   TASK_REGISTERS_OFFSET, TASK_STATE_OFFSET, TASK_WAKE_OFFSET, TASK_NEXT_OFFSET,
-#   TASK_PROCESS_OFFSET, TASK_DIRECTORY_OFFSET   offsets in struct task
-#   PROCESS_FILENAME_OFFSET                      offset in struct process
+#   TASK_PROCESS_OFFSET, TASK_DIRECTORY_OFFSET, TASK_PREV_OFFSET, TASK_ID_OFFSET   offsets in struct task
+#   PROCESS_FILENAME_OFFSET, PROCESS_ID_OFFSET, PROCESS_TASK_OFFSET  offsets in struct process
+#   FRAME_CS_OFFSET    offset of cs in struct interrupt_frame
+#   MAX_PROCESSES      the number of process slots
 # Statics are not in build/kernel.map, so the kernel objects are linked once more as an ELF.
 # That link uses ld directly while bin/kernel.bin is linked through gcc, so the result is checked
 # against the real link: every global named in build/kernel.map must have the same address in the
 # ELF, and the ELF's loaded bytes must be bin/kernel.bin byte for byte (this covers the statics).
 # Returns 1 if something is missing (a symbol or the struct fields) or the check fails.
 #
-# Only the host uses these: sleep.sh and sleep-idle.sh read jiffies, the task list and struct task
-# through the QEMU monitor and gdbstub while the VM is stopped. The user programs they run get no
+# Only the host uses these: sleep.sh, sleep-idle.sh and guest-state.sh read jiffies, the task list
+# and struct task through the QEMU monitor and gdbstub while the VM is stopped. The user programs
+# they run get no
 # kernel address and never read kernel memory (they time themselves with the tick syscall).
 kernel_symbols() {
     local out="$1" elf="$1/kernel.elf" fix="$1/task-offsets" map=build/kernel.map linked=ok
     SYM_TICKS='' SYM_CURRENT_TASK='' SYM_TASK_HEAD='' SYM_PAUSE='' SYM_KERNEL_CHUNK=''
     TASK_REGISTERS_OFFSET='' TASK_STATE_OFFSET='' TASK_WAKE_OFFSET='' TASK_NEXT_OFFSET=''
     TASK_PROCESS_OFFSET='' TASK_DIRECTORY_OFFSET='' PROCESS_FILENAME_OFFSET=''
+    SYM_TASK_TAIL='' SYM_CURRENT_PROCESS='' SYM_PROCESSES='' SYM_ISR80H_HANDLER=''
+    TASK_PREV_OFFSET='' TASK_ID_OFFSET='' PROCESS_ID_OFFSET='' PROCESS_TASK_OFFSET='' FRAME_CS_OFFSET=''
+    MAX_PROCESSES=''
     i686-elf-ld -L build/config -T kernel/linker.ld --oformat elf32-i386 build/kernelfull.o -o "$elf" ||
         return 1
     i686-elf-nm "$elf" > "$out/kernel-nm.txt"
@@ -31,6 +39,10 @@ kernel_symbols() {
     SYM_TASK_HEAD=$(sym task_head)
     SYM_PAUSE=$(sym IRQ_ON_AND_PAUSE)
     SYM_KERNEL_CHUNK=$(sym kernel_chunk)
+    SYM_TASK_TAIL=$(sym task_tail)
+    SYM_CURRENT_PROCESS=$(sym current_process)
+    SYM_PROCESSES=$(sym processes)
+    SYM_ISR80H_HANDLER=$(sym isr80h_handler)
     echo "  jiffies $SYM_TICKS, current_task $SYM_CURRENT_TASK, task_head $SYM_TASK_HEAD, IRQ_ON_AND_PAUSE $SYM_PAUSE, kernel_chunk $SYM_KERNEL_CHUNK"
 
     # Cross-check with the real link. Map lines "0x<address> <name>" are the global symbols;
@@ -51,7 +63,7 @@ kernel_symbols() {
             echo "$bad" | head -n 10 | sed 's/^/    /'
             linked=bad
         fi
-        for s in current_task task_head IRQ_ON_AND_PAUSE; do
+        for s in current_task task_head task_tail current_process isr80h_handler IRQ_ON_AND_PAUSE; do
             grep -qx "ok $s" "$out/map-check.txt" ||
                 { echo "  ERROR: $s is not at the same address in $map and the relinked kernel"; linked=bad; }
         done
@@ -70,6 +82,7 @@ kernel_symbols() {
     cat > "$fix.c" << 'EOF'
 #include "task/task.h"
 #include "task/process.h"
+#include "idt/idt.h"
 char task_registers_offset[offsetof(struct task, registers) + 1];
 char task_state_offset[offsetof(struct task, state) + 1];
 char task_wake_offset[offsetof(struct task, wake_tick) + 1];
@@ -77,6 +90,12 @@ char task_next_offset[offsetof(struct task, next) + 1];
 char task_process_offset[offsetof(struct task, process) + 1];
 char task_directory_offset[offsetof(struct task, page_directory) + 1];
 char process_filename_offset[offsetof(struct process, filename) + 1];
+char task_prev_offset[offsetof(struct task, prev) + 1];
+char task_id_offset[offsetof(struct task, id) + 1];
+char process_id_offset[offsetof(struct process, id) + 1];
+char process_task_offset[offsetof(struct process, task) + 1];
+char frame_cs_offset[offsetof(struct interrupt_frame, cs) + 1];
+char max_processes[RORTHOX_MAX_PROCESSES + 1];
 EOF
     if i686-elf-gcc -std=gnu99 -ffreestanding -fno-common -I kernel -I build/config -c "$fix.c" -o "$fix.o" \
             > "$fix.log" 2>&1; then
@@ -88,15 +107,29 @@ EOF
         TASK_PROCESS_OFFSET=$(off task_process_offset)
         TASK_DIRECTORY_OFFSET=$(off task_directory_offset)
         PROCESS_FILENAME_OFFSET=$(off process_filename_offset)
+        TASK_PREV_OFFSET=$(off task_prev_offset)
+        TASK_ID_OFFSET=$(off task_id_offset)
+        PROCESS_ID_OFFSET=$(off process_id_offset)
+        PROCESS_TASK_OFFSET=$(off process_task_offset)
+        FRAME_CS_OFFSET=$(off frame_cs_offset)
+        MAX_PROCESSES=$(off max_processes)
     else
         echo "  struct task offsets: the fixture does not compile, see $fix.log"
     fi
     echo "  struct task: registers at $TASK_REGISTERS_OFFSET, state at $TASK_STATE_OFFSET, wake_tick at $TASK_WAKE_OFFSET," \
         "next at $TASK_NEXT_OFFSET, process at $TASK_PROCESS_OFFSET, page_directory at $TASK_DIRECTORY_OFFSET;" \
         "struct process: filename at $PROCESS_FILENAME_OFFSET"
+    echo "  task_tail $SYM_TASK_TAIL, current_process $SYM_CURRENT_PROCESS, processes $SYM_PROCESSES" \
+        "($MAX_PROCESSES slots), isr80h_handler $SYM_ISR80H_HANDLER; struct task: prev at $TASK_PREV_OFFSET," \
+        "id at $TASK_ID_OFFSET; struct process: id at $PROCESS_ID_OFFSET, task at $PROCESS_TASK_OFFSET;" \
+        "struct interrupt_frame: cs at $FRAME_CS_OFFSET"
     [ "$linked" = ok ] &&
         [ -n "$SYM_TICKS" ] && [ -n "$SYM_CURRENT_TASK" ] && [ -n "$SYM_TASK_HEAD" ] && [ -n "$SYM_PAUSE" ] &&
         [ -n "$SYM_KERNEL_CHUNK" ] && [ -n "$TASK_STATE_OFFSET" ] && [ -n "$TASK_WAKE_OFFSET" ] &&
         [ -n "$TASK_REGISTERS_OFFSET" ] && [ -n "$TASK_NEXT_OFFSET" ] && [ -n "$TASK_PROCESS_OFFSET" ] &&
-        [ -n "$TASK_DIRECTORY_OFFSET" ] && [ -n "$PROCESS_FILENAME_OFFSET" ]
+        [ -n "$TASK_DIRECTORY_OFFSET" ] && [ -n "$PROCESS_FILENAME_OFFSET" ] &&
+        [ -n "$SYM_TASK_TAIL" ] && [ -n "$SYM_CURRENT_PROCESS" ] && [ -n "$SYM_PROCESSES" ] &&
+        [ -n "$SYM_ISR80H_HANDLER" ] && [ -n "$TASK_PREV_OFFSET" ] && [ -n "$TASK_ID_OFFSET" ] &&
+        [ -n "$PROCESS_ID_OFFSET" ] && [ -n "$PROCESS_TASK_OFFSET" ] && [ -n "$FRAME_CS_OFFSET" ] &&
+        [ -n "$MAX_PROCESSES" ]
 }

@@ -16,7 +16,8 @@
 #      - it starts "libtest.elf sleeppeer" and runs sleep(1000): that returns 0 after at least
 #        102 ticks;
 #      - every sleep keeps ebx, esi, edi, ebp, esp and the stack word above its argument;
-#      - both programs end, and the shell then still runs blank.elf.
+#      - both programs end (the shell is then the only task and owns the keyboard, seen from the
+#        host as below), and the shell then still runs blank.elf.
 #    The peer runs 250 ticks and calls lt_peer_sample once per new tick. scripts/tests/lib/
 #    sleep_peer.py, attached before the key that starts the sleeps, stops there and looks at the
 #    sleeper's task from the host (task list, task identity, CR3: see that file). At least 10
@@ -25,7 +26,9 @@
 #    sleep(1000)); so the sleeper was really blocked and the peer ran. Right after its sleep(1000)
 #    the sleeper stops once at lt_sleeper_woke: it must be runnable again and past its deadline.
 #    The peer must report every sample acknowledged by the debugger, so the test can't pass
-#    without one.
+#    without one. After that debugger has detached, scripts/tests/lib/guest-state.sh stops the
+#    guest when the shell asks for a key: only the shell may be left, owning the keyboard, and the
+#    screen saved there (never halfway through a print or a scroll) is the one the lines are read from.
 # bin/os.bin itself must not change.
 #
 # Needs python3. Env: HOST_CC=cc   BOOT_TIMEOUT=60   STEP_TIMEOUT=60
@@ -36,7 +39,7 @@ BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 STEP_TIMEOUT="${STEP_TIMEOUT:-60}"
 HOST_CC="${HOST_CC:-cc}"
 . ./scripts/qemu-lib.sh
-. ./scripts/tests/lib/kernel-symbols.sh
+. ./scripts/tests/lib/guest-state.sh
 
 OUT=build/tests/sleep
 PROGRAM=programs/libtest/build/libtest.elf
@@ -64,32 +67,18 @@ check "no AddressSanitizer report"                "$OUT/host-check.log" "Address
 check "host check: every handler case passed"     "$OUT/host-check.log" "sleep host check: 0 of 67 cases failed" line
 
 echo "sleep: kernel symbols"
-if kernel_symbols "$OUT"; then echo "found" > "$OUT/symbols.txt"; else echo "missing" > "$OUT/symbols.txt"; fi
+guest_state_setup "$OUT"
 check "tick counter, current_task and struct task offsets found" "$OUT/symbols.txt" "found" line
 
 hash_before=$(sha256sum bin/os.bin | cut -d' ' -f1)
 cp bin/os.bin "$OUT/sleep.bin"
 mcopy -i "$OUT/sleep.bin" "$PROGRAM" ::libtest.elf
+GDB_DIR=
+cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
+Q_CLEANUP=cleanup
+trap qemu_exit EXIT
 GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
-trap 'rm -rf "$GDB_DIR"' EXIT
 SOCK="$GDB_DIR/gdb"
-
-# wait_count <text> <count> <seconds>: wait until <count> screen lines contain <text>.
-wait_count() {
-    local deadline=$((SECONDS + $3)) n
-    while ((SECONDS < deadline)); do
-        qemu_running || { echo "  QEMU is not running, stopped waiting for \"$1\" x$2"; return 1; }
-        screen_snapshot
-        n=$(grep -cF -- "$1" "$Q_OUT/screen.txt" 2> /dev/null || true)
-        if [ "${n:-0}" -ge "$2" ]; then
-            echo "  \"$1\" x$2 on screen after ${SECONDS} s"
-            return 0
-        fi
-        sleep 0.5
-    done
-    echo "  gave up waiting for \"$1\" x$2 after $3 s"
-    return 1
-}
 
 # vm_running <seconds>: wait until the monitor says the VM runs (the debugger's continue is in).
 # QEMU drops key presses while a debugger has the VM stopped. The screen dump after "info status"
@@ -115,8 +104,6 @@ echo "sleep: boot"
 : > "$OUT/samples.txt"
 debugger_status="not run"
 QEMU_FLAGS="-gdb unix:$SOCK,server=on,wait=off" qemu_start "$OUT/sleep.bin" "$OUT"
-# qemu_start sets its own EXIT trap (qemu_kill); keep both.
-trap 'qemu_kill; rm -rf "$GDB_DIR"' EXIT
 if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT"; then
     type_line "libtest.elf sleep"
     if wait_screen "libtest sleep: armed" "$STEP_TIMEOUT"; then
@@ -133,13 +120,16 @@ if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT"; then
         if [ -f "$OUT/peer-ready" ] && vm_running "$STEP_TIMEOUT"; then
             qemu_cmd "sendkey a"
             wait_screen "lt-s: short sleeps" "$STEP_TIMEOUT" && keep
-            # The sleeper wakes while the peer runs on; then both programs end.
-            if wait_screen "lt-s: slept" "$STEP_TIMEOUT" && wait_screen "lt-p: " "$STEP_TIMEOUT" &&
-                wait_count "Process was terminated" 2 "$STEP_TIMEOUT"; then
-                keep
+            # The sleeper wakes while the peer runs on; then both programs end. Their last lines
+            # on screen don't mean they have ended: the rendezvous (after sleep_peer.py has
+            # detached, one debugger at a time) must find the shell alone.
+            if wait_screen_lines "$STEP_TIMEOUT" "regex:(> )?lt-s: slept .*" "regex:(> )?lt-p: ran from .*"; then
                 if wait "$debugger"; then debugger_status=0; else debugger_status=$?; fi
+                guest_state "$SOCK" "$OUT/state-end.txt" end timeout="$STEP_TIMEOUT" owner=first \
+                    screen="$OUT/screen-end.txt" || true
+                cat "$OUT/screen-end.txt" >> "$OUT/screens.txt" 2> /dev/null || true
                 type_line "blank.elf after"
-                wait_count "Process was terminated" 3 "$STEP_TIMEOUT" || true
+                wait_screen_lines "$STEP_TIMEOUT" "line:after" || true
             fi
         fi
         if [ "$debugger_status" = "not run" ]; then
@@ -150,7 +140,6 @@ if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT"; then
 fi
 keep
 qemu_stop || true
-rm -rf "$GDB_DIR"
 echo "exit=$debugger_status" > "$OUT/peer-status.txt"
 
 S="$OUT/screens.txt"
@@ -198,6 +187,10 @@ check "debugger saw every sample of the peer"              "$P" "PASS every_samp
 check "the peer got every sample acknowledged"             "$OUT/acks.txt" "acknowledged" line
 check "the peer ran on 10+ ticks inside the sleep"         "$OUT/peer.txt" "inside" line
 check "the sleeper finished"                               "$S" "libtest sleep: done"
+check "both programs ended: only the shell left"           "$OUT/state-end.txt" "PASS end_task_count" line
+check "stopped at the shell's getkey"                      "$OUT/state-end.txt" "PASS end_rendezvous" line
+check "task list and slots consistent at that stop"        "$OUT/state-end.txt" "PASS end_list_consistent" line
+check "the shell owns the keyboard again"                  "$OUT/state-end.txt" "PASS end_keyboard_owner" line
 check "no FAIL line"                                       "$S" "FAIL" absent
 check "blank.elf started from the shell afterwards"        "$OUT/screen.txt" "after" line
 check "bin/os.bin not changed by the test"                 "$OUT/image.txt" "unchanged" line

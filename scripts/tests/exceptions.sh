@@ -16,13 +16,20 @@
 # fault.elf prints "faulttest: armed" and waits for a key. scripts/tests/lib/exceptions.py catch
 # then breaks at the exception stubs and the test sends the key. It checks the CPU's frame at the
 # stub, the frame interrupt_handler gets and that process_terminate gets the faulting task's process.
-# Then blank.elf must run from the same shell, the task list and process slots must hold only the
-# shell (the same one as before), and the kernel heap must be back where it was, apart from the one
-# block per typed word that the shell keeps.
+# Then scripts/tests/lib/guest-state.sh stops the guest when the shell asks for a key: the task list
+# and process slots must hold only the shell, the same task (same task id: ids only go up, so a
+# shell started again would have a new one) and process as before the fault, and the shell must
+# own the keyboard. So fault.elf is really gone, not just quiet on the screen, and the screen
+# saved at that stop (never halfway through a print or a scroll) must show its end once. The same
+# after "blank.elf recover" has printed "recover", and the kernel heap must be back where it was,
+# apart from the one block per typed word that the shell keeps.
 # Last case, owner: "fault.elf parent" starts "fault.elf child", which owns the keyboard, and then
-# faults itself. Only the parent may end; the child must still get its key and finish.
+# faults itself. When the child asks for its key, only the shell and the child may be left (the
+# parent gone while the child lives) and the child must own the keyboard; then the child must get
+# its key and finish, and the same shell must own the keyboard again.
 #
-# Needs python3 and i686-elf-ld (an ELF copy of the kernel gives the address of the process slots).
+# Needs python3 and the cross tools (lib/kernel-symbols.sh links an ELF copy of the kernel for the
+# address of the process slots and compiles the struct offsets).
 # Env: BOOT_TIMEOUT=60 (seconds to wait for the shell)  STEP_TIMEOUT=20 (each step after)
 #      EXCEPTION_CASES="ud2 int3 cli pf int14 int18 owner"
 #      EXCEPTIONS_NAME=exceptions (test name and build/tests/<name> output directory)
@@ -34,6 +41,7 @@ STEP_TIMEOUT="${STEP_TIMEOUT:-20}"
 CASES="${EXCEPTION_CASES:-ud2 int3 cli pf int14 int18 owner}"
 NAME="${EXCEPTIONS_NAME:-exceptions}"
 . ./scripts/qemu-lib.sh
+. ./scripts/tests/lib/guest-state.sh
 
 OUT=build/tests/$NAME
 PROGRAM=programs/faulttest/build/faulttest.elf
@@ -41,7 +49,7 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 command -v python3 > /dev/null || { echo "$NAME: python3 not found" >&2; exit 1; }
 [ -f "$PROGRAM" ] || { echo "$NAME: $PROGRAM not found, run 'make all' first" >&2; exit 1; }
-i686-elf-ld -L build/config -T kernel/linker.ld --oformat elf32-i386 build/kernelfull.o -o "$OUT/kernel.elf"
+guest_state_setup "$OUT"
 
 # The kernel heap table: one byte per block, 0 = free.
 config_value() {
@@ -69,50 +77,20 @@ free_blocks() {
     return 1
 }
 
-# wait_lines <regex> <count> <seconds>: wait until <count> screen lines match <regex>.
-wait_lines() {
-    local regex="$1" count="$2" deadline=$((SECONDS + $3)) n
-    while ((SECONDS < deadline)); do
-        qemu_running || { echo "  QEMU is not running, stopped waiting for /$regex/ x$count"; return 1; }
-        screen_snapshot
-        n=$(grep -cE -- "$regex" "$Q_OUT/screen.txt" 2> /dev/null || true)
-        if [ "${n:-0}" -ge "$count" ]; then
-            echo "  /$regex/ x$count on screen after ${SECONDS} s"
-            return 0
-        fi
-        sleep 0.5
-    done
-    echo "  gave up waiting for /$regex/ x$count after $3 s"
-    return 1
-}
-
-# wait_prompts <count>: wait until the shell has printed <count> prompts below its banner.
-wait_prompts() {
-    local deadline=$((SECONDS + STEP_TIMEOUT)) n
-    while ((SECONDS < deadline)); do
-        qemu_running || return 1
-        screen_snapshot
-        n=$(sed -n "/${RORTHOX_NAME} v${RORTHOX_VERSION}/,\$p" "$Q_OUT/screen.txt" | tr -cd '>' | wc -c)
-        [ "$n" -ge "$1" ] && return 0
-        sleep 0.5
-    done
-    echo "  gave up waiting for prompt $1"
-    return 1
-}
-
-# debugger <log> <args...>: run exceptions.py, keep its output, return its status.
-debugger() {
-    local log="$1" status
-    shift
-    if python3 -B scripts/tests/lib/exceptions.py "$@" > "$log" 2>&1; then status=0; else status=$?; fi
-    sed 's/^/  /' "$log"
-    return "$status"
-}
-
-list_tasks() {   # list_tasks <tag> <tasks> [options]
+# state <tag> [options]: the guest-state rendezvous (lib/guest-state.sh), results in $D/list-<tag>.txt.
+state() {
     local tag="$1"
     shift
-    debugger "$D/list-$tag.log" list "$SOCK" build/kernel.map "$OUT/kernel.elf" "$D/list-$tag.txt" "$tag" "$@" || true
+    guest_state "$SOCK" "$D/list-$tag.txt" "$tag" timeout="$STEP_TIMEOUT" "$@"
+}
+
+# ended <tag>...: how many of these rendezvous saw a program gone (their task count was right).
+ended() {
+    local tag n=0
+    for tag in "$@"; do
+        grep -qx "PASS ${tag}_task_count" "$D/list-$tag.txt" 2> /dev/null && n=$((n + 1))
+    done
+    echo "$n"
 }
 
 # key_when_running: send a key once the monitor reports the guest running again. The debugger
@@ -137,6 +115,10 @@ image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
 cp bin/os.bin "$OUT/exceptions.bin"
 mcopy -i "$OUT/exceptions.bin" "$PROGRAM" ::fault.elf
+GDB_DIR=
+cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
+Q_CLEANUP=cleanup
+trap qemu_exit EXIT
 GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
 SOCK="$GDB_DIR/gdb"
 
@@ -148,11 +130,10 @@ run_fault() {
     echo "$NAME: $c"
     rm -f "$SOCK" "$D/ready"
     QEMU_FLAGS="-gdb unix:$SOCK,server=on,wait=off" qemu_start "$OUT/exceptions.bin" "$D"
-    if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" && wait_prompts 1 &&
-        before=$(free_blocks); then
-        list_tasks idle 1 save="$D/shell.txt" owner=first
+    if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" &&
+        state idle save="$D/shell.txt" owner=first && before=$(free_blocks); then
         type_line "fault.elf $c"
-        if wait_screen "faulttest: armed" "$STEP_TIMEOUT"; then
+        if wait_screen_lines "$STEP_TIMEOUT" "prompt:faulttest: armed"; then
             python3 -B scripts/tests/lib/exceptions.py catch "$SOCK" build/kernel.map "$D/catch.txt" "$D/ready" "$c" \
                 > "$D/catch.log" 2>&1 &
             local py=$! i
@@ -161,14 +142,12 @@ run_fault() {
             [ -f "$D/ready" ] && { key_when_running || true; }
             if wait "$py"; then status=0; else status=$?; fi
             sed 's/^/  /' "$D/catch.log"
-            if wait_lines 'Process was terminated' 1 "$STEP_TIMEOUT"; then
-                screen_snapshot
-                cp "$Q_OUT/screen.txt" "$D/screen-fault.txt"
+            # fault.elf gone: only the same shell left, and it gets the keys again.
+            if state fault shell="$D/shell.txt" owner=first screen="$D/screen-fault.txt"; then
                 type_line "blank.elf recover"
-                if wait_lines '^recover$' 1 "$STEP_TIMEOUT" && wait_lines 'Process was terminated' 2 "$STEP_TIMEOUT" &&
-                    wait_prompts 3; then
+                if wait_screen_lines "$STEP_TIMEOUT" "line:recover" &&
+                    state after shell="$D/shell.txt" owner=first; then
                     after=$(free_blocks) || after=
-                    list_tasks after 1 shell="$D/shell.txt" owner=first
                 fi
             fi
         fi
@@ -176,9 +155,9 @@ run_fault() {
     qemu_stop || true
     echo "exit=$status" > "$D/catch-status.txt"
     {
-        echo "terminated=$(grep -cF "Process was terminated" "$D/screen.txt" 2> /dev/null || true)"
+        # Counted on the screen saved at the rendezvous: nothing is printing or scrolling there.
         echo "fault terminated=$(grep -cF "Process was terminated" "$D/screen-fault.txt" 2> /dev/null || true)"
-        echo "banners=$(grep -cF "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$D/screen.txt" 2> /dev/null || true)"
+        echo "ended=$(ended fault after)"
         [ -n "$before" ] && [ -n "$after" ] && echo "heap kept=$((before - after))"
     } > "$D/state.txt"
     echo "  free blocks before ${before:-?}, after ${after:-?} ($WORDS kept for typed words)"
@@ -198,12 +177,20 @@ run_fault() {
     check "$c: at the fault.elf instruction for this case"          "$r" "PASS faulting_instruction" line
     check "$c: interrupt_handler got the right vector and frame"    "$r" "PASS handler_frame" line
     check "$c: process_terminate on the faulting task's process"    "$r" "PASS process_terminated" line
+    check "$c: fault: stopped at the same shell's getkey"           "$D/list-fault.txt" "PASS fault_rendezvous" line
+    check "$c: fault: task list and slots consistent"               "$D/list-fault.txt" "PASS fault_list_consistent" line
+    check "$c: fault: fault.elf gone, only one task left"           "$D/list-fault.txt" "PASS fault_task_count" line
+    check "$c: fault: the shell owns the keyboard"                  "$D/list-fault.txt" "PASS fault_keyboard_owner" line
     check "$c: fault.elf ended once"                                "$s" "fault terminated=1" line
     check "$c: fault.elf was not resumed"                           "$D/screen.txt" "faulttest: survived" absent
     check "$c: blank.elf ran from the shell afterwards"             "$D/screen.txt" "recover" line
-    check "$c: two programs ended in total"                         "$s" "terminated=2" line
-    check "$c: shell not started again"                             "$s" "banners=1" line
+    check "$c: two programs ended in total (each seen gone)"        "$s" "ended=2" line
+    check "$c: shell not started again by the fault (same task id)" "$D/list-fault.txt" "PASS fault_same_shell" line
+    check "$c: idle: stopped at the shell's getkey"                 "$D/list-idle.txt" "PASS idle_rendezvous" line
     check "$c: idle: task list and slots consistent"                "$D/list-idle.txt" "PASS idle_list_consistent" line
+    check "$c: idle: only the shell"                               "$D/list-idle.txt" "PASS idle_task_count" line
+    check "$c: idle: the shell owns the keyboard"                   "$D/list-idle.txt" "PASS idle_keyboard_owner" line
+    check "$c: after: stopped at the same shell's getkey"           "$D/list-after.txt" "PASS after_rendezvous" line
     check "$c: after: task list and slots consistent"               "$D/list-after.txt" "PASS after_list_consistent" line
     check "$c: after: only one task left"                           "$D/list-after.txt" "PASS after_task_count" line
     check "$c: after: it is the same shell task and process"        "$D/list-after.txt" "PASS after_same_shell" line
@@ -220,29 +207,26 @@ run_owner() {
     echo "$NAME: owner"
     rm -f "$SOCK"
     QEMU_FLAGS="-gdb unix:$SOCK,server=on,wait=off" qemu_start "$OUT/exceptions.bin" "$D"
-    if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" && wait_prompts 1 &&
-        before=$(free_blocks); then
-        list_tasks idle 1 save="$D/shell.txt" owner=first
+    if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" &&
+        state idle save="$D/shell.txt" owner=first && before=$(free_blocks); then
         type_line "fault.elf parent"
-        if wait_screen "faulttest child: ready" "$STEP_TIMEOUT" && wait_screen "faulttest parent: faulting" "$STEP_TIMEOUT" &&
-            wait_lines 'Process was terminated' 1 "$STEP_TIMEOUT"; then
-            screen_snapshot
-            cp "$Q_OUT/screen.txt" "$D/screen-parent-gone.txt"
-            list_tasks child 2 shell="$D/shell.txt" owner=last
+        # The child asks for its key: the parent must be gone by then, the child still there.
+        if wait_screen_lines "$STEP_TIMEOUT" "prompt:faulttest child: ready" "prompt:faulttest parent: faulting" &&
+            state child at=last tasks=2 shell="$D/shell.txt" owner=last screen="$D/screen-parent-gone.txt"; then
             qemu_cmd "sendkey k"
-            if wait_screen "faulttest child: done" "$STEP_TIMEOUT" && wait_lines 'Process was terminated' 2 "$STEP_TIMEOUT"; then
+            if wait_screen_lines "$STEP_TIMEOUT" "prompt:faulttest child: done" &&
+                state back shell="$D/shell.txt" owner=first; then
                 type_line "blank.elf recover"
-                if wait_lines '^recover$' 1 "$STEP_TIMEOUT" && wait_lines 'Process was terminated' 3 "$STEP_TIMEOUT" &&
-                    wait_prompts 3; then
+                if wait_screen_lines "$STEP_TIMEOUT" "line:recover" &&
+                    state after shell="$D/shell.txt" owner=first; then
                     after=$(free_blocks) || after=
-                    list_tasks after 1 shell="$D/shell.txt" owner=first
                 fi
             fi
         fi
     fi
     qemu_stop || true
     {
-        echo "terminated=$(grep -cF "Process was terminated" "$D/screen.txt" 2> /dev/null || true)"
+        echo "ended=$(ended child back after)"
         echo "parent gone terminated=$(grep -cF "Process was terminated" "$D/screen-parent-gone.txt" 2> /dev/null || true)"
         echo "parent gone done=$(grep -cF "faulttest child: done" "$D/screen-parent-gone.txt" 2> /dev/null || true)"
         [ -n "$before" ] && [ -n "$after" ] && echo "heap kept=$((before - after))"
@@ -250,18 +234,29 @@ run_owner() {
     echo "  free blocks before ${before:-?}, after ${after:-?} ($WORDS kept for typed words)"
 
     local s="$D/state.txt"
-    check "owner: child started and is waiting"                     "$D/screen.txt" "faulttest child: ready"
-    check "owner: parent reached its fault"                         "$D/screen.txt" "faulttest parent: faulting"
+    check "owner: idle: stopped at the shell's getkey"              "$D/list-idle.txt" "PASS idle_rendezvous" line
+    check "owner: idle: task list and slots consistent"            "$D/list-idle.txt" "PASS idle_list_consistent" line
+    check "owner: idle: only the shell"                            "$D/list-idle.txt" "PASS idle_task_count" line
+    check "owner: idle: the shell owns the keyboard"               "$D/list-idle.txt" "PASS idle_keyboard_owner" line
+    check "owner: child started and is waiting"                     "$D/screen-parent-gone.txt" "faulttest child: ready"
+    check "owner: parent reached its fault"                         "$D/screen-parent-gone.txt" "faulttest parent: faulting"
     check "owner: parent ended while the child waited"              "$s" "parent gone terminated=1" line
     check "owner: (the child had not finished yet)"                 "$s" "parent gone done=0" line
     check "owner: parent was not resumed"                           "$D/screen.txt" "faulttest: survived" absent
+    check "owner: stopped at the child's getkey"                    "$D/list-child.txt" "PASS child_rendezvous" line
     check "owner: list and slots hold shell and child"              "$D/list-child.txt" "PASS child_list_consistent" line
     check "owner: two tasks left after the parent's fault"          "$D/list-child.txt" "PASS child_task_count" line
     check "owner: the shell is still the first task"                "$D/list-child.txt" "PASS child_same_shell" line
     check "owner: the child still owns the keyboard"                "$D/list-child.txt" "PASS child_keyboard_owner" line
     check "owner: child got its key and finished"                   "$D/screen.txt" "faulttest child: done"
+    check "owner: back: stopped at the same shell's getkey"         "$D/list-back.txt" "PASS back_rendezvous" line
+    check "owner: back: task list and slots consistent"            "$D/list-back.txt" "PASS back_list_consistent" line
+    check "owner: back: child gone, the shell owns the keyboard"    "$D/list-back.txt" "PASS back_keyboard_owner" line
+    check "owner: back: it is the same shell task and process"      "$D/list-back.txt" "PASS back_same_shell" line
+    check "owner: back: only one task left"                         "$D/list-back.txt" "PASS back_task_count" line
     check "owner: blank.elf ran from the shell afterwards"          "$D/screen.txt" "recover" line
-    check "owner: three programs ended in total"                    "$s" "terminated=3" line
+    check "owner: three programs ended in total (each seen gone)"  "$s" "ended=3" line
+    check "owner: after: stopped at the same shell's getkey"        "$D/list-after.txt" "PASS after_rendezvous" line
     check "owner: after: task list and slots consistent"            "$D/list-after.txt" "PASS after_list_consistent" line
     check "owner: after: only the same shell left"                  "$D/list-after.txt" "PASS after_same_shell" line
     check "owner: after: only one task left"                        "$D/list-after.txt" "PASS after_task_count" line
@@ -276,9 +271,9 @@ for c in $CASES; do
         *) run_fault "$c" ;;
     esac
 done
-rm -rf "$GDB_DIR"
 
 hash_after=$(image_hash)
 [ "$hash_before" = "$hash_after" ] && echo "unchanged" > "$OUT/image.txt" || echo "changed" > "$OUT/image.txt"
+check "kernel symbols for the rendezvous found" "$OUT/symbols.txt" "found" line
 check "bin/os.bin not changed by the test" "$OUT/image.txt" "unchanged" line
 finish "$NAME"
