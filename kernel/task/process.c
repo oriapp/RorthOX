@@ -58,9 +58,20 @@ static int process_find_free_allocation_index(struct process *process)
     return res;
 }
 
+static void *process_zalloc_user(size_t size)
+{
+    if (!size || size > UINT32_MAX - (PAGING_PAGE_SIZE - 1U))
+    {
+        return NULL;
+    }
+
+    size = ((size + PAGING_PAGE_SIZE - 1U) / PAGING_PAGE_SIZE) * PAGING_PAGE_SIZE;
+    return kzalloc(size);
+}
+
 void *process_malloc(struct process *process, size_t size)
 {
-    void *ptr = kzalloc(size);
+    void *ptr = process_zalloc_user(size);
     if (!ptr)
     {
         goto out_err;
@@ -493,7 +504,7 @@ static int process_load_binary(const char *filename, struct process *process)
         goto out;
     }
 
-    program_data_ptr = kzalloc(stat.filesize);
+    program_data_ptr = process_zalloc_user(stat.filesize);
     if (!program_data_ptr)
     {
         res = -ENOMEM;

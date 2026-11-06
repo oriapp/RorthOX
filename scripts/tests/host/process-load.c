@@ -159,7 +159,8 @@ static int check_success(const char *what, const struct host_snapshot *before, s
         return 1;
     }
     if (is_elf ? (out->filetype != PROCESS_FILETYPE_ELF || !kalloc_is_live(out->elf_file))
-               : (out->filetype != PROCESS_FILETYPE_BINARY || kalloc_size(out->ptr) != (long)sizeof(flat)))
+               : (out->filetype != PROCESS_FILETYPE_BINARY || out->size != sizeof(flat) ||
+                  kalloc_size(out->ptr) != (long)((sizeof(flat) + PAGING_PAGE_SIZE - 1) / PAGING_PAGE_SIZE * PAGING_PAGE_SIZE)))
     {
         say("%s: the program data is not owned by the process\n", what);
         return 1;

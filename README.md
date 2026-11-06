@@ -28,7 +28,8 @@ Everything in this list is checked by `make test` or was run in QEMU.
   in kernel code stops the machine with a panic screen showing the reason and `file:line`, and one line on the debug
   port.
 - **Memory:** a block allocator for the kernel heap (100 MiB, 4 KiB blocks) that refuses requests it can't satisfy, and
-  one paging directory per process. Programs that exit give their memory back.
+  one paging directory per process. User `malloc` clears every byte of its backing pages, including trailing padding.
+  Programs that exit give their memory back.
 - **Disk:** ATA PIO (LBA28) with polling and status checks: reads, writes (WRITE SECTORS), FLUSH CACHE, and IDENTIFY
   DEVICE to find out whether and how far the disk can be written.
 - **FAT16:** a path parser (`0:/dir/file`), a small VFS and a FAT16 driver with 8.3 names, subdirectories and cluster
@@ -39,7 +40,9 @@ Everything in this list is checked by `make test` or was run in QEMU.
   16 handles, which are closed when it exits or faults. A file written this way stays on the disk image and can be
   read back after a reboot, and a program copied this way can be run from the shell.
 - **Programs:** ELF32 executables (each load segment gets its own zeroed memory, mapped writable only when the segment
-  is) and flat binaries up to 1 MiB, loaded at 0x400000 and run in ring 3 with their own 16 KiB stack.
+  is) and flat binaries up to 1 MiB, loaded at 0x400000 and run in ring 3 with their own 16 KiB stack. Program page
+  padding is zeroed before the program runs. Checked syscall copies still accept only the requested allocation bytes,
+  raw file bytes, ELF segment bytes and the stack, not page padding. This does not provide process isolation yet.
 - **Tasks:** 12 process slots, a round-robin task switch on every timer tick, command-line arguments passed to
   `main(argc, argv)`.
 - **Sleeping:** a program can call `sleep(milliseconds)` (syscall 12). Only that program blocks: the scheduler skips

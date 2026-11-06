@@ -5,6 +5,7 @@
 #include "config.h"
 #include "status.h"
 #include "memory/memory.h"
+#include "memory/paging/paging.h"
 #include "task/process.h"
 #include "loader/formats/elfloader.h"
 
@@ -17,7 +18,9 @@ static int requests;
 void *__real_kzalloc(size_t);
 void *__wrap_kzalloc(size_t size)
 {
-    if (watched && size == watched) requests++;
+    if (watched && (size == watched ||
+        (watched <= UINT32_MAX - (PAGING_PAGE_SIZE - 1U) &&
+         size == (watched + PAGING_PAGE_SIZE - 1U) / PAGING_PAGE_SIZE * PAGING_PAGE_SIZE))) requests++;
     /* Extreme advertised lengths must not exhaust the host or mask ordering. */
     if (size > sizeof(content)) return 0;
     return __real_kzalloc(size);
@@ -68,6 +71,7 @@ static int one(int n)
     else if (!rc)
     {
         if (n < 11 && (out->filetype != PROCESS_FILETYPE_BINARY || out->size != lengths[n] ||
+                      kalloc_size(out->ptr) != (lengths[n] + PAGING_PAGE_SIZE - 1U) / PAGING_PAGE_SIZE * PAGING_PAGE_SIZE ||
                       memcmp(out->ptr, content, lengths[n]))) bad = 1;
         if (n == 11 && (out->filetype != PROCESS_FILETYPE_ELF ||
                        memcmp(out->elf_file->elf_memory, content, WINDOW+1))) bad = 1;

@@ -439,7 +439,9 @@ static int flat_case(const char *what)
     struct process *out = untouched;
     int res = process_load_for_slot("0:/flat.bin", &out, 1);
     if (res != 0 || out == untouched || !out || out->filetype != PROCESS_FILETYPE_BINARY ||
-        kalloc_size(out->ptr) != file_size || memcmp(out->ptr, file, file_size) != 0)
+        out->size != file_size ||
+        kalloc_size(out->ptr) != (file_size + PAGING_PAGE_SIZE - 1) / PAGING_PAGE_SIZE * PAGING_PAGE_SIZE ||
+        memcmp(out->ptr, file, file_size) != 0)
     {
         say("%s: returned %d, not loaded as a flat binary\n", what, res);
         return 1;
