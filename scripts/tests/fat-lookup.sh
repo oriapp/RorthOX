@@ -16,16 +16,20 @@
 #
 # Host check (scripts/tests/host/fat-lookup.c): the real file.c, pparser.c, fat16.c and streamer.c
 # open and read these files and seek in seek.bin and empty.bin; see that file for the cases.
-# QEMU (deleted image): the shell starts later.elf and ldir/later.elf. bin/os.bin must not change.
+# QEMU (deleted image): the shell starts later.elf and ldir/later.elf. After each one,
+# scripts/tests/lib/guest-state.sh stops the guest at the shell's next key request: the program
+# has ended, the shell is the same task and gets the keys again. bin/os.bin must not change.
 #
-# Env: HOST_CC=cc   BOOT_TIMEOUT=60   RUN_TIMEOUT=60
+# Needs python3. Env: HOST_CC=cc   BOOT_TIMEOUT=60   RUN_TIMEOUT=60   STATE_TIMEOUT=20 (for each rendezvous)
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 HOST_CC="${HOST_CC:-cc}"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-60}"
+STATE_TIMEOUT="${STATE_TIMEOUT:-20}"
 . ./scripts/qemu-lib.sh
+. ./scripts/tests/lib/guest-state.sh
 
 OUT=build/tests/fat-lookup
 BLANK_ELF=programs/blank/build/blank.elf
@@ -41,22 +45,6 @@ rm -f "$OUT"/host-* "$OUT"/*.txt "$OUT"/*.bin "$OUT"/*.log "$OUT"/*.img
 # of a program's first line).
 count_lines() {
     awk -v t="$1" '$0 == t || $0 == "> " t { n++ } END { print n + 0 }' "$2" 2> /dev/null || echo 0
-}
-
-# Wait until <n> screen lines are <text> (see count_lines).
-wait_lines() {
-    local text="$1" n="$2" deadline=$((SECONDS + $3))
-    while ((SECONDS < deadline)); do
-        qemu_running || { echo "  QEMU is not running, stopped waiting for \"$text\""; return 1; }
-        screen_snapshot
-        if [ "$(count_lines "$text" "$Q_OUT/screen.txt")" -ge "$n" ]; then
-            echo "  \"$text\" x$n on screen after ${SECONDS} s"
-            return 0
-        fi
-        sleep 0.5
-    done
-    echo "  gave up waiting for \"$text\" x$n after $3 s"
-    return 1
 }
 
 $FATIMG info bin/os.bin > "$OUT/geometry.txt"
@@ -152,27 +140,56 @@ echo "exit=$host_status" > "$OUT/host-status.txt"
 check "host check built and exited with status 0"  "$OUT/host-status.txt" "exit=0" line
 check "host check: every lookup and seek case passed" "$OUT/host-check.log" "fat-lookup host check: 0 of 10 cases failed" line
 
-qemu_start "$DELETED" "$OUT"
-if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT"; then
+echo "fat-lookup: kernel symbols"
+guest_state_setup "$OUT"
+GDB_DIR=
+cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
+Q_CLEANUP=cleanup
+trap qemu_exit EXIT
+GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+SOCK="$GDB_DIR/gdb"
+
+# state <tag> [options]: the guest-state rendezvous at the shell's key request, the shell alone.
+state() {
+    local tag="$1"
+    shift
+    guest_state "$SOCK" "$OUT/state-$tag.txt" "$tag" timeout="$STATE_TIMEOUT" owner=first "$@"
+}
+
+QEMU_FLAGS="-gdb unix:$SOCK,server=on,wait=off" qemu_start "$DELETED" "$OUT"
+if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" && state boot save="$OUT/shell.txt" screen="$OUT/screen-boot.txt"; then
     type_line "later.elf root"
-    if wait_lines "root" 1 "$RUN_TIMEOUT" && wait_lines "Process was terminated" 1 "$RUN_TIMEOUT"; then
+    if wait_screen_lines "$RUN_TIMEOUT" "prompt:root" && state root shell="$OUT/shell.txt" screen="$OUT/screen-root.txt"; then
         type_line "ldir/later.elf sub"
-        if wait_lines "sub" 1 "$RUN_TIMEOUT"; then
-            wait_lines "Process was terminated" 2 "$RUN_TIMEOUT" || true
-        fi
+        wait_screen_lines "$RUN_TIMEOUT" "prompt:sub" &&
+            state sub shell="$OUT/shell.txt" screen="$OUT/screen-end.txt" || true
     fi
 fi
 qemu_stop || true
+# Counted on the screens saved at the rendezvous after each program: nothing is printing or scrolling there.
 {
-    echo "root=$(count_lines root "$Q_OUT/screen.txt")"
-    echo "sub=$(count_lines sub "$Q_OUT/screen.txt")"
+    echo "root=$(count_lines root "$OUT/screen-root.txt")"
+    echo "sub=$(count_lines sub "$OUT/screen-end.txt")"
 } > "$OUT/counts.txt"
 
 check "kernel reached the end of init (debugcon)"   "$OUT/debugcon.log" "Thats cool"
 check "no kernel panic (debugcon)"                  "$OUT/debugcon.log" "PANIC" absent
-check "shell started (banner on screen)"            "$OUT/screen.txt"   "${RORTHOX_NAME} v${RORTHOX_VERSION}"
+check "shell started (banner on screen)"            "$OUT/screen-boot.txt" "${RORTHOX_NAME} v${RORTHOX_VERSION}"
 check "later.elf after a deleted root slot started" "$OUT/counts.txt"   "root=1" line
 check "ldir/later.elf after a deleted slot started" "$OUT/counts.txt"   "sub=1" line
+check "kernel symbols for the rendezvous found"     "$OUT/symbols.txt"  "found" line
+# stop_checks <tag> <label>: every check of one rendezvous (lib/guest-state.sh).
+stop_checks() {
+    local f="$OUT/state-$1.txt"
+    check "$2: stopped at the shell's getkey"            "$f" "PASS $1_rendezvous" line
+    check "$2: task list and slots consistent"          "$f" "PASS $1_list_consistent" line
+    check "$2: the shell alone"                          "$f" "PASS $1_task_count" line
+    check "$2: the shell owns the keyboard"             "$f" "PASS $1_keyboard_owner" line
+    [ "$1" = boot ] || check "$2: the same shell task, process and id" "$f" "PASS $1_same_shell" line
+}
+stop_checks boot "boot"
+stop_checks root "later.elf ended"
+stop_checks sub  "ldir/later.elf ended"
 
 [ "$(sha256sum bin/os.bin | cut -d' ' -f1)" = "$hash_before" ] && echo unchanged > "$OUT/image.txt" || echo changed > "$OUT/image.txt"
 check "bin/os.bin not changed by the test"  "$OUT/image.txt"  "unchanged" line
