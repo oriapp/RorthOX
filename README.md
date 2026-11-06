@@ -394,8 +394,8 @@ qemu-system-i386 -m 128 -drive file=bin/os.bin,format=raw,index=0,media=disk \
 make test
 ```
 
-This builds everything and runs 63 tests (`scripts/smoke.sh` plus every `scripts/tests/*.sh`); it keeps going after a
-failure and prints a summary (`63 passed, 0 failed, 0 skipped`). A full run takes about 12 minutes. `make smoke`
+This builds everything and runs 64 tests (`scripts/smoke.sh` plus every `scripts/tests/*.sh`); it keeps going after a
+failure and prints a summary (`64 passed, 0 failed, 0 skipped`). A full run takes about 12 minutes. `make smoke`
 runs only the smoke test, and `./scripts/run-tests.sh scripts/tests/panic.sh` runs single tests.
 
 The tests boot RorthOX headless in QEMU and drive it through the QEMU monitor: they type with `sendkey`, read the
@@ -418,6 +418,7 @@ where it matters) to check one function against every input. Tests that need ext
 | Sleeping | `sleep`, `sleep-idle`, `task-list`, `pit`, `clock` | `sleep(0)` returns 0, negative and too-big values return -2; a sleep lasts at least `ceil(ms / 10) + 2` ticks while another program keeps running, then returns 0 with registers and stack unchanged; sleeping tasks are never picked, every due sleeper wakes on its tick (also across the 2^32 wrap of the tick counter), and a freed sleeper leaves nothing behind; with every task asleep the CPU sits in `hlt` in ring 0 with interrupts on and the kernel's page directory, a key or an NMI doesn't wake the sleeper (the key is read after it wakes), and the idle stack doesn't grow; `rorthox_get_ticks()` goes up as ticks arrive, returns every value unchanged (also with the high bit set) and reads nothing from the user stack, not even with a garbage `esp` |
 | Console, keyboard, user library | `tty-scroll`, `tty-backspace`, `printc`, `formatting`, `keyboard-burst`, `keyboard-queue`, `keyboard-scancode`, `keyboard-symbols`, `keyboard-extended`, `readline`, `readline-edit`, `strtok` | scrolling and backspace; colours, and the key and cursor syscalls pass their values whole; bounded formatting; no lost keys; a full key queue keeps unread keys and every key value comes back unchanged; the decoder for every key with Shift, Caps and Num Lock, plus the E0/E1 sequences (fake shifts, Print Screen, Pause); the special keys and Num Lock as QEMU sends them; cursor moves stay on the page and change no text; line editing in the middle of a line, across a row edge and while the screen scrolls; `strtok` |
 
+`ci-annotations` checks that CI names failing tests in error annotations, including escaped failure output, without QEMU.
 `debugger-step` checks the tests' own gdbstub helper against a fake stub, without QEMU: QEMU can report a single
 step as finished without having run the instruction, so stepping off a breakpoint is retried a few times and then
 fails instead of hitting the same breakpoint twice.
@@ -428,7 +429,8 @@ is optional: without it `fat-write` and `file-syscalls` say they skip that one c
 
 CI (`.github/workflows/build.yml`) installs the packages including GRUB and `dosfstools`, builds the toolchain
 (cached), runs `make all iso` and `RORTHOX_REQUIRE_ISO=1 make test` on Ubuntu 24.04 for every push to `main` and
-every pull request, and keeps the disk image, the ISO and the test output as artifacts.
+every pull request, and keeps the disk image, the ISO and the test output as artifacts. Failing tests show up as error
+annotations on the CI run.
 
 ## Project layout
 
