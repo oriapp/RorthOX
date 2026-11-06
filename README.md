@@ -45,7 +45,9 @@ Everything in this list is checked by `make test` or was run in QEMU.
   raw file bytes, ELF segment bytes and the stack, not page padding.
 - **Process memory isolation:** ring 3 can access only its own program pages, stack pages and live allocation pages.
   Kernel memory and other processes' backing pages are supervisor-only. Permissions work in 4 KiB pages, so a program
-  can access its own zeroed page padding directly, though syscalls reject that padding. CR0.WP is still pending.
+  can access its own zeroed page padding directly, though syscalls reject that padding. CR0.WP is on, so the kernel
+  also faults when it writes to a read-only mapping, such as a program's read-only ELF pages. (Syscalls don't write
+  through program mappings at all: their copies check the target's permissions first and refuse read-only memory.)
 - **Tasks:** 12 process slots, a round-robin task switch on every timer tick, command-line arguments passed to
   `main(argc, argv)`.
 - **Sleeping:** a program can call `sleep(milliseconds)` (syscall 12). Only that program blocks: the scheduler skips
@@ -462,10 +464,11 @@ iso.sh             make iso with the cross compiler on the PATH
 RorthOX is not a secure system. Process page permissions and checked syscalls limit memory access, but they do not
 isolate every resource or protect against every kernel bug.
 
-- **Kernel memory protection is incomplete.** CR0.WP is still off; enabling supervisor write protection is the next
-  step (5F). Kernel identity aliases remain writable, even for physical backing of read-only ELF pages. There is no
-  SMEP to stop kernel execution from user pages, and no NX. Page 0 is present for ring 0, so a kernel NULL dereference
-  is not caught by paging. `malloc` returns physical heap addresses; the layout is not hidden.
+- **Kernel memory protection is incomplete.** CR0.WP is on, but it only covers the mapping the kernel writes
+  through: kernel identity aliases remain writable, even for physical backing of read-only ELF pages. There is no
+  SMEP to stop kernel execution from user pages, no SMAP to stop kernel reads of them, and no NX. Kernel code is
+  writable too. Page 0 is present for ring 0, so a kernel NULL dereference is not caught by paging. `malloc` returns
+  physical heap addresses; the layout is not hidden.
   Kernel memory and other processes' memory stay mapped (supervisor-only) in every process, so nothing guards
   against speculative-execution reads like Meltdown.
   The IDT gates and the TSS descriptor are DPL 0, except the syscall and the `int3`/`into` debugging traps, so a program
@@ -532,7 +535,6 @@ isolate every resource or protect against every kernel bug.
 
 Parts that are started but not finished:
 
-- **Supervisor write protection:** turn on CR0.WP (5F); user-page isolation is in place.
 - **Real hardware:** never tried.
 
 ## Licence
