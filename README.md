@@ -397,7 +397,8 @@ runs only the smoke test, and `./scripts/run-tests.sh scripts/tests/panic.sh` ru
 
 The tests boot RorthOX headless in QEMU and drive it through the QEMU monitor: they type with `sendkey`, read the
 screen straight from video memory and wait for text instead of sleeping. Some stop the CPU through QEMU's gdbstub to
-check registers and memory, and some compile the real kernel source with the host C compiler (with AddressSanitizer
+check registers and memory (the out-of-memory test programs get their copies of the kernel's heap table that way: no
+test program reads kernel memory itself), and some compile the real kernel source with the host C compiler (with AddressSanitizer
 where it matters) to check one function against every input. Tests that need extra programs (`programs/*test*`,
 `programs/syscheck` and so on) add them to a copy of `bin/os.bin`, never to the real image. Output goes to
 `build/smoke/` and `build/tests/<name>/`.

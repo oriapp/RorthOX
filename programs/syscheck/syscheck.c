@@ -47,12 +47,10 @@ static int arguments_test(int argc, char **argv)
     int unchanged = same(readonly, before, 16);
     printf("syscheck: readonly %i unchanged %i\n", ro, unchanged);
     bad |= ro != -2 || !unchanged;
-    volatile unsigned char *outside = (void *)0x800000;
-    for (int i = 0; i < 16; i++) before[i] = outside[i];
-    int unowned = get_arguments((void *)outside);
-    unchanged = same(outside, before, 16);
-    printf("syscheck: outside %i unchanged %i\n", unowned, unchanged);
-    bad |= unowned != -2 || !unchanged;
+    /* Memory the program doesn't own: the test script compares its physical bytes before and after. */
+    int unowned = get_arguments((void *)0x800000);
+    printf("syscheck: outside %i\n", unowned);
+    bad |= unowned != -2;
     /* Only four of eight bytes are owned: refusal must not store argc first. */
     unsigned char *tiny = malloc(4);
     if (!tiny) return 1;

@@ -5,28 +5,29 @@
  * checked copy that needs no kernel heap. So with the heap full they must still work: print the
  * text and return 0, and never print whatever a kernel buffer held before.
  *
- * The program leaves exactly one free heap block and prints a line that ends up in the kernel's
- * print buffer ("printoom: last good line"). Then it takes that block too, checks from the heap
- * table that no block is free, and calls print and printc with other text. Both texts must show,
- * and no second copy of the last good line. Then it frees everything and prints the
- * syscall results. (Before the checked copy, the copy borrowed a heap block and failed here.)
+ * The program leaves exactly one free heap block and prints a line ("printoom: last good line").
+ * Then it takes that block too, checks that no block is free, and calls print and printc with
+ * other text. Both texts must show, and no second copy of the last good line. Then it frees
+ * everything and prints the syscall results. (Before the checked copy, the copy borrowed a heap
+ * block and failed here.)
  *
- * The free blocks are counted straight from the kernel's heap table at RORTHOX_HEAP_TABLE_ADDRESS.
- * That only works because user programs can read all memory today; it is a test-only shortcut.
+ * The heap table is kernel memory, so the free blocks are counted in copies of it that the test
+ * script's debugger writes into this program (../heapsnapshot/heap_snapshot.h). The copies right
+ * before print and printc are checked by the debugger when the wrapper is called: the heap table
+ * must still be that copy, with no block free.
  *
  * It prints "printoom: ready" and waits for a key, so the test script can make sure the shell is
- * idle first. Ends with "printoom: PASS" or "printoom: FAIL ..." lines, then "printoom: done".
- * No globals: the loader doesn't map .bss.
+ * idle and the debugger runs first. Ends with "printoom: PASS" or "printoom: FAIL ..." lines,
+ * then "printoom: done".
  */
 #include "rorthox.h"
 #include "stdlib.h"
 #include "string.h"
 #include "config.h"
 #include "status.h"
+#include "../heapsnapshot/heap_snapshot.h"
 
 #define BLOCK RORTHOX_HEAP_BLOCK_SIZE
-#define TOTAL_BLOCKS (RORTHOX_HEAP_SIZE_BYTES / RORTHOX_HEAP_BLOCK_SIZE)
-#define TABLE ((const volatile unsigned char *)RORTHOX_HEAP_TABLE_ADDRESS)
 #define MAX_PLUGS 64
 
 // The same wrappers as print and printc, declared with the int the syscall leaves in eax.
@@ -45,34 +46,10 @@ static void say(const char *text, int a, int b)
     print(line);
 }
 
-static int count_free(void)
+// A fresh copy of the heap table, then the number of free blocks in it; -1 without a copy.
+static int count_free(void *wrapper)
 {
-    int n = 0;
-    for (int i = 0; i < TOTAL_BLOCKS; i++)
-    {
-        if (TABLE[i] == 0)
-        {
-            n++;
-        }
-    }
-    return n;
-}
-
-// Find the free run starting at or after block *start. Returns its length, 0 if there is none.
-static int next_run(int *start)
-{
-    int i = *start;
-    while (i < TOTAL_BLOCKS && TABLE[i] != 0)
-    {
-        i++;
-    }
-    int j = i;
-    while (j < TOTAL_BLOCKS && TABLE[j] == 0)
-    {
-        j++;
-    }
-    *start = i;
-    return j - i;
+    return heap_snapshot_before(wrapper) < 0 ? -1 : heap_snapshot_free();
 }
 
 int main(int argc, char **argv)
@@ -87,13 +64,21 @@ int main(int argc, char **argv)
     rorthox_getkeyblock();
 
     // Fill every free run but the last one exactly (first fit takes the lowest run that is big
-    // enough), then fill the last run up to one block.
+    // enough), then fill the last run up to one block. Every step looks at a fresh copy.
     int start = 0;
-    int length = next_run(&start);
-    while (length > 0)
+    int length = 0;
+    if (heap_snapshot() < 0)
+    {
+        setup = 7;
+    }
+    else
+    {
+        length = heap_snapshot_next_run(&start);
+    }
+    while (!setup && length > 0)
     {
         int after = start + length;
-        int next_length = next_run(&after);
+        int next_length = heap_snapshot_next_run(&after);
         if (next_length == 0)
         {
             break;
@@ -111,6 +96,11 @@ int main(int argc, char **argv)
             break;
         }
         plug_count++;
+        if (heap_snapshot() < 0)
+        {
+            setup = 7;
+            break;
+        }
         start = after;
         length = next_length;
     }
@@ -126,7 +116,7 @@ int main(int argc, char **argv)
             setup = 4;
         }
     }
-    if (!setup && count_free() != 1)
+    if (!setup && count_free(0) != 1)
     {
         setup = 5;
     }
@@ -134,12 +124,14 @@ int main(int argc, char **argv)
     int print_res = 1;
     int printc_res = 1;
     int free_blocks = -1;
+    int after_print = -1;
+    int after_printc = -1;
     if (!setup)
     {
-        // Borrows the last block and gives it back; the text stays in the kernel's buffer.
         print("printoom: last good line\n");
         last = malloc(BLOCK);
-        free_blocks = count_free();
+        // The debugger checks the heap table against this copy when print is called.
+        free_blocks = count_free((void *)print);
         if (!last || free_blocks != 0)
         {
             setup = 6;
@@ -147,9 +139,12 @@ int main(int argc, char **argv)
         else
         {
             print_res = print_result("printoom: print got through\n");
+            after_print = count_free((void *)printc);
             printc_res = printc_result("printoom: printc got through\n", 15);
+            after_printc = count_free(0);
         }
     }
+    heap_snapshot_done();
 
     // Give the memory back before printing the results.
     if (last)
@@ -181,6 +176,12 @@ int main(int argc, char **argv)
     if (printc_res != 0)
     {
         say("FAIL printc result ", printc_res, 0);
+        failed = 1;
+    }
+    if (after_print != 0 || after_printc != 0)
+    {
+        say("FAIL free blocks after print ", after_print, 0);
+        say("FAIL free blocks after printc ", after_printc, 0);
         failed = 1;
     }
     if (!failed)

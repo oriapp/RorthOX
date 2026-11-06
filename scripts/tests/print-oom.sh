@@ -6,9 +6,12 @@
 # copy only, and boot it. printoom.elf leaves one free block, prints a line, takes the last block,
 # calls print and printc, and checks they return 0 and their text shows. No second copy of the
 # line before may reach the screen. Then blank.elf must start from the shell.
+# printoom.elf counts free blocks in copies of the kernel's heap table that a debugger writes into
+# it through QEMU's gdbstub (scripts/tests/lib/heap-snapshot.sh); when print and printc are called,
+# the debugger checks that the heap table is still the copy taken just before (no block free).
 # bin/os.bin itself must not change.
 #
-# Env: BOOT_TIMEOUT=60 (seconds to wait for the shell)   RUN_TIMEOUT=60 (for printoom.elf)
+# Needs python3. Env: BOOT_TIMEOUT=60 (seconds to wait for the shell)   RUN_TIMEOUT=60 (for printoom.elf)
 #      EXIT_TIMEOUT=30 (for each process to end, and for blank.elf to start)
 
 set -euo pipefail
@@ -17,6 +20,7 @@ BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-60}"
 EXIT_TIMEOUT="${EXIT_TIMEOUT:-30}"
 . ./scripts/qemu-lib.sh
+. ./scripts/tests/lib/heap-snapshot.sh
 
 OUT=build/tests/print-oom
 PROGRAM=programs/printoom/build/printoom.elf
@@ -41,17 +45,22 @@ wait_lines() {
     return 1
 }
 
+heap_snapshot_setup "$OUT" || { echo "print-oom: cannot read the heap settings" >&2; exit 1; }
+
 image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
 cp bin/os.bin "$OUT/print-oom.bin"
 mcopy -i "$OUT/print-oom.bin" "$PROGRAM" ::
 
-qemu_start "$OUT/print-oom.bin" "$OUT"
+QEMU_FLAGS="$HEAP_QEMU_FLAGS" qemu_start "$OUT/print-oom.bin" "$OUT"
+heap_snapshot_trap
 if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT"; then
     type_line "printoom.elf"
     # The heap gets full only after a key, once the shell is back at its prompt (a second line
-    # starting with ">", the first one is the typed command) and idle.
-    if wait_screen "printoom: ready" "$RUN_TIMEOUT" && wait_lines '^>' 2 "$EXIT_TIMEOUT"; then
+    # starting with ">", the first one is the typed command) and idle, and the debugger is
+    # attached. Two syscalls (print, printc) are checked against their copies.
+    if wait_screen "printoom: ready" "$RUN_TIMEOUT" && wait_lines '^>' 2 "$EXIT_TIMEOUT" &&
+        heap_snapshot_attach "$PROGRAM" "$OUT" 2; then
         qemu_cmd "sendkey g"
         if wait_screen "printoom: done" "$RUN_TIMEOUT" && wait_lines 'Process was terminated' 1 "$EXIT_TIMEOUT"; then
             cp "$OUT/screen.txt" "$OUT/screen-printoom.txt"
@@ -61,6 +70,7 @@ if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT"; then
     fi
 fi
 qemu_stop || true
+heap_snapshot_wait "$OUT"
 [ -f "$OUT/screen-printoom.txt" ] || : > "$OUT/screen-printoom.txt"
 good=$(grep -cF "printoom: last good line" "$OUT/screen-printoom.txt" 2> /dev/null || true)
 echo "good=${good:-0}" > "$OUT/good.txt"
@@ -74,11 +84,13 @@ check "print returned 0 with the heap full"           "$OUT/screen-printoom.txt"
 check "printc returned 0 with the heap full"          "$OUT/screen-printoom.txt" "printoom: FAIL printc result" absent
 check "print text shown"                              "$OUT/screen-printoom.txt" "print got through"
 check "printc text shown"                             "$OUT/screen-printoom.txt" "printc got through"
+check "no free block after print and printc"          "$OUT/screen-printoom.txt" "printoom: FAIL free blocks after" absent
 check "old buffer contents not printed again"         "$OUT/good.txt"            "good=1" line
 check "printoom passed"                               "$OUT/screen-printoom.txt" "printoom: PASS"
 check "printoom finished"                             "$OUT/screen-printoom.txt" "printoom: done"
 check "blank.elf started from the shell afterwards"   "$OUT/screen.txt"          "Blank loaded"
 check "blank.elf got its argument"                    "$OUT/screen.txt"          "after" line
+heap_snapshot_checks "" "$OUT"
 
 hash_after=$(image_hash)
 [ "$hash_before" = "$hash_after" ] && echo "unchanged" > "$OUT/image.txt" || echo "changed" > "$OUT/image.txt"

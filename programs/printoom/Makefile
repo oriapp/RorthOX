@@ -1,4 +1,4 @@
-FILES=./build/printoom.o
+FILES=./build/printoom.o ./build/heap_snapshot.o
 CONFIG_DIR ?= $(abspath ../../build/config)
 # The kernel directory is for config.h (the heap geometry) and status.h (the error codes).
 INCLUDES= -I ../stdlib/src -I$(CONFIG_DIR) -I ../../kernel
@@ -10,6 +10,9 @@ all: ./build/printoom.elf
 
 ./build/printoom.o: ./printoom.c $(CONFIG_DIR)/rorthox-config.h
 	i686-elf-gcc ${INCLUDES} -I./ $(FLAGS) -std=gnu99 -c ./printoom.c -o ./build/printoom.o
+
+./build/heap_snapshot.o: ../heapsnapshot/heap_snapshot.c $(CONFIG_DIR)/rorthox-config.h
+	i686-elf-gcc ${INCLUDES} -I./ $(FLAGS) -std=gnu99 -c ../heapsnapshot/heap_snapshot.c -o ./build/heap_snapshot.o
 
 .PHONY: all clean
 
