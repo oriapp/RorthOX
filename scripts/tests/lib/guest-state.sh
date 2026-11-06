@@ -26,10 +26,15 @@ guest_state_setup() {
 }
 
 guest_state() {
-    local sock="$1" results="$2" status
+    local sock="$1" results="$2" status wait=20 arg
     shift 2
+    for arg in "${@:2}"; do
+        case "$arg" in timeout=*) wait="${arg#timeout=}" ;; esac
+    done
+    # The script's own budget: timeout= for the rendezvous, up to 30 s to connect and 20 s for each
+    # request after it. The outer limit only catches a hung script, so it must not cut that short.
     # shellcheck disable=SC2086
-    if timeout 120 python3 -B scripts/tests/lib/guest_state.py "$sock" "$results" "$1" $GUEST_STATE_ARGS "${@:2}" \
+    if timeout $((${wait%.*} + 120)) python3 -B scripts/tests/lib/guest_state.py "$sock" "$results" "$1" $GUEST_STATE_ARGS "${@:2}" \
         > "$results.log" 2>&1; then status=0; else status=$?; fi
     sed 's/^/  /' "$results.log"
     return "$status"

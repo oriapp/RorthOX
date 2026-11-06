@@ -103,7 +103,10 @@ def main():
                 raise RspError("no rendezvous within %d s: %s" % (timeout, seen))
             if k["isr80h_handler"] not in r.breakpoints:
                 r.add_breakpoint(k["isr80h_handler"])
-            r.cont(left)
+            eip = r.cont(left)
+            if eip != k["isr80h_handler"]:
+                # A breakpoint another debugger left behind: the stack is not the handler's.
+                raise RspError("stopped at %#x, not at isr80h_handler" % eip)
             esp = r.reg("esp")
             command, frame = struct.unpack("<II", r.read(esp + 4, 8))
             current = r.read32(k["current_task"])
