@@ -34,23 +34,6 @@ mkdir -p "$OUT"
 command -v python3 > /dev/null || { echo "task-flags: python3 not found" >&2; exit 1; }
 [ -f "$PROGRAM" ] || { echo "task-flags: $PROGRAM not found, run 'make all' first" >&2; exit 1; }
 
-# wait_lines <regex> <count> <seconds>: wait until <count> screen lines match <regex>.
-wait_lines() {
-    local regex="$1" count="$2" deadline=$((SECONDS + $3)) n
-    while ((SECONDS < deadline)); do
-        qemu_running || { echo "  QEMU is not running, stopped waiting for /$regex/ x$count"; return 1; }
-        screen_snapshot
-        n=$(grep -cE -- "$regex" "$Q_OUT/screen.txt" 2> /dev/null || true)
-        if [ "${n:-0}" -ge "$count" ]; then
-            echo "  /$regex/ x$count on screen after ${SECONDS} s"
-            return 0
-        fi
-        sleep 0.5
-    done
-    echo "  gave up waiting for /$regex/ x$count after $3 s"
-    return 1
-}
-
 image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
 cp bin/os.bin "$OUT/task-flags.bin"
@@ -77,8 +60,8 @@ if [ "$frame_status" -eq 0 ] && wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}
         if python3 -B scripts/tests/lib/task_flags.py entry "$SOCK" build/kernel.map "$OUT/entry-result.txt" \
             "$PROGRAM" > "$OUT/entry.log" 2>&1; then entry_status=0; else entry_status=$?; fi
         sed 's/^/  /' "$OUT/entry.log"
-        wait_lines 'flagstest: (PASS|FAIL)' 1 "$STEP_TIMEOUT" &&
-            wait_lines 'Process was terminated' 1 "$STEP_TIMEOUT" || true
+        # The only program in this boot: its result, then its end (the prompt may land in front).
+        wait_screen_lines "$STEP_TIMEOUT" "regex:(> )?flagstest: (PASS|FAIL)" "prompt:Process was terminated" || true
     fi
 fi
 echo "exit=$entry_status" > "$OUT/entry-status.txt"

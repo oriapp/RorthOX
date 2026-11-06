@@ -29,23 +29,6 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 command -v python3 > /dev/null || { echo "exception-frames: python3 not found" >&2; exit 1; }
 
-# wait_lines <regex> <count> <seconds>: wait until <count> screen lines match <regex>.
-wait_lines() {
-    local regex="$1" count="$2" deadline=$((SECONDS + $3)) n
-    while ((SECONDS < deadline)); do
-        qemu_running || { echo "  QEMU is not running, stopped waiting for /$regex/ x$count"; return 1; }
-        screen_snapshot
-        n=$(grep -cE -- "$regex" "$Q_OUT/screen.txt" 2> /dev/null || true)
-        if [ "${n:-0}" -ge "$count" ]; then
-            echo "  /$regex/ x$count on screen after ${SECONDS} s"
-            return 0
-        fi
-        sleep 0.5
-    done
-    echo "  gave up waiting for /$regex/ x$count after $3 s"
-    return 1
-}
-
 image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
 cp bin/os.bin "$OUT/exception-frames.bin"
@@ -62,7 +45,8 @@ echo "  debugger session took $((SECONDS - start)) s"
 echo "exit=$status" > "$OUT/status.txt"
 if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT"; then
     type_line "blank.elf frames"
-    wait_lines '^frames$' 1 "$STEP_TIMEOUT" && wait_lines 'Process was terminated' 1 "$STEP_TIMEOUT" || true
+    # The only program in this boot: its argument, then its end (the prompt may land in front).
+    wait_screen_lines "$STEP_TIMEOUT" "line:frames" "prompt:Process was terminated" || true
 fi
 qemu_stop || true
 rm -rf "$GDB_DIR"
