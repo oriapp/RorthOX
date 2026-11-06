@@ -29,13 +29,14 @@ SHELL_ELF=programs/shell/build/shell.elf
 GDB_DIR=
 DBG_PID=
 # On any exit (also an early one: an error, a failed setup step, TERM or INT) stop QEMU and the
-# debugger and remove the gdb socket directory.
+# debugger and remove the gdb socket directory. The EXIT trap is set before anything is created, and
+# it is the one qemu_start sets again: qemu_exit stops QEMU, then calls Q_CLEANUP.
 cleanup() {
     if [ -n "$DBG_PID" ]; then kill "$DBG_PID" 2> /dev/null || :; wait "$DBG_PID" 2> /dev/null || :; fi
-    qemu_kill
     if [ -n "$GDB_DIR" ]; then rm -rf "$GDB_DIR"; fi
 }
-trap cleanup EXIT
+Q_CLEANUP=cleanup
+trap qemu_exit EXIT
 trap 'exit 1' TERM INT
 # A command that fails outside a check stops the test (set -e): say which one.
 trap 'echo "FAIL write-protect: command failed at line $LINENO" >&2' ERR
@@ -81,8 +82,6 @@ run_case() {
     echo "write-protect: $c"
     rm -f "$SOCK"
     QEMU_FLAGS="-S -gdb unix:$SOCK,server=on,wait=off ${3:-}" qemu_start "$image" "$D"
-    # qemu_start installs its own EXIT trap; restore the full cleanup after each boot.
-    trap cleanup EXIT
     if debugger "$D/boot.log" boot "$SOCK" build/kernel.map "$D/boot.txt" "$c" "$BOOT_TIMEOUT"; then
         boot_status=0
         if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT"; then
