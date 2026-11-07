@@ -402,9 +402,9 @@ qemu-system-i386 -m 128 -drive file=bin/os.bin,format=raw,index=0,media=disk \
 make test
 ```
 
-This builds everything (and the GRUB ISO, when its packages are installed) and runs 69 tests (`scripts/smoke.sh` plus
+This builds everything (and the GRUB ISO, when its packages are installed) and runs 70 tests (`scripts/smoke.sh` plus
 every `scripts/tests/*.sh`), as many at once as there are CPUs (about 2 minutes with 16); it keeps going after a
-failure and prints a summary (`69 passed, 0 failed, 0 skipped`) and where the output went. `make test TEST_JOBS=1`
+failure and prints a summary (`70 passed, 0 failed, 0 skipped`) and where the output went. `make test TEST_JOBS=1`
 runs them one after the other (about 14 minutes; as at any `-j`, a test's output shows when it ends);
 `TEST_JOBS=4` runs four at once. `make smoke` runs
 only the smoke test, and `./scripts/run-tests.sh scripts/tests/panic.sh` runs single tests (a test named twice runs
@@ -487,6 +487,10 @@ test that hangs past `--timeout`) are kept, no more than `-j` tests run at once,
 test started outlives it (also after TERM or INT to the runner), and no output line of a test can pass for a CI
 command (`::error`, also after a carriage return); `--shard` splits a selection exactly, by the timings, and a bad
 shard or timings file runs nothing.
+`reports` checks the reports with small scripts: they agree with the run, `junit.xml` parses back, test names with
+Markdown, XML and control characters are escaped, the summary keeps to its size limit, `failed/` holds only the
+failed tests' output and logs within its limits, and a failing test fails only its own shard and shows up in that
+shard's reports and annotations.
 `debugger-step` checks the tests' own gdbstub helper against a fake stub, without QEMU: QEMU can report a single
 step as finished without having run the instruction, so stepping off a breakpoint is retried a few times and then
 fails instead of hitting the same breakpoint twice.
