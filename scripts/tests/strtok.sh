@@ -9,10 +9,12 @@
 #    an empty string, leading/repeated/trailing delimiters, calls after the end) and many random
 #    calls compared with a model of strtok: token start and the bytes of every string.
 # 2. QEMU: copy bin/os.bin, add programs/libtest to the copy only, boot, run
-#    "libtest.elf strtok": the same fixed steps in a user program, under the task's paging.
+#    "libtest.elf strtok": the same fixed steps in a user program, under the task's paging. Its
+#    summary row is read at the shell's next key request with libtest gone and the same shell
+#    alone (scripts/tests/lib/guest-state.sh).
 # bin/os.bin must not change.
 #
-# Env: HOST_CC=cc   OBJCOPY=objcopy   BOOT_TIMEOUT=60 (seconds to wait for the shell)
+# Needs python3. Env: HOST_CC=cc   OBJCOPY=objcopy   BOOT_TIMEOUT=60 (seconds to wait for the shell)
 #      RUN_TIMEOUT=30 (for each step)
 
 set -euo pipefail
@@ -22,12 +24,13 @@ OBJCOPY="${OBJCOPY:-objcopy}"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-30}"
 . ./scripts/qemu-lib.sh
+. ./scripts/tests/lib/guest-state.sh
 
 OUT=build/tests/strtok
 PROGRAM=programs/libtest/build/libtest.elf
 mkdir -p "$OUT"
 # Remove the last run's results, so the checks below only see this run.
-rm -f "$OUT"/host-* "$OUT"/*.o "$OUT"/*.txt "$OUT"/*.bin "$OUT"/screen.ppm "$OUT"/debugcon.log "$OUT"/monitor.log
+rm -f "$OUT"/host-* "$OUT"/*.o "$OUT"/*.txt "$OUT"/*.txt.log "$OUT"/*.bin "$OUT"/screen.ppm "$OUT"/debugcon.log "$OUT"/monitor.log
 [ -f bin/os.bin ] && [ -f "$PROGRAM" ] || { echo "strtok: run 'make all' first" >&2; exit 1; }
 hash_before=$(sha256sum bin/os.bin | cut -d' ' -f1)
 
@@ -52,36 +55,35 @@ check "host check: fixed steps ran"                "$OUT/host-check.log"  "fixed
 check "host check: random calls ran"               "$OUT/host-check.log"  "random calls: 19200 calls, 38400 checks" line
 check "host check: every check passed"             "$OUT/host-check.log"  "strtok host check: 0 of 38435 checks failed" line
 
-# prompts: the number of shell prompts below the shell banner.
-prompts() {
-    sed -n "/${RORTHOX_NAME} v${RORTHOX_VERSION}/,\$p" "$Q_OUT/screen.txt" | tr -cd '>' | wc -c
-}
-
-# wait_prompts <n>: wait until the shell printed its prompt <n> times (it is waiting for keys).
-wait_prompts() {
-    local deadline=$((SECONDS + RUN_TIMEOUT))
-    while ((SECONDS < deadline)); do
-        qemu_running || return 1
-        screen_snapshot
-        [ "$(prompts)" -ge "$1" ] && return 0
-        sleep 0.5
-    done
-    echo "  gave up waiting for shell prompt $1"
-    return 1
+# state <tag> [options]: the guest-state rendezvous at the shell's key request, the shell alone
+# with the keyboard; results in $OUT/state-<tag>.txt.
+state() {
+    local tag="$1"
+    shift
+    guest_state "$SOCK" "$OUT/state-$tag.txt" "$tag" timeout="$RUN_TIMEOUT" owner=first "$@"
 }
 
 IMG="$OUT/strtok.bin"
 cp bin/os.bin "$IMG"
 mcopy -i "$IMG" "$PROGRAM" ::
+guest_state_setup "$OUT"
+GDB_DIR=
+cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
+Q_CLEANUP=cleanup
+trap qemu_exit EXIT
+GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+SOCK="$GDB_DIR/gdb"
 
 echo "strtok: run libtest.elf strtok"
 : > "$OUT/steps.txt"
-qemu_start "$IMG" "$OUT"
-if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" && wait_prompts 1; then
+QEMU_FLAGS="-gdb unix:$SOCK,server=on,wait=off" qemu_start "$IMG" "$OUT"
+if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" && state boot save="$OUT/shell.txt"; then
     type_line "libtest.elf strtok"
-    if wait_screen "libtest strtok: start" "$RUN_TIMEOUT"; then
+    if wait_screen_lines "$RUN_TIMEOUT" "prompt:libtest strtok: start"; then
         echo "started" >> "$OUT/steps.txt"
-        if wait_screen "checks failed" "$RUN_TIMEOUT" && wait_screen "Process was terminated" "$RUN_TIMEOUT"; then
+        # The summary row, then the shell alone again: libtest has ended and printed nothing more.
+        if wait_screen_lines "$RUN_TIMEOUT" "regex:(> )?libtest strtok: [0-9]+ of [0-9]+ checks failed" &&
+            state end shell="$OUT/shell.txt" screen="$OUT/screen-end.txt"; then
             echo "ended" >> "$OUT/steps.txt"
         fi
     fi
@@ -92,8 +94,21 @@ check "kernel reached the end of init (debugcon)"  "$OUT/debugcon.log" "Thats co
 check "no kernel panic (debugcon)"                  "$OUT/debugcon.log" "PANIC" absent
 check "libtest strtok started"                      "$OUT/steps.txt"    "started" line
 check "libtest strtok ended"                        "$OUT/steps.txt"    "ended" line
-check "user strtok: every step passed"              "$Q_OUT/screen.txt" "libtest strtok: 0 of 27 checks failed"
-check "user strtok: no failed step"                 "$Q_OUT/screen.txt" "libtest strtok: FAIL" absent
+[ -f "$OUT/screen-end.txt" ] || : > "$OUT/screen-end.txt"
+check "user strtok: every step passed"              "$OUT/screen-end.txt" "libtest strtok: 0 of 27 checks failed"
+check "user strtok: no failed step"                 "$OUT/screen-end.txt" "libtest strtok: FAIL" absent
+check "kernel symbols for the rendezvous found"     "$OUT/symbols.txt"  "found" line
+# stop_checks <tag> <label>: every check of one rendezvous (lib/guest-state.sh).
+stop_checks() {
+    local f="$OUT/state-$1.txt"
+    check "$2: stopped at the shell's getkey"          "$f" "PASS $1_rendezvous" line
+    check "$2: task list and slots consistent"        "$f" "PASS $1_list_consistent" line
+    check "$2: the shell alone"                        "$f" "PASS $1_task_count" line
+    check "$2: the shell owns the keyboard"           "$f" "PASS $1_keyboard_owner" line
+    [ "$1" = boot ] || check "$2: the same shell task, process and id" "$f" "PASS $1_same_shell" line
+}
+stop_checks boot "boot"
+stop_checks end  "libtest ended"
 
 [ "$(sha256sum bin/os.bin | cut -d' ' -f1)" = "$hash_before" ] && echo unchanged > "$OUT/image.txt" || echo changed > "$OUT/image.txt"
 check "bin/os.bin not changed by the test"  "$OUT/image.txt"  "unchanged" line

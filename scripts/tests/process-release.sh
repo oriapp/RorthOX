@@ -4,10 +4,12 @@
 # Boot a copy of bin/os.bin, count the free kernel heap blocks while the shell is idle, run
 # "blank.elf tag1", count again, run "blank.elf tag2" and count once more. Each launch may keep
 # only the blocks listed at KEPT_PER_LAUNCH. The free blocks are counted in the kernel's heap
-# table, read through the QEMU monitor while the guest is stopped.
+# table, read through the QEMU monitor while the guest is stopped. The shell is idle when
+# scripts/tests/lib/guest-state.sh has stopped the guest at its key request with the shell alone
+# in the task list (blank.elf has ended) and the same shell owning the keyboard.
 # bin/os.bin itself must not change.
 #
-# Env: BOOT_TIMEOUT=60 (seconds to wait for the shell)   RUN_TIMEOUT=30 (for each launch)
+# Needs python3. Env: BOOT_TIMEOUT=60 (seconds to wait for the shell)   RUN_TIMEOUT=30 (for each launch)
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -15,9 +17,11 @@ BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-30}"
 QEMU_TIMEOUT="${QEMU_TIMEOUT:-180}"
 . ./scripts/qemu-lib.sh
+. ./scripts/tests/lib/guest-state.sh
 
 OUT=build/tests/process-release
 mkdir -p "$OUT"
+rm -f "$OUT"/state-*.txt "$OUT"/state-*.txt.log "$OUT"/shell.txt "$OUT"/screen-*.txt
 
 # Blocks each launch keeps for good: the shell's two command nodes for "blank.elf tagN" (the
 # user library never frees them).
@@ -57,43 +61,38 @@ free_blocks() {
     return 1
 }
 
-# wait_idle <launches>: wait until launch number <launches> (0: none yet) has printed its tag and
-# ended, and the shell has printed its prompt again (one ">" per prompt below the shell banner;
-# the kernel's date line above it has one too).
-wait_idle() {
-    local k="$1" deadline=$((SECONDS + RUN_TIMEOUT)) tags ends prompts
-    while ((SECONDS < deadline)); do
-        qemu_running || { echo "  QEMU is not running"; return 1; }
-        screen_snapshot
-        tags=2
-        [ "$k" = 0 ] || tags=$(grep -cF "tag$k" "$Q_OUT/screen.txt" 2> /dev/null || true)
-        ends=$(grep -cF "Process was terminated" "$Q_OUT/screen.txt" 2> /dev/null || true)
-        prompts=$(sed -n "/${RORTHOX_NAME} v${RORTHOX_VERSION}/,\$p" "$Q_OUT/screen.txt" | tr -cd '>' | wc -c)
-        # "tagN" shows up twice: in the typed command and in blank.elf's argument list.
-        if [ "${tags:-0}" -ge 2 ] && [ "${ends:-0}" -ge "$k" ] && [ "$prompts" -ge $((k + 1)) ]; then
-            echo "  launch $k ended and the shell is back after ${SECONDS} s"
-            return 0
-        fi
-        sleep 0.5
-    done
-    echo "  gave up waiting for launch $k to end after $RUN_TIMEOUT s"
-    return 1
+# state <tag> [options]: the guest-state rendezvous at the shell's key request, the shell alone
+# with the keyboard; results in $OUT/state-<tag>.txt.
+state() {
+    local tag="$1"
+    shift
+    guest_state "$SOCK" "$OUT/state-$tag.txt" "$tag" timeout="$RUN_TIMEOUT" owner=first "$@"
 }
 
+echo "process-release: kernel symbols"
+guest_state_setup "$OUT"
 image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
 cp bin/os.bin "$OUT/process-release.bin"
 : > "$OUT/counts.txt"
+GDB_DIR=
+cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
+Q_CLEANUP=cleanup
+trap qemu_exit EXIT
+GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+SOCK="$GDB_DIR/gdb"
 
 echo "process-release: count free heap blocks around two launches of blank.elf"
-qemu_start "$OUT/process-release.bin" "$OUT"
+QEMU_FLAGS="-gdb unix:$SOCK,server=on,wait=off" qemu_start "$OUT/process-release.bin" "$OUT"
 counts=()
-if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" && wait_idle 0 &&
-    n=$(free_blocks); then
+if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" &&
+    state boot save="$OUT/shell.txt" screen="$OUT/screen-boot.txt" && n=$(free_blocks); then
     counts+=("$n")
     for k in 1 2; do
         type_line "blank.elf tag$k"
-        wait_idle "$k" && n=$(free_blocks) || break
+        # blank.elf's argument row (the echoed command doesn't match), then the shell alone again.
+        wait_screen_lines "$RUN_TIMEOUT" "prompt:tag$k" &&
+            state "tag$k" shell="$OUT/shell.txt" screen="$OUT/screen-tag$k.txt" && n=$(free_blocks) || break
         counts+=("$n")
     done
 fi
@@ -105,13 +104,35 @@ for k in 1 2; do
         echo "launch $k kept=$((counts[k - 1] - counts[k]))" >> "$OUT/counts.txt"
     fi
 done
-terminated=$(grep -cF "Process was terminated" "$OUT/screen.txt" 2> /dev/null || true)
-echo "terminated=${terminated:-0}" >> "$OUT/counts.txt"
+# Each launch was seen gone at a rendezvous (the shell alone in the task list), and the screen
+# saved there (nothing is printing or scrolling) has the exit row below that launch's argument row.
+ended=$(cat "$OUT"/state-tag1.txt "$OUT"/state-tag2.txt 2> /dev/null | grep -cxE 'PASS tag[12]_task_count' || true)
+echo "ended=${ended:-0}" >> "$OUT/counts.txt"
+for s in boot tag1 tag2; do [ -f "$OUT/screen-$s.txt" ] || : > "$OUT/screen-$s.txt"; done
+# exit_below <screen> <ERE>: 1 if a "Process was terminated" row is below the last row matching <ERE>.
+exit_below() {
+    awk -v re="^($2)\$" '$0 ~ re { r = NR; f = 0 } r && $0 == "Process was terminated" { f = 1 } END { print f + 0 }' "$1"
+}
+echo "terminated=$(($(exit_below "$OUT/screen-tag1.txt" '(> )?tag1') + $(exit_below "$OUT/screen-tag2.txt" '(> )?tag2')))" >> "$OUT/counts.txt"
 
 check "kernel reached the end of init (debugcon)"  "$OUT/debugcon.log" "Thats cool"
 check "no kernel panic (debugcon)"                  "$OUT/debugcon.log" "PANIC" absent
-check "shell started (banner on screen)"            "$OUT/screen.txt"   "${RORTHOX_NAME} v${RORTHOX_VERSION}"
-check "blank.elf ran twice"                         "$OUT/counts.txt"   "terminated=2" line
+check "shell started (banner on screen)"            "$OUT/screen-boot.txt" "${RORTHOX_NAME} v${RORTHOX_VERSION}"
+check "kernel symbols for the rendezvous found"     "$OUT/symbols.txt"  "found" line
+# stop_checks <tag> <label>: every check of one rendezvous (lib/guest-state.sh).
+stop_checks() {
+    local f="$OUT/state-$1.txt"
+    check "$2: stopped at the shell's getkey"          "$f" "PASS $1_rendezvous" line
+    check "$2: task list and slots consistent"        "$f" "PASS $1_list_consistent" line
+    check "$2: the shell alone"                        "$f" "PASS $1_task_count" line
+    check "$2: the shell owns the keyboard"           "$f" "PASS $1_keyboard_owner" line
+    [ "$1" = boot ] || check "$2: the same shell task, process and id" "$f" "PASS $1_same_shell" line
+}
+stop_checks boot "boot"
+stop_checks tag1 "launch 1 ended"
+stop_checks tag2 "launch 2 ended"
+check "both launches ended (each seen gone)"        "$OUT/counts.txt"   "ended=2" line
+check "an exit row below each launch's argument"    "$OUT/counts.txt"   "terminated=2" line
 check "launch 1 kept $KEPT_PER_LAUNCH blocks"       "$OUT/counts.txt"   "launch 1 kept=$KEPT_PER_LAUNCH" line
 check "launch 2 kept $KEPT_PER_LAUNCH blocks"       "$OUT/counts.txt"   "launch 2 kept=$KEPT_PER_LAUNCH" line
 

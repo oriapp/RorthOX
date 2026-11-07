@@ -10,14 +10,17 @@
 #    row, many times across rows, on the last row, and the character after it. Every cell, the
 #    row, the column and the VGA cursor are compared with a model.
 # 2. QEMU: copy bin/os.bin, add programs/ttytest to the copy only, boot, run "ttytest.elf bs".
-#    After its "armed" line and the shell's prompt, a key makes it print (in one print) a newline,
-#    a full row of 80 characters ending in 'Z', a backspace and 'R'; then it waits for a key. The
-#    VGA page (raw characters and colours) is read before and after: 'R' must be in column 79 of
-#    the full row, white on black, and no other cell may have changed. Its last line must start
-#    the row below.
+#    Once its "armed" line is there, the shell is at its key request after the prompt and the
+#    program at its own (scripts/tests/lib/guest-state.sh stops at both). A key makes it print (in
+#    one print) a newline, a full row of 80 characters ending in 'Z', a backspace and 'R'; then it
+#    waits for a key. The VGA page (raw characters and colours) is read at its key requests before
+#    and after: 'R' must be in column 79 of the full row, white on black, and no other cell may
+#    have changed. Its last line must start the row below (read at the shell's key request once
+#    ttytest has ended).
 # bin/os.bin must not change.
 #
-# Env: HOST_CC=cc   BOOT_TIMEOUT=60 (seconds to wait for the shell)   RUN_TIMEOUT=30 (for each step)
+# Needs python3. Env: HOST_CC=cc   BOOT_TIMEOUT=60 (seconds to wait for the shell)
+#      RUN_TIMEOUT=30 (for each step)
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -25,12 +28,13 @@ HOST_CC="${HOST_CC:-cc}"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-30}"
 . ./scripts/qemu-lib.sh
+. ./scripts/tests/lib/guest-state.sh
 
 OUT=build/tests/tty-backspace
 PROGRAM=programs/ttytest/build/ttytest.elf
 mkdir -p "$OUT"
 # Remove the last run's results, so the checks below only see this run.
-rm -f "$OUT"/host-* "$OUT"/*.txt "$OUT"/*.bin "$OUT"/screen.ppm "$OUT"/debugcon.log "$OUT"/monitor.log
+rm -f "$OUT"/host-* "$OUT"/*.txt "$OUT"/*.txt.log "$OUT"/*.bin "$OUT"/screen.ppm "$OUT"/debugcon.log "$OUT"/monitor.log
 [ -f bin/os.bin ] && [ -f "$PROGRAM" ] || { echo "tty-backspace: run 'make all' first" >&2; exit 1; }
 hash_before=$(sha256sum bin/os.bin | cut -d' ' -f1)
 
@@ -55,60 +59,44 @@ row_start="ttytest-bs-"
 row=$row_start
 for ((i = ${#row_start}; i < 79; i++)); do row+=$((i % 10)); done
 
-# prompts: the number of shell prompts below the shell banner.
-prompts() {
-    sed -n "/${RORTHOX_NAME} v${RORTHOX_VERSION}/,\$p" "$Q_OUT/screen.txt" | tr -cd '>' | wc -c
-}
-
-# wait_prompts <n>: wait until the shell printed its prompt <n> times (it is waiting for keys).
-wait_prompts() {
-    local deadline=$((SECONDS + RUN_TIMEOUT))
-    while ((SECONDS < deadline)); do
-        qemu_running || return 1
-        screen_snapshot
-        [ "$(prompts)" -ge "$1" ] && return 0
-        sleep 0.5
-    done
-    echo "  gave up waiting for shell prompt $1"
-    return 1
-}
-
-# vga_dump <file>: the 4000-byte VGA page, read until two reads agree (nothing is still printing).
-vga_dump() {
-    local i
-    rm -f "$1" "$OUT/dump-a.bin"
-    for ((i = 0; i < 20; i++)); do
-        rm -f "$OUT/dump-b.bin"
-        qemu_cmd "pmemsave 0xb8000 4000 \"$OUT/dump-b.bin\""
-        wait_file "$OUT/dump-b.bin" 4000 || return 1
-        if [ -f "$OUT/dump-a.bin" ] && cmp -s "$OUT/dump-a.bin" "$OUT/dump-b.bin"; then
-            mv "$OUT/dump-b.bin" "$1"
-            rm -f "$OUT/dump-a.bin"
-            return 0
-        fi
-        mv "$OUT/dump-b.bin" "$OUT/dump-a.bin"
-        sleep 0.3
-    done
-    return 1
+# state <tag> [options]: the guest-state rendezvous at a key request (default: the shell's, the
+# shell alone with the keyboard); results in $OUT/state-<tag>.txt.
+state() {
+    local tag="$1"
+    shift
+    guest_state "$SOCK" "$OUT/state-$tag.txt" "$tag" timeout="$RUN_TIMEOUT" "$@"
 }
 
 IMG="$OUT/tty-backspace.bin"
 cp bin/os.bin "$IMG"
 mcopy -i "$IMG" "$PROGRAM" ::
+guest_state_setup "$OUT"
+GDB_DIR=
+cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
+Q_CLEANUP=cleanup
+trap qemu_exit EXIT
+GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+SOCK="$GDB_DIR/gdb"
 
+# The VGA page (characters and colours) is saved at ttytest's key requests: everything it printed
+# before is on it, and the shell already sits at its own key request after its prompt, so nothing
+# else prints.
 echo "tty-backspace: run ttytest.elf bs"
 : > "$OUT/steps.txt"
-qemu_start "$IMG" "$OUT"
-if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" && wait_prompts 1; then
+QEMU_FLAGS="-gdb unix:$SOCK,server=on,wait=off" qemu_start "$IMG" "$OUT"
+if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" && state boot owner=first save="$OUT/shell.txt"; then
     type_line "ttytest.elf bs"
-    if wait_screen "ttytest bs: armed" "$RUN_TIMEOUT" && wait_prompts 2 && vga_dump "$OUT/before.bin"; then
+    if wait_screen_lines "$RUN_TIMEOUT" "prompt:ttytest bs: armed" &&
+        state shell at=first tasks=2 owner=last shell="$OUT/shell.txt" &&
+        state armed at=last tasks=2 owner=last shell="$OUT/shell.txt" memory="b8000,fa0,$OUT/before.bin"; then
         echo "armed" >> "$OUT/steps.txt"
         qemu_cmd "sendkey a"
-        if wait_screen "$row" "$RUN_TIMEOUT" && vga_dump "$OUT/after.bin"; then
+        if wait_screen_lines "$RUN_TIMEOUT" "regex:$row.*" &&
+            state row at=last tasks=2 owner=last shell="$OUT/shell.txt" memory="b8000,fa0,$OUT/after.bin"; then
             echo "row printed" >> "$OUT/steps.txt"
             qemu_cmd "sendkey a"
-            if wait_screen "ttytest bs: done" "$RUN_TIMEOUT" && wait_screen "Process was terminated" "$RUN_TIMEOUT" &&
-                    vga_dump "$OUT/end.bin"; then
+            if wait_screen_lines "$RUN_TIMEOUT" "prompt:ttytest bs: done" &&
+                state end owner=first shell="$OUT/shell.txt" memory="b8000,fa0,$OUT/end.bin"; then
                 echo "done" >> "$OUT/steps.txt"
             fi
         fi
@@ -179,6 +167,21 @@ check "backspace + R: R in column 79 of the full row"   "$OUT/cells.txt"    "R r
 check "the rest of the full row is intact"              "$OUT/cells.txt"    "columns 0-78 of the full row are white on black" line
 check "no other cell changed"                           "$OUT/cells.txt"    "no cell outside the full row changed" line
 check "the next line starts at column 0 of the row below" "$OUT/cells.txt"  "the next line starts the row below" line
+check "kernel symbols for the rendezvous found"         "$OUT/symbols.txt"  "found" line
+# stop_checks <tag> <label>: every check of one rendezvous (lib/guest-state.sh).
+stop_checks() {
+    local f="$OUT/state-$1.txt"
+    check "$2: stopped at the task's getkey"                "$f" "PASS $1_rendezvous" line
+    check "$2: task list and slots consistent"             "$f" "PASS $1_list_consistent" line
+    check "$2: number of tasks"                             "$f" "PASS $1_task_count" line
+    check "$2: keyboard owner"                              "$f" "PASS $1_keyboard_owner" line
+    [ "$1" = boot ] || check "$2: the same shell task, process and id" "$f" "PASS $1_same_shell" line
+}
+stop_checks boot  "boot: the shell alone"
+stop_checks shell "armed: the shell after its prompt, ttytest has the keys"
+stop_checks armed "armed: ttytest waits for a key"
+stop_checks row   "row: ttytest waits for a key"
+stop_checks end   "end: ttytest gone, the shell alone"
 
 [ "$(sha256sum bin/os.bin | cut -d' ' -f1)" = "$hash_before" ] && echo unchanged > "$OUT/image.txt" || echo changed > "$OUT/image.txt"
 check "bin/os.bin not changed by the test"  "$OUT/image.txt"  "unchanged" line

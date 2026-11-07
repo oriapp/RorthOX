@@ -13,10 +13,12 @@
 #    once as a signed int and returns the terminal's result, or the read error without calling
 #    the terminal.
 # 2. QEMU: copy bin/os.bin, add programs/libtest to the copy only, boot, run
-#    "libtest.elf printc". After its "armed" line and the shell's prompt, a key makes it print
-#    one row: "lt-c:" (print), "#0" ... "#f" through the real printc wrapper in colours 0-15,
-#    printc "XX" with the invalid colours, then "|end" (print). The VGA page (raw characters and
-#    colours) is read while the program waits for a key: every "#n" must be in colour n on black,
+#    "libtest.elf printc". Once its "armed" line is there, the shell is at its key request after
+#    the prompt and the program at its own (scripts/tests/lib/guest-state.sh stops at both). A
+#    key makes it print one row: "lt-c:" (print), "#0" ... "#f" through the real printc wrapper
+#    in colours 0-15, printc "XX" with the invalid colours, then "|end" (print). The VGA page (raw
+#    characters and colours) is read at the program's next key request, and the program and the
+#    same shell must still be the only tasks: every "#n" must be in colour n on black,
 #    the print() text around it white on black, no "X" printed and "|end" right after "#f" (the
 #    refused calls didn't move the cursor). The program checks every printc result (0, or
 #    -EINVARG for the invalid colours) and prints a FAIL line for each wrong one. Every call
@@ -24,7 +26,8 @@
 #    program prints "libtest printc: ebx esi edi ebp kept" only if every call gave them back.
 # bin/os.bin must not change.
 #
-# Env: HOST_CC=cc   BOOT_TIMEOUT=60 (seconds to wait for the shell)   RUN_TIMEOUT=30 (for each step)
+# Needs python3. Env: HOST_CC=cc   BOOT_TIMEOUT=60 (seconds to wait for the shell)
+#      RUN_TIMEOUT=30 (for each step)
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -32,12 +35,13 @@ HOST_CC="${HOST_CC:-cc}"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-30}"
 . ./scripts/qemu-lib.sh
+. ./scripts/tests/lib/guest-state.sh
 
 OUT=build/tests/printc
 PROGRAM=programs/libtest/build/libtest.elf
 mkdir -p "$OUT"
 # Remove the last run's results, so the checks below only see this run.
-rm -f "$OUT"/host-* "$OUT"/*.txt "$OUT"/*.bin "$OUT"/screen.ppm "$OUT"/debugcon.log "$OUT"/monitor.log
+rm -f "$OUT"/host-* "$OUT"/*.txt "$OUT"/*.txt.log "$OUT"/*.bin "$OUT"/screen.ppm "$OUT"/debugcon.log "$OUT"/monitor.log
 [ -f bin/os.bin ] && [ -f "$PROGRAM" ] || { echo "printc: run 'make all' first" >&2; exit 1; }
 hash_before=$(sha256sum bin/os.bin | cut -d' ' -f1)
 
@@ -59,59 +63,43 @@ check "host check: getkey cases ran"               "$OUT/host-check.log"  "getke
 check "host check: cursor move cases ran"          "$OUT/host-check.log"  "cursor move: item 0 passed once as a signed int, an unreadable item calls nothing" line
 check "host check: every handler case passed"      "$OUT/host-check.log"  "printc host check: 0 of 50 cases failed" line
 
-# prompts: the number of shell prompts below the shell banner.
-prompts() {
-    sed -n "/${RORTHOX_NAME} v${RORTHOX_VERSION}/,\$p" "$Q_OUT/screen.txt" | tr -cd '>' | wc -c
-}
-
-# wait_prompts <n>: wait until the shell printed its prompt <n> times (it is waiting for keys).
-wait_prompts() {
-    local deadline=$((SECONDS + RUN_TIMEOUT))
-    while ((SECONDS < deadline)); do
-        qemu_running || return 1
-        screen_snapshot
-        [ "$(prompts)" -ge "$1" ] && return 0
-        sleep 0.5
-    done
-    echo "  gave up waiting for shell prompt $1"
-    return 1
-}
-
-# vga_dump <file>: the 4000-byte VGA page, read until two reads agree (nothing is still printing).
-vga_dump() {
-    local i
-    rm -f "$1" "$OUT/dump-a.bin"
-    for ((i = 0; i < 20; i++)); do
-        rm -f "$OUT/dump-b.bin"
-        qemu_cmd "pmemsave 0xb8000 4000 \"$OUT/dump-b.bin\""
-        wait_file "$OUT/dump-b.bin" 4000 || return 1
-        if [ -f "$OUT/dump-a.bin" ] && cmp -s "$OUT/dump-a.bin" "$OUT/dump-b.bin"; then
-            mv "$OUT/dump-b.bin" "$1"
-            rm -f "$OUT/dump-a.bin"
-            return 0
-        fi
-        mv "$OUT/dump-b.bin" "$OUT/dump-a.bin"
-        sleep 0.3
-    done
-    return 1
+# state <tag> [options]: the guest-state rendezvous at a key request (default: the shell's, the
+# shell alone with the keyboard); results in $OUT/state-<tag>.txt.
+state() {
+    local tag="$1"
+    shift
+    guest_state "$SOCK" "$OUT/state-$tag.txt" "$tag" timeout="$RUN_TIMEOUT" "$@"
 }
 
 IMG="$OUT/printc.bin"
 cp bin/os.bin "$IMG"
 mcopy -i "$IMG" "$PROGRAM" ::
+guest_state_setup "$OUT"
+GDB_DIR=
+cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
+Q_CLEANUP=cleanup
+trap qemu_exit EXIT
+GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+SOCK="$GDB_DIR/gdb"
 
+# The VGA page (characters and colours) is saved at libtest's key requests: everything it printed
+# before is on it, and the shell already sits at its own key request after its prompt, so nothing
+# else prints.
 echo "printc: run libtest.elf printc"
 : > "$OUT/steps.txt"
-qemu_start "$IMG" "$OUT"
-if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" && wait_prompts 1; then
+QEMU_FLAGS="-gdb unix:$SOCK,server=on,wait=off" qemu_start "$IMG" "$OUT"
+if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" && state boot owner=first save="$OUT/shell.txt"; then
     type_line "libtest.elf printc"
-    if wait_screen "libtest printc: armed" "$RUN_TIMEOUT" && wait_prompts 2 && vga_dump "$OUT/before.bin"; then
+    if wait_screen_lines "$RUN_TIMEOUT" "prompt:libtest printc: armed" &&
+        state shell at=first tasks=2 owner=last shell="$OUT/shell.txt" &&
+        state armed at=last tasks=2 owner=last shell="$OUT/shell.txt" memory="b8000,fa0,$OUT/before.bin"; then
         echo "armed" >> "$OUT/steps.txt"
         qemu_cmd "sendkey a"
-        if wait_screen "libtest printc: done" "$RUN_TIMEOUT" && vga_dump "$OUT/after.bin"; then
+        if wait_screen_lines "$RUN_TIMEOUT" "prompt:libtest printc: done" &&
+            state printed at=last tasks=2 owner=last shell="$OUT/shell.txt" memory="b8000,fa0,$OUT/after.bin"; then
             echo "printed" >> "$OUT/steps.txt"
             qemu_cmd "sendkey a"
-            if wait_screen "Process was terminated" "$RUN_TIMEOUT"; then
+            if state end owner=first shell="$OUT/shell.txt"; then
                 echo "ended" >> "$OUT/steps.txt"
             fi
         fi
@@ -188,6 +176,21 @@ check "no kernel panic (debugcon)"                        "$OUT/debugcon.log" "P
 check "libtest armed with the shell idle"                 "$OUT/steps.txt"    "armed" line
 check "libtest printed the colour row and its results"    "$OUT/steps.txt"    "printed" line
 check "libtest ended"                                     "$OUT/steps.txt"    "ended" line
+check "kernel symbols for the rendezvous found"           "$OUT/symbols.txt"  "found" line
+# stop_checks <tag> <label>: every check of one rendezvous (lib/guest-state.sh).
+stop_checks() {
+    local f="$OUT/state-$1.txt"
+    check "$2: stopped at the task's getkey"                "$f" "PASS $1_rendezvous" line
+    check "$2: task list and slots consistent"             "$f" "PASS $1_list_consistent" line
+    check "$2: number of tasks"                             "$f" "PASS $1_task_count" line
+    check "$2: keyboard owner"                              "$f" "PASS $1_keyboard_owner" line
+    [ "$1" = boot ] || check "$2: the same shell task, process and id" "$f" "PASS $1_same_shell" line
+}
+stop_checks boot    "boot: the shell alone"
+stop_checks shell   "armed: the shell after its prompt, libtest has the keys"
+stop_checks armed   "armed: libtest waits for a key"
+stop_checks printed "printed: libtest waits for a key"
+stop_checks end     "end: libtest gone, the shell alone"
 check "the colour row is on the screen once"              "$OUT/cells.txt"    "the colour row is on the screen once" line
 check "#0-#f in colours 0-15, print() text white"         "$OUT/cells.txt"    "every #n in colour n on black, the print() text white on black" line
 check "invalid colours printed nothing, cursor unchanged" "$OUT/cells.txt"    "no XX printed for the invalid colours" line

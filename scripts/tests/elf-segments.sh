@@ -19,9 +19,11 @@
 #    "elftest.elf two". Each run checks its initial data and zeroed .bss and writes every byte.
 #    The free kernel heap blocks are counted while the shell is idle before and after each run:
 #    each run may keep only the shell's two command nodes. blank.elf must start afterwards.
+#    The shell is idle when scripts/tests/lib/guest-state.sh has stopped the guest at its key
+#    request with the shell alone in the task list and the same shell owning the keyboard.
 # bin/os.bin itself must not change.
 #
-# Env: HOST_CC=cc   BOOT_TIMEOUT=60 (seconds to wait for the shell)   RUN_TIMEOUT=30 (for each run)
+# Needs python3. Env: HOST_CC=cc   BOOT_TIMEOUT=60 (seconds to wait for the shell)   RUN_TIMEOUT=30 (for each run)
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -30,6 +32,7 @@ BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-30}"
 QEMU_TIMEOUT="${QEMU_TIMEOUT:-180}"
 . ./scripts/qemu-lib.sh
+. ./scripts/tests/lib/guest-state.sh
 
 OUT=build/tests/elf-segments
 PROGRAM=programs/elftest/build/elftest.elf
@@ -40,7 +43,8 @@ mkdir -p "$OUT"
 # Remove the last run's results, so the checks below only see this run.
 rm -f "$OUT/host-check" "$OUT/host-build.log" "$OUT/host-check.log" "$OUT/host-status.txt" \
     "$OUT/headers.log" "$OUT/headers-status.txt" "$OUT/counts.txt" "$OUT/image.txt" "$OUT/heap.bin" \
-    "$OUT/elf-segments.bin" "$OUT/screen.txt" "$OUT/debugcon.log"
+    "$OUT/elf-segments.bin" "$OUT/screen.txt" "$OUT/debugcon.log" "$OUT"/state-*.txt "$OUT"/state-*.txt.log \
+    "$OUT/shell.txt" "$OUT"/screen-*.txt
 
 for f in "$PROGRAM" "$BLANK_ELF" "$SHELL_ELF"; do
     [ -f "$f" ] || { echo "elf-segments: $f not found, run 'make all' first" >&2; exit 1; }
@@ -176,48 +180,47 @@ free_blocks() {
     return 1
 }
 
-# wait_idle <runs> [<tag>]: wait until run number <runs> printed its result line and ended, and
-# the shell printed its prompt again (one ">" per prompt below the shell banner).
-wait_idle() {
-    local k="$1" tag="${2:-}" deadline=$((SECONDS + RUN_TIMEOUT)) results ends prompts
-    while ((SECONDS < deadline)); do
-        qemu_running || { echo "  QEMU is not running"; return 1; }
-        screen_snapshot
-        results=1
-        [ -z "$tag" ] || results=$(grep -cE "elftest $tag: (PASS|FAILED)" "$Q_OUT/screen.txt" 2> /dev/null || true)
-        ends=$(grep -cF "Process was terminated" "$Q_OUT/screen.txt" 2> /dev/null || true)
-        prompts=$(sed -n "/${RORTHOX_NAME} v${RORTHOX_VERSION}/,\$p" "$Q_OUT/screen.txt" | tr -cd '>' | wc -c)
-        if [ "${results:-0}" -ge 1 ] && [ "${ends:-0}" -ge "$k" ] && [ "$prompts" -ge $((k + 1)) ]; then
-            echo "  run $k ended and the shell is back after ${SECONDS} s"
-            return 0
-        fi
-        sleep 0.5
-    done
-    echo "  gave up waiting for run $k to end after $RUN_TIMEOUT s"
-    return 1
+# state <tag> [options]: the guest-state rendezvous at the shell's key request, the shell alone
+# with the keyboard; results in $OUT/state-<tag>.txt.
+state() {
+    local tag="$1"
+    shift
+    guest_state "$SOCK" "$OUT/state-$tag.txt" "$tag" timeout="$RUN_TIMEOUT" owner=first "$@"
 }
 
+echo "elf-segments: kernel symbols"
+guest_state_setup "$OUT"
 image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
 cp bin/os.bin "$OUT/elf-segments.bin"
 mcopy -i "$OUT/elf-segments.bin" "$PROGRAM" ::
+GDB_DIR=
+cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
+Q_CLEANUP=cleanup
+trap qemu_exit EXIT
+GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+SOCK="$GDB_DIR/gdb"
 
 echo "elf-segments: run elftest.elf twice, counting free heap blocks"
 : > "$OUT/counts.txt"
-qemu_start "$OUT/elf-segments.bin" "$OUT"
+QEMU_FLAGS="-gdb unix:$SOCK,server=on,wait=off" qemu_start "$OUT/elf-segments.bin" "$OUT"
 counts=()
 runs=0
-if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" && wait_idle 0 && n=$(free_blocks); then
+if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" &&
+    state boot save="$OUT/shell.txt" screen="$OUT/screen-boot.txt" && n=$(free_blocks); then
     counts+=("$n")
     for tag in one two; do
         type_line "elftest.elf $tag"
-        wait_idle $((runs + 1)) "$tag" && n=$(free_blocks) || break
+        # The run's result row, then the shell alone again: elftest has ended.
+        wait_screen_lines "$RUN_TIMEOUT" "regex:(> )?elftest $tag: (PASS|FAILED).*" &&
+            state "$tag" shell="$OUT/shell.txt" screen="$OUT/screen-$tag.txt" && n=$(free_blocks) || break
         runs=$((runs + 1))
         counts+=("$n")
     done
     if [ "$runs" = 2 ]; then
         type_line "blank.elf after"
-        wait_screen "Blank loaded" "$RUN_TIMEOUT" && wait_idle 3 || true
+        wait_screen_lines "$RUN_TIMEOUT" "prompt:after" &&
+            state after shell="$OUT/shell.txt" screen="$OUT/screen-after.txt" || true
     fi
 fi
 qemu_stop || true
@@ -228,20 +231,47 @@ for k in 1 2; do
         echo "run $k kept=$((counts[k - 1] - counts[k]))" >> "$OUT/counts.txt"
     fi
 done
-terminated=$(grep -cF "Process was terminated" "$OUT/screen.txt" 2> /dev/null || true)
-echo "terminated=${terminated:-0}" >> "$OUT/counts.txt"
+# Each run was seen gone at a rendezvous (the shell alone in the task list), and the screen saved
+# there (nothing is printing or scrolling) has the exit row below that run's last row.
+ended=$(cat "$OUT"/state-one.txt "$OUT"/state-two.txt "$OUT"/state-after.txt 2> /dev/null |
+    grep -cxE 'PASS (one|two|after)_task_count' || true)
+echo "ended=${ended:-0}" >> "$OUT/counts.txt"
+for s in boot one two after; do [ -f "$OUT/screen-$s.txt" ] || : > "$OUT/screen-$s.txt"; done
+# exit_below <screen> <ERE>: 1 if a "Process was terminated" row is below the last row matching <ERE>.
+exit_below() {
+    awk -v re="^($2)\$" '$0 ~ re { r = NR; f = 0 } r && $0 == "Process was terminated" { f = 1 } END { print f + 0 }' "$1"
+}
+terminated=$(($(exit_below "$OUT/screen-one.txt" '(> )?elftest one: (PASS|FAILED).*') +
+    $(exit_below "$OUT/screen-two.txt" '(> )?elftest two: (PASS|FAILED).*') + $(exit_below "$OUT/screen-after.txt" '(> )?after')))
+echo "terminated=$terminated" >> "$OUT/counts.txt"
+cat "$OUT/screen-one.txt" "$OUT/screen-two.txt" "$OUT/screen-after.txt" > "$OUT/screen-runs.txt"
 
 check "kernel reached the end of init (debugcon)"   "$OUT/debugcon.log" "Thats cool"
 check "no kernel panic (debugcon)"                   "$OUT/debugcon.log" "PANIC" absent
-check "shell started (banner on screen)"             "$OUT/screen.txt"   "${RORTHOX_NAME} v${RORTHOX_VERSION}"
-check "first run: .data, .bss and writes correct"    "$OUT/screen.txt"   "elftest one: PASS data bss write"
-check "second run: fresh .data and zeroed .bss"      "$OUT/screen.txt"   "elftest two: PASS data bss write"
-check "no elftest check failed"                      "$OUT/screen.txt"   ": FAIL" absent
+check "shell started (banner on screen)"             "$OUT/screen-boot.txt" "${RORTHOX_NAME} v${RORTHOX_VERSION}"
+check "first run: .data, .bss and writes correct"    "$OUT/screen-one.txt"  "elftest one: PASS data bss write"
+check "second run: fresh .data and zeroed .bss"      "$OUT/screen-two.txt"  "elftest two: PASS data bss write"
+check "no elftest check failed"                      "$OUT/screen-runs.txt" ": FAIL" absent
 check "first run kept $KEPT_PER_RUN blocks"          "$OUT/counts.txt"   "run 1 kept=$KEPT_PER_RUN" line
 check "second run kept $KEPT_PER_RUN blocks"         "$OUT/counts.txt"   "run 2 kept=$KEPT_PER_RUN" line
-check "blank.elf started afterwards"                 "$OUT/screen.txt"   "Blank loaded"
-check "blank.elf got its argument"                   "$OUT/screen.txt"   "after" line
-check "all three processes ended"                    "$OUT/counts.txt"   "terminated=3" line
+check "blank.elf started afterwards"                 "$OUT/screen-after.txt" "Blank loaded"
+check "blank.elf got its argument"                   "$OUT/screen-after.txt" "after" line
+check "kernel symbols for the rendezvous found"      "$OUT/symbols.txt"  "found" line
+# stop_checks <tag> <label>: every check of one rendezvous (lib/guest-state.sh).
+stop_checks() {
+    local f="$OUT/state-$1.txt"
+    check "$2: stopped at the shell's getkey"          "$f" "PASS $1_rendezvous" line
+    check "$2: task list and slots consistent"        "$f" "PASS $1_list_consistent" line
+    check "$2: the shell alone"                        "$f" "PASS $1_task_count" line
+    check "$2: the shell owns the keyboard"           "$f" "PASS $1_keyboard_owner" line
+    [ "$1" = boot ] || check "$2: the same shell task, process and id" "$f" "PASS $1_same_shell" line
+}
+stop_checks boot  "boot"
+stop_checks one   "first run ended"
+stop_checks two   "second run ended"
+stop_checks after "blank.elf ended"
+check "all three processes ended (each seen gone)"   "$OUT/counts.txt"   "ended=3" line
+check "an exit row below each run's last row"         "$OUT/counts.txt"   "terminated=3" line
 
 hash_after=$(image_hash)
 [ "$hash_before" = "$hash_after" ] && echo "unchanged" > "$OUT/image.txt" || echo "changed" > "$OUT/image.txt"

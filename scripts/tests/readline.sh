@@ -11,13 +11,14 @@
 #    (integer keys: arrows, Home, End, Delete, Backspace in the middle, ignored special keys,
 #    bytes 0x80/0xff, echo off, the 1023-character echo limit, starts in columns 0/77/79 and on
 #    the bottom row where the screen scrolls) against a string model and an 80x25 screen model.
-# 2. QEMU: boot bin/os.bin (a copy), wait for the shell's prompt, read the VGA page, press
-#    backspace three times, then type "blank.elf rl2", a backspace, "1" and Enter. blank.elf
-#    must run with the argument "rl1"; the prompt row must read "> blank.elf rl1" with the
-#    prompt's cells unchanged, and nothing above it may have changed.
+# 2. QEMU: boot bin/os.bin (a copy), read the VGA page at the shell's key request after its
+#    prompt (scripts/tests/lib/guest-state.sh), press backspace three times, then type
+#    "blank.elf rl2", a backspace, "1" and Enter. blank.elf must run with the argument "rl1" and
+#    end; at the shell's next key request (the same shell, alone) the prompt row must read
+#    "> blank.elf rl1" with the prompt's cells unchanged, and nothing above it may have changed.
 # bin/os.bin must not change.
 #
-# Env: HOST_CC=cc   OBJCOPY=objcopy   BOOT_TIMEOUT=60 (seconds to wait for the shell)
+# Needs python3. Env: HOST_CC=cc   OBJCOPY=objcopy   BOOT_TIMEOUT=60 (seconds to wait for the shell)
 #      RUN_TIMEOUT=30 (for each step)
 
 set -euo pipefail
@@ -27,11 +28,12 @@ OBJCOPY="${OBJCOPY:-objcopy}"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-30}"
 . ./scripts/qemu-lib.sh
+. ./scripts/tests/lib/guest-state.sh
 
 OUT=build/tests/readline
 mkdir -p "$OUT"
 # Remove the last run's results, so the checks below only see this run.
-rm -f "$OUT"/host-* "$OUT"/*.o "$OUT"/*.txt "$OUT"/*.bin "$OUT"/screen.ppm "$OUT"/debugcon.log "$OUT"/monitor.log
+rm -f "$OUT"/host-* "$OUT"/*.o "$OUT"/*.txt "$OUT"/*.txt.log "$OUT"/*.bin "$OUT"/screen.ppm "$OUT"/debugcon.log "$OUT"/monitor.log
 [ -f bin/os.bin ] || { echo "readline: run 'make all' first" >&2; exit 1; }
 hash_before=$(sha256sum bin/os.bin | cut -d' ' -f1)
 
@@ -58,41 +60,12 @@ echo "exit=$host_status" > "$OUT/host-status.txt"
 check "host check built and exited with status 0"  "$OUT/host-status.txt" "exit=0" line
 check "host check: every readline case passed"     "$OUT/host-check.log"  "readline host check: 0 of 33 cases failed" line
 
-# prompts: the number of shell prompts below the shell banner.
-prompts() {
-    sed -n "/${RORTHOX_NAME} v${RORTHOX_VERSION}/,\$p" "$Q_OUT/screen.txt" | tr -cd '>' | wc -c
-}
-
-# wait_prompts <n>: wait until the shell printed its prompt <n> times (it is waiting for keys).
-wait_prompts() {
-    local deadline=$((SECONDS + RUN_TIMEOUT))
-    while ((SECONDS < deadline)); do
-        qemu_running || return 1
-        screen_snapshot
-        [ "$(prompts)" -ge "$1" ] && return 0
-        sleep 0.5
-    done
-    echo "  gave up waiting for shell prompt $1"
-    return 1
-}
-
-# vga_dump <file>: the 4000-byte VGA page, read until two reads agree (nothing is still printing).
-vga_dump() {
-    local i
-    rm -f "$1" "$OUT/dump-a.bin"
-    for ((i = 0; i < 20; i++)); do
-        rm -f "$OUT/dump-b.bin"
-        qemu_cmd "pmemsave 0xb8000 4000 \"$OUT/dump-b.bin\""
-        wait_file "$OUT/dump-b.bin" 4000 || return 1
-        if [ -f "$OUT/dump-a.bin" ] && cmp -s "$OUT/dump-a.bin" "$OUT/dump-b.bin"; then
-            mv "$OUT/dump-b.bin" "$1"
-            rm -f "$OUT/dump-a.bin"
-            return 0
-        fi
-        mv "$OUT/dump-b.bin" "$OUT/dump-a.bin"
-        sleep 0.3
-    done
-    return 1
+# state <tag> [options]: the guest-state rendezvous at the shell's key request, the shell alone
+# with the keyboard; results in $OUT/state-<tag>.txt.
+state() {
+    local tag="$1"
+    shift
+    guest_state "$SOCK" "$OUT/state-$tag.txt" "$tag" timeout="$RUN_TIMEOUT" owner=first "$@"
 }
 
 # keys <key>...: press QEMU keys one after the other.
@@ -106,19 +79,30 @@ keys() {
 
 IMG="$OUT/readline.bin"
 cp bin/os.bin "$IMG"
+guest_state_setup "$OUT"
+GDB_DIR=
+cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
+Q_CLEANUP=cleanup
+trap qemu_exit EXIT
+GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+SOCK="$GDB_DIR/gdb"
 
+# The VGA page (characters and colours) is saved at the shell's key requests: its prompt is on
+# the screen and nothing else prints.
 echo "readline: backspaces at the prompt, then blank.elf rl1 with one typo"
 : > "$OUT/steps.txt"
-qemu_start "$IMG" "$OUT"
-if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" && wait_prompts 1 && vga_dump "$OUT/before.bin"; then
+QEMU_FLAGS="-gdb unix:$SOCK,server=on,wait=off" qemu_start "$IMG" "$OUT"
+if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" &&
+    state boot save="$OUT/shell.txt" memory="b8000,fa0,$OUT/before.bin"; then
     echo "prompt" >> "$OUT/steps.txt"
     keys backspace backspace backspace
     keys b l a n k dot e l f spc r l 2 backspace 1 ret
-    if wait_screen "Process was terminated" "$RUN_TIMEOUT" && wait_prompts 2; then
+    # blank.elf's argument row (the echoed command doesn't match), then the shell alone again.
+    if wait_screen_lines "$RUN_TIMEOUT" "prompt:rl1"; then ran=1; else ran=0; fi
+    # Also when the command didn't run, so the cells below show what the keys did.
+    if state end shell="$OUT/shell.txt" memory="b8000,fa0,$OUT/after.bin" && [ "$ran" = 1 ]; then
         echo "ran" >> "$OUT/steps.txt"
     fi
-    # Also when the command didn't run, so the cells below show what the keys did.
-    vga_dump "$OUT/after.bin" || true
 fi
 qemu_stop || true
 
@@ -175,6 +159,18 @@ check "blank.elf got the argument rl1"              "$Q_OUT/screen.txt" "rl1" li
 check "the prompt row reads > blank.elf rl1"        "$OUT/cells.txt"    "the prompt row reads > blank.elf rl1" line
 check "the prompt's cells are unchanged"            "$OUT/cells.txt"    "the prompt cells are unchanged" line
 check "nothing above the prompt row changed"        "$OUT/cells.txt"    "nothing above the prompt row changed" line
+check "kernel symbols for the rendezvous found"     "$OUT/symbols.txt"  "found" line
+# stop_checks <tag> <label>: every check of one rendezvous (lib/guest-state.sh).
+stop_checks() {
+    local f="$OUT/state-$1.txt"
+    check "$2: stopped at the shell's getkey"          "$f" "PASS $1_rendezvous" line
+    check "$2: task list and slots consistent"        "$f" "PASS $1_list_consistent" line
+    check "$2: the shell alone"                        "$f" "PASS $1_task_count" line
+    check "$2: the shell owns the keyboard"           "$f" "PASS $1_keyboard_owner" line
+    [ "$1" = boot ] || check "$2: the same shell task, process and id" "$f" "PASS $1_same_shell" line
+}
+stop_checks boot "boot"
+stop_checks end  "blank.elf ended"
 
 [ "$(sha256sum bin/os.bin | cut -d' ' -f1)" = "$hash_before" ] && echo unchanged > "$OUT/image.txt" || echo changed > "$OUT/image.txt"
 check "bin/os.bin not changed by the test"  "$OUT/image.txt"  "unchanged" line

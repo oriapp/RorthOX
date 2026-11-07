@@ -26,7 +26,8 @@ At the rendezvous, with the guest stopped, it checks:
   <tag>_same_shell      shell=<file>: the first task, its process and its task id are the ones
                         saved there (task ids only go up, so a shell started again has a new one)
 Options: save=<file> writes the first task, its process and its task id; screen=<file> writes the VGA text
-screen as it is at the stop (the screen can't be halfway through a scroll there).
+screen as it is at the stop (the screen can't be halfway through a scroll there); memory=<hex address>,
+<hex bytes>,<file> writes those bytes of memory as they are at the stop (e.g. the VGA page with its colours).
 Then it detaches and the guest runs on. Run it only while no other debugger is attached.
 """
 
@@ -158,6 +159,11 @@ def main():
         if "screen" in args:
             with open(args["screen"], "w") as f:
                 f.write(vga_text(r.read(0xB8000, 4000)))
+        if "memory" in args:
+            address, length, path = args["memory"].split(",", 2)
+            data = r.read(int(address, 16), int(length, 16))
+            with open(path, "wb") as f:
+                f.write(data)
         r.detach()
     except (RspError, OSError) as e:
         res.add("%s_session" % tag, False, str(e))

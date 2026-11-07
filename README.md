@@ -414,7 +414,9 @@ one row is briefly on it twice. A program's last line on the screen doesn't mean
 needs that (or which task is the shell, or which process gets the keys), `scripts/tests/lib/guest-state.sh` stops
 the guest through QEMU's gdbstub when the right task asks for a key and reads the task list there. The out-of-memory
 tests also use that stop to fill the heap only once the shell is back at its own key request, so nothing but the
-program under test allocates. Some tests stop
+program under test allocates. The release tests count free heap blocks only after that stop, and the console tests
+read the screen with its colours (and the video memory after it) when the program asks for its next key and the
+shell already waits at its own, so no print or scroll is halfway done. Some tests stop
 the CPU through the gdbstub to check registers and memory (the out-of-memory test programs get their copies of the
 kernel's heap table that way: no
 test program reads kernel memory itself), and some compile the real kernel source with the host C compiler (with AddressSanitizer

@@ -11,15 +11,18 @@
 #    format character) through many scrolls, colours moving with the text, terminal_putchar off
 #    the screen, and 4000 mixed calls, compared cell by cell with a model.
 # 2. QEMU: copy bin/os.bin, add programs/ttytest to the copy only, boot, run "ttytest.elf scroll".
-#    After its "armed" line and the shell's prompt, each key starts one phase: 64 numbered lines
-#    and an end marker without a newline, then 40 blocks of exactly 80 characters (no newlines)
-#    and an end marker. After each phase the 4000-byte VGA page is read (raw characters and
+#    Once its "armed" line is there, the shell is at its key request after the prompt and the
+#    program at its own (scripts/tests/lib/guest-state.sh stops at both); each key then starts
+#    one phase: 64 numbered lines and an end marker without a newline, then 40 blocks of exactly
+#    80 characters (no newlines) and an end marker. After each phase, at ttytest's next key
+#    request, the 4000-byte VGA page is read (raw characters and
 #    colours): rows 0-23 must be the last 24 lines (or blocks), row 24 the end marker, every other
 #    cell a white-on-black space. The video memory right after the page (0xB8FA0-0xBBFFF) must
 #    not change. A wider read of video memory is only used to know that a phase has finished.
 # bin/os.bin must not change.
 #
-# Env: HOST_CC=cc   BOOT_TIMEOUT=60 (seconds to wait for the shell)   RUN_TIMEOUT=30 (for each step)
+# Needs python3. Env: HOST_CC=cc   BOOT_TIMEOUT=60 (seconds to wait for the shell)
+#      RUN_TIMEOUT=30 (for each step)
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -27,12 +30,13 @@ HOST_CC="${HOST_CC:-cc}"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-30}"
 . ./scripts/qemu-lib.sh
+. ./scripts/tests/lib/guest-state.sh
 
 OUT=build/tests/tty-scroll
 PROGRAM=programs/ttytest/build/ttytest.elf
 mkdir -p "$OUT"
 # Remove the last run's results, so the checks below only see this run.
-rm -f "$OUT"/host-* "$OUT"/*.txt "$OUT"/*.bin "$OUT"/screen.ppm "$OUT"/debugcon.log "$OUT"/monitor.log
+rm -f "$OUT"/host-* "$OUT"/*.txt "$OUT"/*.txt.log "$OUT"/*.bin "$OUT"/screen.ppm "$OUT"/debugcon.log "$OUT"/monitor.log
 [ -f bin/os.bin ] && [ -f "$PROGRAM" ] || { echo "tty-scroll: run 'make all' first" >&2; exit 1; }
 hash_before=$(sha256sum bin/os.bin | cut -d' ' -f1)
 
@@ -52,44 +56,24 @@ echo "exit=$host_status" > "$OUT/host-status.txt"
 check "host check built and exited with status 0"   "$OUT/host-status.txt" "exit=0" line
 check "host check: every scroll case passed"        "$OUT/host-check.log"  "tty-screen scroll host check: 0 of 9 cases failed" line
 
-# The video memory after the visible page, up to 0xBC000.
-ABOVE_ADDRESS=0xb8fa0
+# The video memory after the visible page (0xB8FA0) up to 0xBC000.
 ABOVE_BYTES=$((0xbc000 - 0xb8fa0))
 
-prompts() {
-    sed -n "/${RORTHOX_NAME} v${RORTHOX_VERSION}/,\$p" "$Q_OUT/screen.txt" | tr -cd '>' | wc -c
+# state <tag> [options]: the guest-state rendezvous at a key request (default: the shell's, the
+# shell alone with the keyboard); results in $OUT/state-<tag>.txt.
+state() {
+    local tag="$1"
+    shift
+    guest_state "$SOCK" "$OUT/state-$tag.txt" "$tag" timeout="$RUN_TIMEOUT" "$@"
 }
 
-# wait_prompts <n>: wait until the shell printed its prompt <n> times (it is waiting for keys).
-wait_prompts() {
-    local deadline=$((SECONDS + RUN_TIMEOUT))
-    while ((SECONDS < deadline)); do
-        qemu_running || return 1
-        screen_snapshot
-        [ "$(prompts)" -ge "$1" ] && return 0
-        sleep 0.5
-    done
-    echo "  gave up waiting for shell prompt $1"
-    return 1
-}
-
-# mem_dump <address> <bytes> <file>: read guest memory until two reads agree (nothing is printing).
-mem_dump() {
-    local i
-    rm -f "$3" "$OUT/dump-a.bin"
-    for ((i = 0; i < 20; i++)); do
-        rm -f "$OUT/dump-b.bin"
-        qemu_cmd "pmemsave $1 $2 \"$OUT/dump-b.bin\""
-        wait_file "$OUT/dump-b.bin" "$2" || return 1
-        if [ -f "$OUT/dump-a.bin" ] && cmp -s "$OUT/dump-a.bin" "$OUT/dump-b.bin"; then
-            mv "$OUT/dump-b.bin" "$3"
-            rm -f "$OUT/dump-a.bin"
-            return 0
-        fi
-        mv "$OUT/dump-b.bin" "$OUT/dump-a.bin"
-        sleep 0.3
-    done
-    return 1
+# video <tag> <n>: rendezvous <tag> at ttytest's key request; saves the page as page<n>.bin and the
+# memory after it as above<n>.bin, both as they are at the stop.
+video() {
+    rm -f "$OUT/video$2.bin"
+    state "$1" at=last tasks=2 owner=last shell="$OUT/shell.txt" memory="b8000,4000,$OUT/video$2.bin" &&
+        [ "$(wc -c < "$OUT/video$2.bin")" = $((4000 + ABOVE_BYTES)) ] &&
+        head -c 4000 "$OUT/video$2.bin" > "$OUT/page$2.bin" && tail -c +4001 "$OUT/video$2.bin" > "$OUT/above$2.bin"
 }
 
 # wait_wide <text>: wait until <text> is anywhere in the first 32000 bytes of video memory, so a
@@ -100,7 +84,9 @@ wait_wide() {
         qemu_running || { echo "  QEMU is not running, stopped waiting for \"$1\""; return 1; }
         rm -f "$OUT/wide.bin"
         qemu_cmd "pmemsave 0xb8000 32000 \"$OUT/wide.bin\""
-        if wait_file "$OUT/wide.bin" 32000 && vga_to_text "$OUT/wide.bin" | grep -qF -- "$1"; then
+        # grep reads everything: with -q it could stop early, and under pipefail the writer's
+        # broken pipe would turn a match into a failure.
+        if wait_file "$OUT/wide.bin" 32000 && vga_to_text "$OUT/wide.bin" | grep -F -- "$1" > /dev/null; then
             echo "  \"$1\" in video memory after ${SECONDS} s"
             return 0
         fi
@@ -110,30 +96,37 @@ wait_wide() {
     return 1
 }
 
-# phase <n> <end marker>: wait for the marker, then save the page and the memory after it.
+# phase <n> <end marker>: wait for the marker, then save the page and the memory after it at
+# ttytest's next key request (the phase has ended there, and the shell prints nothing).
 phase() {
-    wait_wide "$2" && mem_dump 0xb8000 4000 "$OUT/page$1.bin" &&
-        mem_dump "$ABOVE_ADDRESS" "$ABOVE_BYTES" "$OUT/above$1.bin" && echo "phase $1" >> "$OUT/steps.txt"
+    wait_wide "$2" && video "phase$1" "$1" && echo "phase $1" >> "$OUT/steps.txt"
 }
 
 IMG="$OUT/tty-scroll.bin"
 cp bin/os.bin "$IMG"
 mcopy -i "$IMG" "$PROGRAM" ::
+guest_state_setup "$OUT"
+GDB_DIR=
+cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
+Q_CLEANUP=cleanup
+trap qemu_exit EXIT
+GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+SOCK="$GDB_DIR/gdb"
 
 echo "tty-scroll: run ttytest.elf scroll"
 : > "$OUT/steps.txt"
-qemu_start "$IMG" "$OUT"
-if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" && wait_prompts 1; then
+QEMU_FLAGS="-gdb unix:$SOCK,server=on,wait=off" qemu_start "$IMG" "$OUT"
+if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" && state boot owner=first save="$OUT/shell.txt"; then
     type_line "ttytest.elf scroll"
-    if wait_screen "ttytest scroll: armed" "$RUN_TIMEOUT" && wait_prompts 2 &&
-            mem_dump "$ABOVE_ADDRESS" "$ABOVE_BYTES" "$OUT/above0.bin"; then
+    if wait_screen_lines "$RUN_TIMEOUT" "prompt:ttytest scroll: armed" &&
+        state shell at=first tasks=2 owner=last shell="$OUT/shell.txt" && video armed 0; then
         echo "armed" >> "$OUT/steps.txt"
         qemu_cmd "sendkey a"
         if phase 1 "ttytest scroll: lines end"; then
             qemu_cmd "sendkey a"
             if phase 2 "ttytest scroll: wrap end"; then
                 qemu_cmd "sendkey a"
-                wait_wide "Process was terminated" && echo "done" >> "$OUT/steps.txt" || true
+                state end owner=first shell="$OUT/shell.txt" && echo "done" >> "$OUT/steps.txt" || true
             fi
         fi
     fi
@@ -217,6 +210,22 @@ check "lines: nothing written after the page"             "$OUT/cells.txt"    "p
 check "blocks: end marker on the last row"                "$OUT/cells.txt"    "phase 2: end marker on row 24" line
 check "blocks: rows 0-23 are blocks 17-40, rest cleared"  "$OUT/cells.txt"    "phase 2: page is exactly the last 24 rows and the end marker" line
 check "blocks: nothing written after the page"            "$OUT/cells.txt"    "phase 2: memory after the page unchanged" line
+check "kernel symbols for the rendezvous found"           "$OUT/symbols.txt"  "found" line
+# stop_checks <tag> <label>: every check of one rendezvous (lib/guest-state.sh).
+stop_checks() {
+    local f="$OUT/state-$1.txt"
+    check "$2: stopped at the task's getkey"                "$f" "PASS $1_rendezvous" line
+    check "$2: task list and slots consistent"             "$f" "PASS $1_list_consistent" line
+    check "$2: number of tasks"                             "$f" "PASS $1_task_count" line
+    check "$2: keyboard owner"                              "$f" "PASS $1_keyboard_owner" line
+    [ "$1" = boot ] || check "$2: the same shell task, process and id" "$f" "PASS $1_same_shell" line
+}
+stop_checks boot   "boot: the shell alone"
+stop_checks shell  "armed: the shell after its prompt, ttytest has the keys"
+stop_checks armed  "armed: ttytest waits for a key"
+stop_checks phase1 "phase 1: ttytest waits for a key"
+stop_checks phase2 "phase 2: ttytest waits for a key"
+stop_checks end    "end: ttytest gone, the shell alone"
 
 [ "$(sha256sum bin/os.bin | cut -d' ' -f1)" = "$hash_before" ] && echo unchanged > "$OUT/image.txt" || echo changed > "$OUT/image.txt"
 check "bin/os.bin not changed by the test"  "$OUT/image.txt"  "unchanged" line
