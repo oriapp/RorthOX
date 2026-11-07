@@ -9,18 +9,18 @@ out=${GITHUB_OUTPUT:?GITHUB_OUTPUT is required}
 archive=${RUNNER_TEMP:?RUNNER_TEMP is required}/candidate-image.tar.gz
 fail() { echo "image: $*" >&2; exit 1; }
 record() { printf '%s=%s\n' "$1" "$2" >> "$out"; }
-# docker manifest inspect is anonymous before login; never assume a tag is a digest.
+# Docker pull resolves a tag to its registry digest, including an OCI index with attestations.
+# Read that identity from the local image rather than a child of manifest inspect --verbose.
 public_digest() {
-    local manifest
-    manifest=$(docker manifest inspect --verbose "$tag" 2>/dev/null) || return 1
-    printf '%s' "$manifest" | python3 -c '
+    docker image inspect --format '{{json .RepoDigests}}' "$tag" | python3 -c '
 import json, re, sys
-try:
-    data = json.load(sys.stdin)
-    digest = data["Descriptor"]["digest"]
-    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest): raise ValueError("digest")
-    print(digest)
-except (KeyError, ValueError, TypeError): sys.exit(1)
+refs = json.load(sys.stdin)
+digests = set()
+for ref in refs:
+    match = re.fullmatch(r"ghcr\.io/oriapp/rorthox-build(?::[0-9a-f]{64})?@(sha256:[0-9a-f]{64})", ref)
+    if match: digests.add(match.group(1))
+if len(digests) != 1: sys.exit(1)
+print("ghcr.io/oriapp/rorthox-build@" + digests.pop())
 '
 }
 # Run only non-secret commands before acquiring registry write credentials.
@@ -43,9 +43,9 @@ validate() {
 case "${1:-}" in
     prepare)
         record key "$key"
-        if digest=$(public_digest); then
-            ref=$image@$digest
-            docker pull "$ref"
+        if docker manifest inspect "$tag" >/dev/null 2>&1; then
+            docker pull "$tag"
+            ref=$(public_digest) || fail 'public tag has no unambiguous digest'
             hash=$(docker image inspect --format '{{index .Config.Labels "org.rorthox.image.input-hash"}}' "$ref")
             [ "$hash" = "$key" ] || fail 'published image has the wrong input hash'
             record mode digest
@@ -85,27 +85,34 @@ case "${1:-}" in
         docker image inspect "$id" >/dev/null || fail 'image ID missing from archive'
         hash=$(docker image inspect --format '{{index .Config.Labels "org.rorthox.image.input-hash"}}' "$id")
         [ "$hash" = "$key" ] || fail 'archive input hash mismatch'
+        validate "$id" # Run the tool checks before any publication credentials enter the environment.
         record id "$id"
         ;;
     publish)
         # A concurrent push of the same key is serialized by the workflow concurrency group.
         id=${IMAGE_ID:?IMAGE_ID is required}
         [[ "$id" =~ ^sha256:[0-9a-f]{64}$ ]] || fail 'invalid image ID'
-        validate "$id"
         printf '%s' "${GHCR_TOKEN:?GHCR_TOKEN is required}" | docker login ghcr.io -u "${GITHUB_ACTOR:?}" --password-stdin >/dev/null
         # Never overwrite an existing content tag, including one hidden from anonymous users.
         error=$(mktemp)
         trap 'rm -f "$error"' EXIT
         if docker manifest inspect "$tag" >/dev/null 2>"$error"; then
             echo 'image: existing tag; publication skipped'
-        elif grep -Eiq 'manifest unknown|no such manifest' "$error"; then
+            docker pull "$tag"
+            ref=$(public_digest) || fail 'existing tag has no unambiguous digest'
+        elif grep -Eiq 'manifest unknown|no such manifest|denied' "$error"; then
+            printf 'Registry lookup before publication: `%s`\n' "$(tr '\n' ' ' < "$error" | cut -c 1-400)" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
             docker tag "$id" "$tag"
-            docker push "$tag"
+            push_log=$(mktemp)
+            trap 'rm -f "$error" "$push_log"' EXIT
+            docker push "$tag" | tee "$push_log"
+            digest=$(sed -nE 's/.*digest: (sha256:[0-9a-f]{64}).*/\1/p' "$push_log" | tail -n 1)
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || fail 'registry push did not report a digest'
+            ref=$image@$digest
         else
             fail 'registry lookup failed; refusing to overwrite an unverified tag'
         fi
-        digest=$(public_digest) || fail 'published digest unavailable'
-        record ref "$image@$digest"
+        record ref "$ref"
         ;;
     *) fail 'usage: image-job.sh prepare|fetch|receive|publish' ;;
 esac

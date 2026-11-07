@@ -513,8 +513,10 @@ is optional: without it `fat-write` and `file-syscalls` say they skip that one c
 The candidate build image is `ghcr.io/oriapp/rorthox-build`: its tag is the full content hash of `ci/Dockerfile`
 and `configure.sh`, while pulls use a registry digest. CI builds it once per missing public tag and only trusted branch
 pushes can publish it. Until the first published image is public, or for a pull request changing its inputs, CI
-transfers a checksummed image archive and runs it by its verified image ID. The candidate runs the full TCG suite
-separately; only the existing four shards are required. The digest in `ci/image.ref` stays a placeholder until a
+transfers a checksummed image archive and runs it by its verified image ID. Publication validates the tools but
+runs before the advisory TCG suite completes. If that suite fails, the content tag remains: inspect its report and
+fix the image inputs or remove the tag before retrying. Do not record its digest until the suite passes. Only the
+existing four shards are required. The digest in `ci/image.ref` stays a placeholder until a
 person records the published digest in a later commit; CI never edits or pushes that file. After that, a local
 `./ci/run.sh make test` runs in the image (build `make all iso` first); the existing local commands still work.
 

@@ -46,6 +46,7 @@ grep -q 'snapshot.ubuntu.com/ubuntu/[0-9]\{8\}T[0-9]\{6\}Z' ci/Dockerfile || fai
 [ "$(grep -c 'bash git ca-certificates curl' ci/Dockerfile)" -eq 2 ] || fail 'CA absent from verified install'
 ! grep -Eq '(^|[[:space:]])(COPY[[:space:]]+\.|ADD[[:space:]]+https?://|latest)' ci/Dockerfile || fail 'unbounded Docker input'
 grep -q 'org.opencontainers.image.licenses="GPL-2.0"' ci/Dockerfile || fail 'license label'
+grep -q 'python3 python3-yaml' ci/Dockerfile || fail 'in-image workflow YAML parser missing'
 # Fake docker records exact argv with NUL separators; no daemon is needed.
 case "$out" in
     "$root"|"$root"/*) work="$out/work with spaces" ;;

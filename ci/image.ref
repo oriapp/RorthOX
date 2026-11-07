@@ -1,2 +1,2 @@
-# A person records the verified published digest in CI-G; CI does not modify this file.
+# A person records the verified published digest in a later commit; CI does not modify this file.
 ghcr.io/oriapp/rorthox-build@sha256:0000000000000000000000000000000000000000000000000000000000000000

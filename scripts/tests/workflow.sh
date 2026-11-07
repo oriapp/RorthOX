@@ -60,10 +60,16 @@ with tempfile.TemporaryDirectory() as temp:
                         ('tagged-key-run', text.replace('run: |\n          make all iso', '!!str run: echo "${{ github.event.inputs.arg }}"', 1)),
                         ('publication-gate', text.replace("github.repository == 'oriapp/RorthOX' && ", '', 1)),
                         ('publication-permission', text.replace('      packages: write', '      packages: read', 1)),
-                        ('prep-permission', text.replace('  image-prep:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 120 # Cold build: two source-built cross compilers.\n    permissions:\n      contents: read', '  image-prep:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 120 # Cold build: two source-built cross compilers.\n    permissions:\n      contents: read\n      packages: write', 1)),
+                        ('prep-permission', text.replace('  image-prep:\n    continue-on-error: true\n    runs-on: ubuntu-24.04\n    timeout-minutes: 120 # Cold build: two source-built cross compilers.\n    permissions:\n      contents: read', '  image-prep:\n    continue-on-error: true\n    runs-on: ubuntu-24.04\n    timeout-minutes: 120 # Cold build: two source-built cross compilers.\n    permissions:\n      contents: read\n      packages: write', 1)),
+                        ('prep-not-advisory', text.replace('  image-prep:\n    continue-on-error: true', '  image-prep:', 1)),
+                        ('publish-not-advisory', text.replace('  image:\n    continue-on-error: true', '  image:', 1)),
+                        ('prepare-no-pipefail', text.replace('        shell: bash # Fail the step when prepare fails, not just when tee fails.\n', '', 1)),
+                        ('summary-no-pipefail', text.replace('        shell: bash # The tool-version pipe must preserve docker\'s exit status.\n', '', 1)),
+                        ('long-image-retention', text.replace('          retention-days: 1', '          retention-days: 90', 1)),
                         ('candidate-required', text.replace('needs: [build, test]', 'needs: [build, test, candidate]', 1)),
-                        ('candidate-not-advisory', text.replace('    continue-on-error: true\n    runs-on:', '    continue-on-error: false\n    runs-on:', 1)),
-                        ('candidate-missing', text.replace('needs: image-prep\n    if: always()\n    continue-on-error: true', 'needs: build\n    if: always()\n    continue-on-error: true', 1))):
+                        ('candidate-not-advisory', text.replace('  candidate:\n    needs: image-prep\n    if: ${{ !cancelled() }}\n    continue-on-error: true', '  candidate:\n    needs: image-prep\n    if: ${{ !cancelled() }}\n    continue-on-error: false', 1)),
+                        ('candidate-on-cancel', text.replace('    if: ${{ !cancelled() }}\n    continue-on-error: true', '    if: always()\n    continue-on-error: true', 1)),
+                        ('candidate-missing', text.replace('needs: image-prep\n    if: ${{ !cancelled() }}\n    continue-on-error: true', 'needs: build\n    if: ${{ !cancelled() }}\n    continue-on-error: true', 1))):
         print('checking', tag, flush=True)
         run(broken, False)
         print('PASS rejected', tag)

@@ -130,6 +130,7 @@ jobs:
 
   # The read-only producer runs on forks as well as trusted branches. The required path does not wait for it.
   image-prep:
+    continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 120 # Cold build: two source-built cross compilers.
     permissions:
@@ -147,6 +148,7 @@ jobs:
           persist-credentials: false
       - name: Fetch or build and validate candidate
         id: prepare
+        shell: bash # Fail the step when prepare fails, not just when tee fails.
         run: bash ci/image-job.sh prepare 2>&1 | tee "$RUNNER_TEMP/image-prep.log"
       # actions/upload-artifact v6
       - name: Upload preparation failure
@@ -165,13 +167,17 @@ jobs:
           path: ${{ runner.temp }}/candidate-image.tar.gz
           if-no-files-found: error
           compression-level: 0
+          retention-days: 1
 
   # Only this job may write packages, and only on first-party branch pushes.
   image:
+    continue-on-error: true
     needs: image-prep
     if: github.event_name == 'push' && github.repository == 'oriapp/RorthOX' && (github.ref == 'refs/heads/features' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    # A third same-input trusted push during a cold build may replace a pending publish job.
+    # The next push publishes; preparation, PRs and required jobs never use this group.
     concurrency:
       group: image-${{ needs.image-prep.outputs.key }}
       cancel-in-progress: false
@@ -220,7 +226,7 @@ jobs:
   # Advisory only; no dependency from result to this job.
   candidate:
     needs: image-prep
-    if: always()
+    if: ${{ !cancelled() }}
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -263,6 +269,7 @@ jobs:
           ./ci/run.sh ./scripts/run-tests.sh -j 2 --results build/tests/runs/candidate
       - name: Record certification evidence
         if: always()
+        shell: bash # The tool-version pipe must preserve docker's exit status.
         env:
           IMAGE_ID: ${{ steps.image-id.outputs.id }}
           IMAGE_REF: ${{ needs.image-prep.outputs.ref }}

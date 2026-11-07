@@ -47,6 +47,9 @@ def lint(text):
         expected = ['      contents: read'] + (['      packages: write'] if name == 'image' else [])
         require(len(grants) == 1 and grants[0].splitlines() == expected,
                 f'{name}: unexpected permissions')
+        if name not in ('build', 'test', 'result'):
+            require(re.findall(r'^    continue-on-error: (.*)$', body, re.M) == ['true'],
+                    f'{name}: advisory job must not fail the run')
     # Parse real YAML when available; the fail-closed syntax restrictions below also
     # protect hosts without the optional YAML package.
     try:
@@ -93,9 +96,13 @@ def lint(text):
     require('needs: [build, test]' in jobs['result'] and re.search(r'^    if: always\(\)$', jobs['result'], re.M)
             and 'scripts/ci-result.py' in jobs['result'], 'aggregate must run after failure')
     require('needs: image-prep' in jobs['candidate'] and
-            re.search(r'^    continue-on-error: true$', jobs['candidate'], re.M) and
+            re.search(r'^    if: \$\{\{ !cancelled\(\) \}\}$', jobs['candidate'], re.M) and
             not re.search(r'needs:.*candidate', jobs['result']),
             'advisory image suite must not affect required result')
+    require('shell: bash # Fail the step when prepare fails' in jobs['image-prep']
+            and 'shell: bash # The tool-version pipe' in jobs['candidate'],
+            'piped steps must use bash pipefail')
+    require('retention-days: 1' in jobs['image-prep'], 'candidate archive retention too long')
     require('needs: image-prep' in jobs['image'] and
             'cancel-in-progress: false' in jobs['image'] and
             'group: image-${{ needs.image-prep.outputs.key }}' in jobs['image'],

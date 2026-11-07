@@ -31,7 +31,7 @@ RUN printf '%s\n' \
       build-essential bison flex libgmp3-dev libmpc-dev libmpfr-dev texinfo \
       bash git ca-certificates curl xz-utils tar gzip coreutils findutils \
       diffutils grep sed gawk util-linux procps nasm mtools dosfstools \
-      qemu-system-x86 qemu-utils gdb gdb-multiarch python3 \
+      qemu-system-x86 qemu-utils gdb gdb-multiarch python3 python3-yaml \
       grub-common grub-pc-bin grub-efi-amd64-bin grub-efi-ia32-bin xorriso ovmf && \
     rm -rf /var/lib/apt/lists/*
 COPY --from=toolchain /opt/cross /opt/cross
