@@ -89,7 +89,9 @@ vm_running() {
         lines=$(wc -l < "$Q_OUT/monitor.log")
         qemu_cmd "info status"
         screen_snapshot
-        tail -n +"$((lines + 1))" "$Q_OUT/monitor.log" | grep -q "VM status: running" && return 0
+        # grep reads the whole tail: with -q it could stop early, tail would then die of SIGPIPE
+        # and pipefail would turn a match into a failure.
+        tail -n +"$((lines + 1))" "$Q_OUT/monitor.log" | grep "VM status: running" > /dev/null && return 0
         sleep 0.2
     done
     echo "  the VM did not run on after the debugger attached"

@@ -1,33 +1,28 @@
 # Shared ring-3 probe session. The caller sets OUT and prepares IMAGE.
 # Each invocation of a QEMU-bearing test must run under timeout 120.
-# wait_exits [child line]: until syscheck has exited (an exit row below "syscheck: continued") and,
-# with a child line, the child too (an exit row below that line). Counting exit rows is not
-# enough: while the tty scrolls, one row can show up twice for a moment. The last row is still
-# filled then, at rest it is blank. The two lines can come in either order, so two exit rows
-# below the later one also count.
+. ./scripts/tests/lib/guest-state.sh
+
+# syscheck_setup: once per test, the kernel symbols for the guest-state rendezvous and a directory
+# for the debugger sockets (removed by the EXIT trap).
+SYSCHECK_GDB=
+syscheck_cleanup() { [ -z "$SYSCHECK_GDB" ] || rm -rf "$SYSCHECK_GDB"; }
+syscheck_setup() {
+    [ -z "$SYSCHECK_GDB" ] || return 0
+    guest_state_setup "$OUT"
+    Q_CLEANUP=syscheck_cleanup
+    trap qemu_exit EXIT
+    SYSCHECK_GDB=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+}
+# wait_exits <dir> <mode>: until syscheck and any program it started have ended: the guest-state
+# rendezvous stops at the shell's key request with the shell alone in the task list, the same
+# shell as at boot, owning the keyboard. Exit rows on the screen are no proof: while the tty
+# scrolls, one row can show up twice for a moment.
 wait_exits() {
-    local child="${1:-}" deadline=$((SECONDS + 15))
-    while ((SECONDS < deadline)); do
-        qemu_running || return 1
-        screen_snapshot
-        if awk -v child="$child" '
-            { row[NR] = $0 }
-            index($0, "syscheck: continued") { c = NR }
-            child != "" && index($0, child) { x = NR }
-            END {
-                if (NR != 25 || row[NR] != "" || !c || (child != "" && !x)) exit 1
-                first = c; last = c
-                if (child != "") { if (x < c) first = x; else last = x }
-                for (i = first + 1; i <= NR; i++)
-                    if (index(row[i], "Process was terminated")) { if (i < last) between++; else below++ }
-                exit !(child == "" ? below : (between && below) || below >= 2)
-            }' "$Q_OUT/screen.txt"; then
-            return 0
-        fi
-        sleep 0.2
-    done
-    echo "FAIL waiting for the syscheck exits"
-    return 1
+    guest_state "$SYSCHECK_SOCK" "$1/state-exits.txt" exits timeout=15 owner=first shell="$1/shell.txt" || :
+    check "$2 syscheck and its children ended, the same shell alone" "$1/state-exits.txt" "PASS exits_task_count" line
+    check "$2 the shell owns the keyboard again" "$1/state-exits.txt" "PASS exits_keyboard_owner" line
+    check "$2 the same shell task, process and id" "$1/state-exits.txt" "PASS exits_same_shell" line
+    grep -qx "PASS exits_task_count" "$1/state-exits.txt" 2> /dev/null && ! grep -q '^FAIL' "$1/state-exits.txt"
 }
 # wait_recovery: until one snapshot shows the recovery run itself: "Blank loaded", the argv line
 # "recovery" (the echoed "blank.elf recovery" doesn't match) and an exit below it. Counting exit
@@ -60,8 +55,12 @@ run_syscheck() {
     local mode="$1" expected="$2" out="$OUT/session-$1" flags="${QEMU_FLAGS:-}"
     # "get" passes 0x800000 to syscall 8. QEMU's loader device puts known bytes there at reset.
     [ "$mode" != get ] || flags="$flags -device loader,addr=0x800000,data=0x8877665544332211,data-len=8"
-    QEMU_FLAGS="$flags" qemu_start "$IMAGE" "$out"
+    syscheck_setup
+    SYSCHECK_SOCK="$SYSCHECK_GDB/gdb-$mode"
+    QEMU_FLAGS="$flags -gdb unix:$SYSCHECK_SOCK,server=on,wait=off" qemu_start "$IMAGE" "$out"
+    rm -f "$out"/state-*.txt "$out"/state-*.txt.log "$out/shell.txt"
     wait_screen "$RORTHOX_NAME v$RORTHOX_VERSION" 20 || return 1
+    guest_state "$SYSCHECK_SOCK" "$out/state-boot.txt" boot owner=first save="$out/shell.txt" || return 1
     type_line "syscheck.elf $mode"
     wait_screen "syscheck: armed" 20 || return 1
     # The host compares the bytes at 0x800000 before and after.
@@ -93,9 +92,7 @@ run_syscheck() {
         free*|cmdfree*) check "$mode rejection" "$out/screen.txt" 'syscheck: freed result -2' ;;
     esac
     check "$mode no panic" "$out/debugcon.log" '[PANIC]' absent
-    local child=
-    case "$expected" in 'syscheck: child PASS'|'raw: ran') child=$expected;; esac
-    wait_exits "$child" || return 1
+    wait_exits "$out" "$mode" || return 1
     # A fresh positive control proves the shell/keyboard survived, not just the caller.
     type_line 'blank.elf recovery'
     wait_recovery || return 1

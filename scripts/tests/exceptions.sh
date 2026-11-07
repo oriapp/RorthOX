@@ -101,7 +101,9 @@ key_when_running() {
     for ((i = 0; i < 50; i++)); do
         qemu_cmd "info status"
         screen_snapshot      # a monitor round trip: the status line is in monitor.log after it
-        if grep -a 'VM status' "$Q_OUT/monitor.log" | tail -n +$((seen + 1)) | grep -q 'VM status: running'; then
+        # grep reads everything: with -q it could stop early, tail would then die of SIGPIPE and
+        # pipefail would turn a match into a failure.
+        if grep -a 'VM status' "$Q_OUT/monitor.log" | tail -n +$((seen + 1)) | grep 'VM status: running' > /dev/null; then
             qemu_cmd "sendkey k"
             return 0
         fi
