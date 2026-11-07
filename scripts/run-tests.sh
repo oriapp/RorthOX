@@ -26,8 +26,11 @@
 # run directory has a character CI's artifact upload refuses (see the end).
 #
 # Every test runs in its own session. When it ends or runs out of time, or when the runner gets
-# TERM, INT or HUP, whatever still runs in that session (QEMU, a debugger, timeout and their
-# children) gets TERM and, 5 seconds later, KILL.
+# TERM, INT, HUP or PIPE (its output was closed), whatever still runs in that session (QEMU, a
+# debugger, timeout and their children) gets TERM and, 5 seconds later, KILL. On any other way out
+# (another signal it can catch, an error) the runner stops its running tests the same way before it
+# exits. KILL to the runner itself leaves its running tests behind, in their own sessions: stop
+# them by session or by their TMPDIR (rx.XXXXXX).
 
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
@@ -81,17 +84,21 @@ if [ "$runs" = build/tests/runs ]; then
     done
 fi
 run_dir="$(mktemp -d "$runs/run.XXXXXX")" || exit 2
-# Unix socket paths are short (108 bytes), so the temporary directories stay on a short absolute path.
-case "${TMPDIR:-}" in /*) tmp_base="$TMPDIR" ;; *) tmp_base=/tmp ;; esac
+# Unix socket paths are short (108 bytes), so the temporary directories stay on a short absolute
+# path. The runner finds a test's processes by that path (pgrep -f takes a regular expression), so
+# a TMPDIR with other characters than these isn't used.
+if [[ ${TMPDIR:-} =~ ^/[A-Za-z0-9/._-]+$ ]]; then tmp_base=$TMPDIR; else tmp_base=/tmp; fi
 run_tmp="$(mktemp -d "$tmp_base/rx.XXXXXX")" || exit 2
 ticker=
+declare -A active=()   # session (= the pid the runner started) -> index in tests
 # A signal only marks the run as interrupted: the main loop then stops every running test, and the
-# run directory is marked finished only after that.
+# run directory is marked finished only after that. Nobody reads the output after PIPE.
 cancel=
 trap 'cancel=TERM' TERM
 trap 'cancel=INT' INT
 trap 'cancel=HUP' HUP
-trap '[ -n "$ticker" ] && kill "$ticker" 2> /dev/null; rm -rf "$run_tmp"; : > "$run_dir/finished"' EXIT
+trap 'cancel=PIPE; exec > /dev/null' PIPE
+trap on_exit EXIT
 grace=5
 
 annotate() {
@@ -148,36 +155,63 @@ replay() {
     prefix="[$(one_line "$1")] "
     cr=$'\r'"$prefix"
     while IFS= read -r line || [ -n "$line" ]; do
+        [ "$cancel" != PIPE ] || break
         line=${line%$'\r'}
         printf '%s%s\n' "$prefix" "${line//$'\r'/"$cr"}"
     done < "$2"
 }
 
-# leftovers <session> <test tmp>: what still runs in the test's session, or outside it with the
-# test's TMPDIR in its command line (QEMU's sockets and pipes are there).
-leftovers() {
-    { pgrep -s "$1"; pgrep -f -- "$2/"; } 2> /dev/null | sort -u
+# count_left <session> <test tmp>: sets left_count to the number of processes still running in the
+# test's session, or outside it with the test's TMPDIR in their command line (QEMU's sockets and
+# pipes are there). Fails when a pgrep was stopped by a signal. No subshells here or in stop_test:
+# a subshell doesn't keep the runner's traps, so a signal to the runner's process group (Ctrl-C,
+# or timeout around the runner) would end it and lose the answer.
+count_left() {
+    local -A seen=()
+    local p s1 s2 pids=()
+    pgrep -s "$1" > "$run_tmp/left" 2> /dev/null
+    s1=$?
+    pgrep -f -- "$2/" >> "$run_tmp/left" 2> /dev/null
+    s2=$?
+    mapfile -t pids < "$run_tmp/left"
+    for p in "${pids[@]}"; do seen[$p]=1; done
+    left_count=${#seen[@]}
+    [ "$s1" -le 1 ] && [ "$s2" -le 1 ]
 }
 
 # stop_test <session> <test tmp>: TERM to everything the test left, KILL to what is still there
-# $grace seconds later. Prints how many processes were left.
+# $grace seconds later. Sets stopped to the number of processes that were left.
 stop_test() {
-    local sid="$1" dir="$2" left i
-    left=$(leftovers "$sid" "$dir" | wc -l)
-    [ "$left" -gt 0 ] || { echo 0; return 0; }
+    local sid="$1" dir="$2" i
+    for ((i = 0; i < 3; i++)); do
+        count_left "$sid" "$dir" && break
+    done
+    stopped=$left_count
+    [ "$stopped" -gt 0 ] || return 0
     pkill -TERM -s "$sid" 2> /dev/null
     pkill -TERM -f -- "$dir/" 2> /dev/null
     for ((i = 0; i < grace * 10; i++)); do
-        [ -n "$(leftovers "$sid" "$dir")" ] || { echo "$left"; return 0; }
+        count_left "$sid" "$dir" && [ "$left_count" -eq 0 ] && return 0
         sleep 0.1
     done
     pkill -KILL -s "$sid" 2> /dev/null
     pkill -KILL -f -- "$dir/" 2> /dev/null
     for ((i = 0; i < 50; i++)); do
-        [ -n "$(leftovers "$sid" "$dir")" ] || break
+        count_left "$sid" "$dir" && [ "$left_count" -eq 0 ] && break
         sleep 0.1
     done
-    echo "$left"
+}
+
+# on_exit: the EXIT trap. Stops the tests that still run (after a signal other than TERM, INT, HUP
+# or PIPE, or an error), then removes the temporary directories and marks the run finished.
+on_exit() {
+    local sid
+    [ -n "$ticker" ] && kill "$ticker" 2> /dev/null
+    for sid in "${!active[@]}"; do
+        stop_test "$sid" "$run_tmp/$((${active[$sid]} + 1))"
+    done
+    rm -rf "$run_tmp"
+    : > "$run_dir/finished"
 }
 
 # ours <pid>: the pid is still a test this runner started (its child and a session leader), not a
@@ -194,7 +228,6 @@ failed=()
 skipped=()
 failed_order=()
 declare -a statuses=() logs=() starts=() deadlines=() stopping=() sessions=()
-declare -A active=()   # session (= the pid the runner started) -> index in tests
 next=0
 
 start_test() {
@@ -217,7 +250,8 @@ start_test() {
 # finish_test <index> <exit status>: stop what the test left, print its output and record it.
 finish_test() {
     local i="$1" status="$2" t="${tests[$1]}" left tenths
-    left=$(stop_test "${sessions[i]}" "$run_tmp/$((i + 1))")
+    stop_test "${sessions[i]}" "$run_tmp/$((i + 1))"
+    left=$stopped
     unset "active[${sessions[i]}]"
     rm -rf "${run_tmp:?}/$((i + 1))"
     case "${stopping[i]:-}" in

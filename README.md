@@ -405,7 +405,8 @@ make test
 This builds everything (and the GRUB ISO, when its packages are installed) and runs 69 tests (`scripts/smoke.sh` plus
 every `scripts/tests/*.sh`), as many at once as there are CPUs (about 2 minutes with 16); it keeps going after a
 failure and prints a summary (`69 passed, 0 failed, 0 skipped`) and where the output went. `make test TEST_JOBS=1`
-runs them one after the other, as before (about 14 minutes); `TEST_JOBS=4` runs four at once. `make smoke` runs
+runs them one after the other (about 14 minutes; as at any `-j`, a test's output shows when it ends);
+`TEST_JOBS=4` runs four at once. `make smoke` runs
 only the smoke test, and `./scripts/run-tests.sh scripts/tests/panic.sh` runs single tests (a test named twice runs
 twice). `./scripts/run-tests.sh -j 4` runs four at a time, `--list` prints the tests it would run, and `--timeout 300`
 stops a test that takes longer than 300 seconds and counts it as failed (default 900, or `RORTHOX_TEST_TIMEOUT`;
@@ -415,8 +416,10 @@ test failed, crashed, timed out or the run was interrupted, 2 a bad command line
 Every test runs in a session of its own. The runner keeps what it prints in `output.log` in the test's directory
 and shows it when the test ends, each line behind the test's name (`[heap] heap: all checks passed`), so the
 output of tests running at the same time doesn't mix and nothing a test prints is read as a CI command. When a test
-ends, runs out of time or the runner gets TERM or INT, whatever is left of it (QEMU, a debugger) is stopped; a test
-that leaves something running fails.
+ends, runs out of time or the runner gets TERM or INT (or its output is closed, as by `| head`), whatever is left
+of it (QEMU, a debugger) is stopped, also when the signal goes to the runner's whole process group; a test that
+leaves something running fails. Any other signal the runner can catch also stops its tests before it exits; KILL
+can't be caught, and leaves the running tests behind.
 
 The tests boot RorthOX headless in QEMU and drive it through the QEMU monitor: they type with `sendkey`, read the
 screen straight from video memory and wait for text instead of sleeping. `wait_screen_lines` in `scripts/qemu-lib.sh`

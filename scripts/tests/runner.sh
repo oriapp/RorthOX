@@ -15,7 +15,11 @@
 #    exits 0 on TERM still fails) and starts no more; the runner exits 1.
 # 4. A bad command line (-j 0, -j x, --timeout 0, an unknown option, a missing test) exits 2
 #    and runs nothing; --list prints the tests and runs nothing.
-# 5. A top-level run (no RORTHOX_TEST_ROOT) fails when a file name in its run directory has a
+# 5. Other ways out: INT to the runner's whole process group while it waits for what a test left
+#    still stops that and fails the test; a TMPDIR with regular expression characters doesn't hide
+#    a test's processes; a runner whose output is closed (| head -n 1), or that gets USR1, stops its
+#    running tests before it exits.
+# 6. A top-level run (no RORTHOX_TEST_ROOT) fails when a file name in its run directory has a
 #    character CI's artifact upload refuses (" : < > | * ? CR LF) and names it; a clean run passes.
 #
 # The runs of the runner under test go to a temporary directory (CI uploads build/tests); what
@@ -242,8 +246,76 @@ expect "--list prints the selection" \
 run list --list
 expect "--list with no tests: smoke and scripts/tests" \
     '[ "$status" -eq 0 ] && [ "$(head -n 1 "$OUT/list.log")" = scripts/smoke.sh ] && grep -Fxq scripts/tests/runner.sh "$OUT/list.log"'
+echo "runner: 5. other ways out"
+# leave: passes, leaving a child that ignores TERM. chatty: waits for hang to start, then prints
+# more than a pipe holds.
+printf 'bash -c '\''trap "" TERM; while :; do sleep 0.2; done'\'' &\necho $! > "$RUNNER_STATE/leave.pids"\n' > "$fx/leave.sh"
+cat > "$fx/chatty.sh" <<'EOF'
+for ((i = 0; i < 100; i++)); do
+    set -- "$RUNNER_STATE"/hang.*.pids
+    [ -e "$1" ] && break
+    sleep 0.1
+done
+seq 1 200000
+EOF
+# reap <pid files>...: KILL what a broken runner left (pids, their groups and sessions).
+reap() {
+    local p
+    cat "$@" 2> /dev/null | while read -r p; do
+        pkill -KILL -s "$p" 2> /dev/null; pkill -KILL -g "$p" 2> /dev/null; kill -KILL "$p" 2> /dev/null
+    done
+}
+# wait_file <glob>: up to 10 s for a file to show up.
+wait_file() {
+    for ((i = 0; i < 100; i++)); do
+        set -- $1
+        [ -e "$1" ] && return 0
+        sleep 0.1
+    done
+    return 1
+}
+rm -rf "$RUNNER_STATE"
+mkdir -p "$RUNNER_STATE" "$roots/group-int"
+# setsid: the runner leads a process group of its own, as in a terminal.
+RORTHOX_TEST_ROOT="$roots/group-int" env --default-signal=INT setsid "$runner" "$fx/leave.sh" > "$OUT/group-int.log" 2>&1 &
+pid=$!
+wait_file "$RUNNER_STATE/leave.pids"
+# The runner now waits up to 5 s for the child that ignores TERM.
+sleep 1
+kill -INT -- "-$pid"
+if wait "$pid"; then status=0; else status=$?; fi
+expect "INT to the runner's process group while it stops what a test left: test failed, nothing left" \
+    '[ "$status" -eq 1 ] && grep -Fxq "=== 0 passed, 1 failed, 0 skipped" "$OUT/group-int.log" &&
+     grep -Eq "^\[leave\] run-tests: stopped [12] process\(es\) the test left running$" "$OUT/group-int.log" &&
+     all_gone "$RUNNER_STATE/leave.pids"'
+reap "$RUNNER_STATE/leave.pids"
+rm -rf "$RUNNER_STATE"
+mkdir -p "$RUNNER_STATE" "$tmp/a+b(c"
+TMPDIR="$tmp/a+b(c" run weird "$fx/spawn.sh"
+expect "TMPDIR with + and (: what spawn left is found and stopped" \
+    '[ "$status" -eq 1 ] && grep -Eq "^\[spawn\] run-tests: stopped [34] process\(es\) the test left running$" "$OUT/weird.log" &&
+     all_gone "$RUNNER_STATE"/spawn.*.pids'
+reap "$RUNNER_STATE"/spawn.*.pids
+rm -rf "$RUNNER_STATE"
+mkdir -p "$RUNNER_STATE" "$roots/pipe"
+{ RORTHOX_TEST_ROOT="$roots/pipe" timeout -k 5 60 "$runner" -j 2 "$fx/hang.sh" "$fx/chatty.sh" 2> "$OUT/pipe.err"
+  echo $? > "$RUNNER_STATE/pipe.status"; } | head -n 1 > "$OUT/pipe.log"
+expect "output closed (| head -n 1): exit 1, the running test stopped" \
+    '[ "$(cat "$RUNNER_STATE/pipe.status")" = 1 ] && [ "$(cat "$OUT/pipe.log")" = "=== $fx/chatty.sh" ] &&
+     all_gone "$RUNNER_STATE"/hang.*.pids'
+reap "$RUNNER_STATE"/hang.*.pids
+rm -rf "$RUNNER_STATE"
+mkdir -p "$RUNNER_STATE" "$roots/usr1"
+RORTHOX_TEST_ROOT="$roots/usr1" "$runner" "$fx/hang.sh" > "$OUT/usr1.log" 2>&1 &
+pid=$!
+wait_file "$RUNNER_STATE/hang.*.pids"
+kill -USR1 "$pid"
+if wait "$pid"; then status=0; else status=$?; fi
+expect "USR1: the runner stops the running test before it exits" \
+    '[ "$status" -ne 0 ] && all_gone "$RUNNER_STATE"/hang.*.pids && [ -e "$(echo "$roots"/usr1/runs/run.*)/finished" ]'
+reap "$RUNNER_STATE"/hang.*.pids
 
-echo "runner: 5. file names CI can't upload"
+echo "runner: 6. file names CI can't upload"
 # A copy of the runner in a tree of its own: run at the top level there, its runs go to
 # $tmp/top/build/tests/runs, not to this checkout's.
 mkdir -p "$tmp/top/scripts"
