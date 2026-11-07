@@ -132,7 +132,7 @@ jobs:
   image-prep:
     continue-on-error: true
     runs-on: ubuntu-24.04
-    timeout-minutes: 120 # Cold build: two source-built cross compilers.
+    timeout-minutes: 120 # Step limits total 116 minutes, leaving time for cleanup.
     permissions:
       contents: read
     outputs:
@@ -144,14 +144,17 @@ jobs:
     steps:
       # actions/checkout v6
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        timeout-minutes: 2
         with:
           persist-credentials: false
       - name: Fetch or build and validate candidate
+        timeout-minutes: 100
         id: prepare
         shell: bash # Fail the step when prepare fails, not just when tee fails.
         run: bash ci/image-job.sh prepare 2>&1 | tee "$RUNNER_TEMP/image-prep.log"
       # actions/upload-artifact v6
       - name: Upload preparation failure
+        timeout-minutes: 2
         if: failure()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
@@ -160,6 +163,7 @@ jobs:
           if-no-files-found: warn
       # actions/upload-artifact v6
       - name: Transfer candidate image
+        timeout-minutes: 12
         if: steps.prepare.outputs.mode == 'archive'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
@@ -175,7 +179,7 @@ jobs:
     needs: image-prep
     if: github.event_name == 'push' && github.repository == 'oriapp/RorthOX' && (github.ref == 'refs/heads/features' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 45 # Step limits total 41 minutes.
     # A third same-input trusted push during a cold build may replace a pending publish job.
     # The next push publishes; preparation, PRs and required jobs never use this group.
     concurrency:
@@ -189,15 +193,18 @@ jobs:
     steps:
       # actions/checkout v6
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        timeout-minutes: 2
         with:
           persist-credentials: false
       # actions/download-artifact v6
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        timeout-minutes: 5
         if: needs.image-prep.outputs.mode == 'archive'
         with:
           name: candidate-image
           path: ${{ runner.temp }}
       - name: Check archive before publication
+        timeout-minutes: 10
         id: receive
         if: needs.image-prep.outputs.mode == 'archive'
         env:
@@ -205,6 +212,7 @@ jobs:
           IMAGE_ID: ${{ needs.image-prep.outputs.id }}
         run: bash ci/image-job.sh receive
       - name: Publish only after validation
+        timeout-minutes: 20
         id: publish
         if: needs.image-prep.outputs.mode == 'archive'
         env:
@@ -212,9 +220,11 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash ci/image-job.sh publish
       - name: Log out of registry
+        timeout-minutes: 2
         if: always()
         run: docker logout ghcr.io
       - name: Record existing public digest
+        timeout-minutes: 2
         id: existing
         if: needs.image-prep.outputs.mode == 'digest'
         env:
@@ -229,21 +239,24 @@ jobs:
     if: ${{ !cancelled() }}
     continue-on-error: true
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 60 # Step limits total 57 minutes.
     permissions:
       contents: read
     steps:
       # actions/checkout v6
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        timeout-minutes: 2
         with:
           persist-credentials: false
       # actions/download-artifact v6
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        timeout-minutes: 3
         if: needs.image-prep.outputs.mode == 'archive'
         with:
           name: candidate-image
           path: ${{ runner.temp }}
       - name: Verify image identity
+        timeout-minutes: 8
         id: image-id
         env:
           IMAGE_REF: ${{ needs.image-prep.outputs.ref }}
@@ -259,6 +272,7 @@ jobs:
             exit 1
           fi
       - name: Build and test inside candidate image (TCG)
+        timeout-minutes: 40
         id: suite
         env:
           RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}
@@ -268,6 +282,7 @@ jobs:
           ./ci/run.sh make all iso
           ./ci/run.sh ./scripts/run-tests.sh -j 2 --results build/tests/runs/candidate
       - name: Record certification evidence
+        timeout-minutes: 2
         if: always()
         shell: bash # The tool-version pipe must preserve docker's exit status.
         env:
@@ -290,6 +305,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       # actions/upload-artifact v6
       - name: Upload candidate diagnostics
+        timeout-minutes: 2
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:

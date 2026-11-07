@@ -50,6 +50,18 @@ def lint(text):
         if name not in ('build', 'test', 'result'):
             require(re.findall(r'^    continue-on-error: (.*)$', body, re.M) == ['true'],
                     f'{name}: advisory job must not fail the run')
+            job_limits = re.findall(r'^    timeout-minutes: (\d+)', body, re.M)
+            require(len(job_limits) == 1, f'{name}: missing job timeout')
+            job_limit = int(job_limits[0])
+            step_blocks = re.split(r'^      - ', body, flags=re.M)[1:]
+            require(bool(step_blocks), f'{name}: missing steps')
+            total = 0
+            for number, step in enumerate(step_blocks, 1):
+                limits = re.findall(r'^        timeout-minutes: (\d+)\s*$', step, re.M)
+                require(len(limits) == 1 and 0 < int(limits[0]) < job_limit,
+                        f'{name}: step {number} must time out before the job')
+                total += int(limits[0])
+            require(total < job_limit, f'{name}: step limits exceed job timeout')
     # Parse real YAML when available; the fail-closed syntax restrictions below also
     # protect hosts without the optional YAML package.
     try:
@@ -87,10 +99,17 @@ def lint(text):
             continue
         indent = len(match[1])
         require('${{' not in match[2], 'expression inside run')
+        # YAML can decode \\x7b, \\u007b and escaped newlines into ${{.
+        # Without PyYAML, refuse escapes in any double-quoted run value.
+        quoted = match[2].lstrip().startswith('"')
+        if yaml is None and quoted:
+            require('\\' not in match[2], 'escaped quoted run requires YAML parser')
         for command in lines[i + 1:]:
             if command.strip() and len(command) - len(command.lstrip()) <= indent:
                 break
             require('${{' not in command, 'expression inside run')
+            if yaml is None and quoted:
+                require('\\' not in command, 'escaped quoted run requires YAML parser')
     require('needs: build' in jobs['test'] and 'fail-fast: false' in jobs['test']
             and 'shard: [1, 2, 3, 4]' in jobs['test'], 'four independent shards required')
     require('needs: [build, test]' in jobs['result'] and re.search(r'^    if: always\(\)$', jobs['result'], re.M)

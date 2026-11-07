@@ -39,6 +39,7 @@ case "$1 ${2:-}" in
              echo 'versions available' ;;
     'login '*) cat >/dev/null ;;
     'push '*) if [ "${PUSH_DENIED:-0}" = 1 ]; then echo 'push denied' >&2; exit 1; fi
+              if [ "${PUSH_NO_DIGEST:-0}" = 1 ]; then echo 'push completed without digest'; exit 0; fi
               printf 'key: digest: sha256:%064d size: 1234\n' 7 ;;
     *) : ;;
 esac
@@ -108,4 +109,10 @@ if GHCR_TOKEN=dummy MANIFEST_ERROR=network MANIFEST_PRESENT=0 bash ci/image-job.
     fail 'pushed after uncertain registry error'
 fi
 ! grep -q '^push ' "$DOCKER_LOG" || fail 'pushed after registry failure'
+: > "$DOCKER_LOG"; : > "$GITHUB_OUTPUT"
+if GHCR_TOKEN=dummy MANIFEST_PRESENT=0 PUSH_NO_DIGEST=1 bash ci/image-job.sh publish >"$tmp/no-digest.log" 2>&1; then
+    fail 'successful push with no reported digest accepted'
+fi
+grep -q 'registry push did not report a digest' "$tmp/no-digest.log" || fail 'wrong missing-digest error'
+[ ! -s "$GITHUB_OUTPUT" ] || fail 'missing digest was published'
 echo 'PASS ci-image-job: cold build, reused digest, verified archive, publish order and no overwrite'
