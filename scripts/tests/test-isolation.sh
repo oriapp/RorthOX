@@ -11,6 +11,9 @@
 #    process of that run is left (QEMU and the debugger have its TMPDIR in their command line), and
 #    its TMPDIR is empty again (gdb socket directory, monitor pipe directory).
 # 3. Every file in bin/, build/ (but build/tests and build/smoke) and programs/*/build/ is unchanged.
+#
+# The runs of the runners and tests started here go to $TMP/roots (CI uploads build/tests and needs
+# none of their disk copies); what each printed stays in $OUT.
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -21,6 +24,7 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 case "${TMPDIR:-}" in /*) tmp_base="$TMPDIR" ;; *) tmp_base=/tmp ;; esac
 TMP=$(mktemp -d "$tmp_base/isolation.XXXXXX")
+roots="$TMP/roots"
 # What this test started in the background (runners, a test): stopped and waited for before $TMP goes.
 children=()
 stop_children() {
@@ -36,17 +40,18 @@ production() {
 }
 production > "$OUT/production-before.sha256"
 
-# pair <test> [<test again for runner a>]: two runners at once; $OUT/<name>-a and -b get their output.
+# pair <test> [<test again for runner a>]: two runners at once; $roots/<name>-a and -b get their runs,
+# $OUT/<name>-a.log and -b.log what they printed.
 # They are not this CI job's runner: their failures show here as FAIL lines, not as annotations.
 pair() {
     local name a b sa=0 sb=0
     name=$(basename "$1" .sh)
     echo "test-isolation: two runners with $name at once"
-    mkdir -p "$OUT/$name-a" "$OUT/$name-b"
-    GITHUB_ACTIONS=false RORTHOX_TEST_ROOT="$OUT/$name-a" TMPDIR="$TMP" ./scripts/run-tests.sh "$@" \
+    mkdir -p "$roots/$name-a" "$roots/$name-b"
+    GITHUB_ACTIONS=false RORTHOX_TEST_ROOT="$roots/$name-a" TMPDIR="$TMP" ./scripts/run-tests.sh "$@" \
         > "$OUT/$name-a.log" 2>&1 &
     a=$!
-    GITHUB_ACTIONS=false RORTHOX_TEST_ROOT="$OUT/$name-b" TMPDIR="$TMP" ./scripts/run-tests.sh "$1" \
+    GITHUB_ACTIONS=false RORTHOX_TEST_ROOT="$roots/$name-b" TMPDIR="$TMP" ./scripts/run-tests.sh "$1" \
         > "$OUT/$name-b.log" 2>&1 &
     b=$!
     children=("$a" "$b")
@@ -62,21 +67,21 @@ pair scripts/tests/screen-waits.sh
 pair scripts/tests/task-list.sh
 
 # The kernel's own line in each smoke boot, and QEMU's complaint if two of them shared a disk.
-for d in "$OUT"/smoke-a/runs/run.*/001-smoke "$OUT"/smoke-a/runs/run.*/002-smoke "$OUT"/smoke-b/runs/run.*/001-smoke; do
+for d in "$roots"/smoke-a/runs/run.*/001-smoke "$roots"/smoke-a/runs/run.*/002-smoke "$roots"/smoke-b/runs/run.*/001-smoke; do
     n=$(grep -a -c 'Thats cool' "$d/smoke/debugcon.log" 2> /dev/null || true)
     echo "boot=${n:-0}"
 done > "$OUT/smoke-boots.txt"
-cat "$OUT"/smoke-*/runs/run.*/*/smoke/monitor.log 2> /dev/null | grep -a -i 'lock' > "$OUT/smoke-locks.txt" || true
+cat "$roots"/smoke-*/runs/run.*/*/smoke/monitor.log 2> /dev/null | grep -a -i 'lock' > "$OUT/smoke-locks.txt" || true
 ls -A "$TMP" > "$OUT/runner-tmp.txt"
 
 # term <case> <what to wait for>: start kernel-exceptions (case "early": QEMU stopped at power-on,
 # then the debugger), wait for <what>, TERM the test, and look at what is left of it.
 term() {
-    local name="$1" root="$OUT/term-$1" tmp="$TMP/term-$1" pid status=0 i left reached=no
+    local name="$1" root="$roots/term-$1" tmp="$TMP/term-$1" pid status=0 i left reached=no
     echo "test-isolation: TERM kernel-exceptions ($name)"
     mkdir -p "$root" "$tmp"
     RORTHOX_TEST_ROOT="$root" TMPDIR="$tmp" KERNEL_EXCEPTION_CASES=early \
-        bash scripts/tests/kernel-exceptions.sh > "$root.log" 2>&1 &
+        bash scripts/tests/kernel-exceptions.sh > "$OUT/term-$name.log" 2>&1 &
     pid=$!
     children=("$pid")
     for ((i = 0; i < 600; i++)); do

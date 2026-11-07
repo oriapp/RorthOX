@@ -12,8 +12,8 @@
 #                every scripts/tests/*.sh
 #
 # Exit status: 0 when every test passed or was skipped (a test that exits with 77 is skipped),
-# 1 when a test failed, crashed or timed out or the run was interrupted, 2 for a bad command line
-# (no test runs then).
+# 1 when a test failed, crashed or timed out or the run was interrupted (or, at the top level, a file
+# name in the run directory is one CI can't upload), 2 for a bad command line (no test runs then).
 #
 # Every run gets its own directory build/tests/runs/run.XXXXXX (inside $RORTHOX_TEST_ROOT/runs when
 # the runner itself runs inside a test). Each test there gets its own numbered directory, passed to
@@ -22,7 +22,8 @@
 # test ends the runner prints it with "[<name>] " in front of every line (also after a carriage
 # return), so a test's output can never pass for a line of the runner's own, such as a CI error
 # annotation. Run times and exit statuses go to durations.txt in the run directory. A new top-level
-# run removes the earlier runs that have finished.
+# run removes the earlier runs that have finished. A top-level run also fails when a file name in its
+# run directory has a character CI's artifact upload refuses (see the end).
 #
 # Every test runs in its own session. When it ends or runs out of time, or when the runner gets
 # TERM, INT or HUP, whatever still runs in that session (QEMU, a debugger, timeout and their
@@ -315,4 +316,23 @@ echo "=== ${#passed[@]} passed, ${#failed[@]} failed, ${#skipped[@]} skipped"
 echo "=== output in $run_dir"
 for t in "${failed[@]}"; do echo "FAILED: $(one_line "$t")"; done
 for t in "${skipped[@]}"; do echo "SKIPPED: $(one_line "$t")"; done
-[ ${#failed[@]} -eq 0 ] && [ -z "$cancel" ]
+
+# CI uploads build/tests, and its artifact upload refuses a file whose path has one of
+# " : < > | * ? or a carriage return or newline in it. A top-level run fails when a name in its run
+# directory has one (a runner inside a test may run tests with such names, in its own directory).
+bad_names=()
+if [ -z "${RORTHOX_TEST_ROOT:-}" ]; then
+    crlf=$'\r\n'
+    while IFS= read -r -d '' f; do
+        bad_names+=("$f")
+    done < <(find "$run_dir" -mindepth 1 \( -name '*[":<>|*?]*' -o -name "*[$crlf]*" \) -print0 | sort -z)
+fi
+if [ ${#bad_names[@]} -gt 0 ]; then
+    echo "=== ${#bad_names[@]} file name(s) in $run_dir CI can't upload (\" : < > | * ? CR LF):"
+    for f in "${bad_names[@]:0:20}"; do echo "BAD NAME: $(one_line "$f")"; done
+    if [ "${GITHUB_ACTIONS:-}" = true ]; then
+        for f in "${bad_names[@]:0:20}"; do one_line "$f"; echo; done > "$run_tmp/bad-names"
+        annotate 'File names CI cannot upload' "$run_tmp/bad-names" 1 overflow
+    fi
+fi
+[ ${#failed[@]} -eq 0 ] && [ -z "$cancel" ] && [ ${#bad_names[@]} -eq 0 ]

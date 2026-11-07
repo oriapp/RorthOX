@@ -4,8 +4,9 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-# The runners below are not the CI job's: keep them away from its summary.
-export GITHUB_STEP_SUMMARY="$tmp/summary.md"
+# The runners below are not the CI job's: keep them away from its summary, and keep their runs out
+# of the job's test output (CI uploads it, and one test here is called fail:a,b).
+export GITHUB_STEP_SUMMARY="$tmp/summary.md" RORTHOX_TEST_ROOT="$tmp"
 runner="$PWD/scripts/run-tests.sh"
 printf '#!/usr/bin/env bash\necho pass\n' > "$tmp/pass.sh"
 printf '#!/usr/bin/env bash\necho skip\nexit 77\n' > "$tmp/skip.sh"

@@ -15,6 +15,11 @@
 #    exits 0 on TERM still fails) and starts no more; the runner exits 1.
 # 4. A bad command line (-j 0, -j x, --timeout 0, an unknown option, a missing test) exits 2
 #    and runs nothing; --list prints the tests and runs nothing.
+# 5. A top-level run (no RORTHOX_TEST_ROOT) fails when a file name in its run directory has a
+#    character CI's artifact upload refuses (" : < > | * ? CR LF) and names it; a clean run passes.
+#
+# The runs of the runner under test go to a temporary directory (CI uploads build/tests); what
+# each one printed stays in $OUT/<case>.log.
 
 set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 1
@@ -36,13 +41,14 @@ ok() { echo "  ok   $1"; }
 fail() { echo "  FAIL $1"; failures=$((failures + 1)); }
 expect() { if eval "$2"; then ok "$1"; else fail "$1"; fi; }
 
-# run <case> <runner arguments>...: run the runner; its output goes to $OUT/<case>.log, its runs to $OUT/<case>/.
+# run <case> <runner arguments>...: run the runner; its output goes to $OUT/<case>.log, its runs to $roots/<case>/.
+roots="$tmp/roots"
 run() {
     local name="$1"
     shift
-    mkdir -p "$OUT/$name" "$RUNNER_STATE"
-    if RORTHOX_TEST_ROOT="$OUT/$name" timeout -k 5 120 "$runner" "$@" > "$OUT/$name.log" 2>&1; then status=0; else status=$?; fi
-    durations=$(cat "$OUT/$name"/runs/run.*/durations.txt 2> /dev/null || true)
+    mkdir -p "$roots/$name" "$RUNNER_STATE"
+    if RORTHOX_TEST_ROOT="$roots/$name" timeout -k 5 120 "$runner" "$@" > "$OUT/$name.log" 2>&1; then status=0; else status=$?; fi
+    durations=$(cat "$roots/$name"/runs/run.*/durations.txt 2> /dev/null || true)
 }
 
 # Nothing of the pids in the files given is still there (not even as a zombie): no such process,
@@ -161,7 +167,7 @@ expect "hostile lines are shown, each behind the test name" \
      grep -Fxq "[hostile] ok$cr[hostile] ::error::x" "$L"'
 expect "every test line is behind its test name" \
     'grep -Fxq "[pass] pass" "$L" && grep -Fxq "[fail]   FAIL thing" "$L" && grep -Fxq "[spawn] spawned" "$L"'
-expect "test output keeps its own bytes" 'cat "$OUT"/mixed/runs/run.*/*-hostile/output.log | grep -aq "^ok$cr::error::x$"'
+expect "test output keeps its own bytes" 'cat "$roots"/mixed/runs/run.*/*-hostile/output.log | grep -aq "^ok$cr::error::x$"'
 expect "the job summary is not touched" '[ ! -e "$tmp/summary.md" ]'
 rm -rf "$RUNNER_STATE"
 GITHUB_ACTIONS=false run local -j 3 --timeout 2 "$fx/pass.sh" "$fx/fail.sh" "$fx/hostile.sh"
@@ -180,7 +186,7 @@ for j in "-j 1" "-j1" ""; do
     expect "${j:-no -j}: one at a time, in order, a twice" \
         '[ "$status" -eq 0 ] && [ "$(cat "$RUNNER_STATE/seq")" = "$expected_seq" ] &&
          [ "$(grep "^=== $fx" "$OUT/serial.log" | tr "\n" " ")" = "=== $fx/a.sh === $fx/b.sh === $fx/c.sh === $fx/a.sh " ]'
-    rm -rf "$OUT/serial"
+    rm -rf "$roots/serial"
 done
 
 # polite: hangs like hang, but exits 0 on TERM.
@@ -189,10 +195,10 @@ printf 'trap "exit 0" TERM\n. "$(dirname "$0")/hang.sh"\n' > "$fx/polite.sh"
 echo "runner: 3. TERM and INT stop the running tests"
 for sig in TERM INT; do
     rm -rf "$RUNNER_STATE"
-    mkdir -p "$RUNNER_STATE" "$OUT/cancel-$sig"
+    mkdir -p "$RUNNER_STATE" "$roots/cancel-$sig"
     # A background job (and anything started with INT ignored, like this test under the runner)
     # ignores INT; a runner started from a terminal doesn't.
-    RORTHOX_TEST_ROOT="$OUT/cancel-$sig" env --default-signal=INT "$runner" -j 3 "$fx/hang.sh" "$fx/hang.sh" \
+    RORTHOX_TEST_ROOT="$roots/cancel-$sig" env --default-signal=INT "$runner" -j 3 "$fx/hang.sh" "$fx/hang.sh" \
         "$fx/polite.sh" "$fx/pass.sh" > "$OUT/cancel-$sig.log" 2>&1 &
     pid=$!
     for ((i = 0; i < 200; i++)); do
@@ -236,6 +242,40 @@ expect "--list prints the selection" \
 run list --list
 expect "--list with no tests: smoke and scripts/tests" \
     '[ "$status" -eq 0 ] && [ "$(head -n 1 "$OUT/list.log")" = scripts/smoke.sh ] && grep -Fxq scripts/tests/runner.sh "$OUT/list.log"'
+
+echo "runner: 5. file names CI can't upload"
+# A copy of the runner in a tree of its own: run at the top level there, its runs go to
+# $tmp/top/build/tests/runs, not to this checkout's.
+mkdir -p "$tmp/top/scripts"
+cp "$runner" "$tmp/top/scripts/run-tests.sh"
+printf 'echo pass\n' > "$fx/bad:name.sh"
+cat > "$fx/odd-output.sh" <<'EOF'
+touch "$RORTHOX_TEST_ROOT/a?b" "$RORTHOX_TEST_ROOT/c"$'\r'"d"
+echo pass
+EOF
+# top <case> <runner arguments>...: like run, with no RORTHOX_TEST_ROOT.
+top() {
+    local name="$1"
+    shift
+    if env -u RORTHOX_TEST_ROOT -u GITHUB_STEP_SUMMARY timeout -k 5 120 "$tmp/top/scripts/run-tests.sh" "$@" \
+        > "$OUT/$name.log" 2>&1; then status=0; else status=$?; fi
+}
+GITHUB_ACTIONS=true top top-clean "$fx/pass.sh"
+expect "clean names: exit 0, nothing said" \
+    '[ "$status" -eq 0 ] && grep -Fxq "=== 1 passed, 0 failed, 0 skipped" "$OUT/top-clean.log" &&
+     ! grep -q "BAD NAME\|^::" "$OUT/top-clean.log"'
+GITHUB_ACTIONS=true top top-bad "$fx/pass.sh" "$fx/bad:name.sh" "$fx/odd-output.sh"
+L="$OUT/top-bad.log"
+expect "bad names: exit 1, both named, one annotation" \
+    '[ "$status" -eq 1 ] && grep -Fxq "=== 3 passed, 0 failed, 0 skipped" "$L" &&
+     grep -Eq "^=== 3 file name\(s\) in build/tests/runs/run\.[^ ]+ CI can.t upload" "$L" &&
+     grep -Eq "^BAD NAME: build/tests/runs/run\.[^/]+/002-bad:name$" "$L" &&
+     grep -Eq "^BAD NAME: build/tests/runs/run\.[^/]+/003-odd-output/a\?b$" "$L" &&
+     grep -Eq "^BAD NAME: build/tests/runs/run\.[^/]+/003-odd-output/c\?d$" "$L" &&
+     [ "$(grep -c "^::error " "$L")" -eq 1 ] && grep -q "^::error title=File names CI cannot upload::.*002-bad:name%0A" "$L"'
+GITHUB_ACTIONS=false top top-local "$fx/bad:name.sh"
+expect "bad names outside CI: exit 1, no annotation" \
+    '[ "$status" -eq 1 ] && grep -q "^BAD NAME: .*001-bad:name$" "$OUT/top-local.log" && ! grep -q "^::" "$OUT/top-local.log"'
 
 if [ "$failures" -ne 0 ]; then
     echo "runner: $failures check(s) failed" >&2
