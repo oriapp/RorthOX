@@ -26,7 +26,9 @@ args=(--rm --init --user "$(id -u):$(id -g)" --network none
       --cap-drop ALL --security-opt no-new-privileges --pids-limit 512
       --memory 4g -v "$root:/work" -w "/work$subdir")
 if [ "${RORTHOX_ACCEL:-}" != tcg ] && [ -c /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
-    args+=(--device /dev/kvm --group-add "$(stat -c %g /dev/kvm)")
+    args+=(--device /dev/kvm)
+    kvm_gid=$(stat -c %g /dev/kvm)
+    if [ "$kvm_gid" != 0 ]; then args+=(--group-add "$kvm_gid"); fi
 fi
 for name in GITHUB_ACTIONS RORTHOX_ACCEL RORTHOX_REQUIRE_ISO RORTHOX_TEST_TIMEOUT; do
     if [ "${!name+x}" ]; then args+=(-e "$name=${!name}"); fi

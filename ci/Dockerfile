@@ -9,9 +9,9 @@ RUN printf '%s\n' \
       > /etc/apt/sources.list && rm -f /etc/apt/sources.list.d/ubuntu.sources && \
     apt-get -o Acquire::https::Verify-Peer=false update && \
     apt-get -o Acquire::https::Verify-Peer=false install -y --no-install-recommends ca-certificates && \
-    apt-get update && apt-get install -y --no-install-recommends \
+    apt-get --error-on=any update && apt-get install -y --no-install-recommends \
       build-essential bison flex libgmp3-dev libmpc-dev libmpfr-dev texinfo \
-      bash git curl xz-utils tar gzip && \
+      bash git ca-certificates curl xz-utils tar gzip && \
     rm -rf /var/lib/apt/lists/*
 COPY configure.sh /opt/rorthox/configure.sh
 RUN PREFIX=/opt/cross SRC_DIR=/opt/toolchain-src JOBS=2 CROSS_TARGET=i686-elf bash /opt/rorthox/configure.sh && \
@@ -27,9 +27,9 @@ RUN printf '%s\n' \
       > /etc/apt/sources.list && rm -f /etc/apt/sources.list.d/ubuntu.sources && \
     apt-get -o Acquire::https::Verify-Peer=false update && \
     apt-get -o Acquire::https::Verify-Peer=false install -y --no-install-recommends ca-certificates && \
-    apt-get update && apt-get install -y --no-install-recommends \
+    apt-get --error-on=any update && apt-get install -y --no-install-recommends \
       build-essential bison flex libgmp3-dev libmpc-dev libmpfr-dev texinfo \
-      bash git curl xz-utils tar gzip coreutils findutils \
+      bash git ca-certificates curl xz-utils tar gzip coreutils findutils \
       diffutils grep sed gawk util-linux procps nasm mtools dosfstools \
       qemu-system-x86 qemu-utils gdb gdb-multiarch python3 \
       grub-common grub-pc-bin grub-efi-amd64-bin grub-efi-ia32-bin xorriso ovmf && \

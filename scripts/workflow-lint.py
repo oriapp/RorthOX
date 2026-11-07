@@ -40,10 +40,16 @@ def lint(text):
         grants = re.findall(r'^    permissions:\n((?:      [^\n]+\n?)+)', body, re.M)
         require(len(grants) == 1 and grants[0].splitlines() == ['      contents: read'],
                 f'{name}: permissions must be exactly contents: read')
+    # Only block-style, unaliased YAML keys are supported by this line-oriented lint.
+    require(not re.search(r'^\s*(?:-\s*)?(?:["\']run["\']|run\s+):', text, re.M),
+            'unsupported run key form')
+    require(not re.search(r'^\s*-\s*\{', text, re.M), 'flow-mapping step')
+    require(not re.search(r'(?:^\s*-\s*|:\s*)[&*][A-Za-z0-9_-]+\b', text, re.M),
+            'YAML anchors and aliases are not supported')
     # Expressions in shell commands are interpreted before shell quoting; use env: instead.
     lines = text.splitlines()
     for i, line in enumerate(lines):
-        match = re.match(r'^(\s*)(?:-\s+)?run:\s*(.*)$', line)
+        match = re.match(r'^(\s*(?:-\s+)?)run:\s*(.*)$', line)
         if match is None:
             continue
         indent = len(match[1])

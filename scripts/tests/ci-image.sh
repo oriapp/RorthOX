@@ -2,10 +2,16 @@
 # Host-only contract for image inputs and the container launch boundary.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+unset RORTHOX_IN_IMAGE
+root=$(pwd -P)
 OUT=${RORTHOX_TEST_ROOT:-build/tests}/ci-image
 mkdir -p "$OUT"
+out=$(cd "$OUT" && pwd -P)
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
+fallback=
+work=
+kvm_script=
+trap 'rm -rf "$tmp"; [ -z "$work" ] || rm -rf "$work"; [ -z "$fallback" ] || rm -rf "$fallback"; [ -z "$kvm_script" ] || rm -f "$kvm_script"' EXIT
 fail() { echo "FAIL ci-image: $*" >&2; exit 1; }
 for file in ci/Dockerfile ci/image-key.sh ci/run.sh ci/image.ref; do
     [ -f "$file" ] || fail "missing $file"
@@ -35,11 +41,17 @@ if grep '^FROM ' ci/Dockerfile | grep -Ev '^FROM ubuntu:24\.04@sha256:[0-9a-f]{6
     fail 'unfixed base'
 fi
 grep -q 'snapshot.ubuntu.com/ubuntu/[0-9]\{8\}T[0-9]\{6\}Z' ci/Dockerfile || fail 'no apt snapshot'
+[ "$(grep -c 'apt-get --error-on=any update && apt-get install -y' ci/Dockerfile)" -eq 2 ] || fail 'unverified apt refresh'
+[ "$(grep -c 'bash git ca-certificates curl' ci/Dockerfile)" -eq 2 ] || fail 'CA absent from verified install'
 ! grep -Eq '(^|[[:space:]])(COPY[[:space:]]+\.|ADD[[:space:]]+https?://|latest)' ci/Dockerfile || fail 'unbounded Docker input'
 grep -q 'org.opencontainers.image.licenses="GPL-2.0"' ci/Dockerfile || fail 'license label'
 # Fake docker records exact argv with NUL separators; no daemon is needed.
-root=$PWD
-work="$root/$OUT/work with spaces"
+case "$out" in
+    "$root"|"$root"/*) work="$out/work with spaces" ;;
+    *) mkdir -p "$root/build"
+       fallback=$(mktemp -d "$root/build/ci-image-work.XXXXXX")
+       work="$fallback/work with spaces" ;;
+esac
 mkdir -p "$tmp/bin" "$work"
 cat > "$tmp/bin/docker" <<'SH'
 #!/usr/bin/env bash
@@ -84,4 +96,17 @@ fi
 sed "s|/opt/rorthox-build-image|$tmp/in-image-marker|" ci/run.sh > "$tmp/in-image.sh"
 touch "$tmp/in-image-marker"
 [ "$(RORTHOX_IN_IMAGE=1 bash "$tmp/in-image.sh" printf '%s' in-image)" = in-image ] || fail 'in-image execution failed'
+# /dev/null is a root-group character device: it must never add gid 0.
+kvm_script=$(mktemp "$root/ci/.kvm-fixture.XXXXXX.sh")
+sed 's|/dev/kvm|/dev/null|g' ci/run.sh > "$kvm_script"
+( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/kvm-argv" RORTHOX_IMAGE_REF="$digest" RORTHOX_ACCEL=auto
+  unset RORTHOX_TEST_ROOT RORTHOX_IN_IMAGE
+  bash "$kvm_script" true )
+mapfile -d '' -t kvm_args < "$tmp/kvm-argv"
+device=0
+for i in "${!kvm_args[@]}"; do
+    [ "${kvm_args[i]}" != --group-add ] || fail 'root group forwarded'
+    if [ "${kvm_args[i]}" = --device ] && [ "${kvm_args[i+1]:-}" = /dev/null ]; then device=1; fi
+done
+[ "$device" = 1 ] || fail 'character device not forwarded'
 echo 'PASS ci-image: key, context, reference, Dockerfile, isolated argv and exit status'

@@ -22,6 +22,10 @@ with tempfile.TemporaryDirectory() as temp:
         result = subprocess.run(['python3', '-B', str(lint), str(workflow)], cwd=root, capture_output=True)
         assert (result.returncode == 0) == valid, result.stderr
     run(text, True)
+    # A dash-style run's sibling name/env expressions are not shell expressions.
+    run(text.replace('      - name: Build and package',
+                     '      - run: echo "$ARG"\n        env:\n          ARG: ${{ github.event.inputs.arg }}\n'
+                     '        name: Check ${{ matrix.shard }}\n      - name: Build and package', 1), True)
     for tag, broken in (('unpinned', text.replace('actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9', 'actions/cache@v6')),
                         ('credentials', text.replace('persist-credentials: false', 'persist-credentials: true')),
                         ('other-run', text.replace('name: production\n          path:', 'name: production\n          run-id: 12\n          path:')),
@@ -35,7 +39,11 @@ with tempfile.TemporaryDirectory() as temp:
                         ('keep-run', text.replace('run: |\n          make all iso', 'run: |+\n          echo "${{ github.event.inputs.arg }}"', 1)),
                         ('indent-run', text.replace('run: |\n          make all iso', 'run: |2\n          echo "${{ github.event.inputs.arg }}"', 1)),
                         ('fold-run', text.replace('run: |\n          make all iso', 'run: >+\n          echo "${{ github.event.inputs.arg }}"', 1)),
-                        ('continued-run', text.replace('run: |\n          make all iso', 'run: make all iso\n            echo "${{ github.event.inputs.arg }}"', 1))):
+                        ('continued-run', text.replace('run: |\n          make all iso', 'run: make all iso\n            echo "${{ github.event.inputs.arg }}"', 1)),
+                        ('quoted-run', text.replace('        run: |', '        "run": echo "${{ github.event.inputs.arg }}"', 1)),
+                        ('spaced-run', text.replace('        run: |', '        run : echo "${{ github.event.inputs.arg }}"', 1)),
+                        ('flow-run', text.replace('      - name: Build and package', '      - {name: Build and package, run: "echo ${{ github.event.inputs.arg }}"}\n      - name: Build and package', 1)),
+                        ('alias-run', text.replace('      - name: Build and package', '      - name: Label\n        value: &cmd "echo ${{ github.event.inputs.arg }}"\n      - run: *cmd\n      - name: Build and package', 1))):
         print('checking', tag, flush=True)
         run(broken, False)
         print('PASS rejected', tag)

@@ -315,7 +315,7 @@ make all
 ```
 
 `configure.sh` takes a while the first time. Run again, it sees the installed toolchain and stops (`FORCE=1` rebuilds
-it). `TARGET=x86_64-elf ./configure.sh` builds a separate 64-bit cross compiler in the same prefix; the kernel still
+it). `CROSS_TARGET=x86_64-elf ./configure.sh` builds a separate 64-bit cross compiler in the same prefix; the kernel still
 builds for i686. `make all` gives:
 
 | File | What |
