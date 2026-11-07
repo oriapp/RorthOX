@@ -26,7 +26,7 @@ heap_snapshot_setup() {
     HEAP_SNAPSHOT_ARGS="current_task=$SYM_CURRENT_TASK task_head=$SYM_TASK_HEAD next=$TASK_NEXT_OFFSET"
     HEAP_SNAPSHOT_ARGS+=" process=$TASK_PROCESS_OFFSET directory=$TASK_DIRECTORY_OFFSET filename=$PROCESS_FILENAME_OFFSET"
     HEAP_SNAPSHOT_ARGS+=" table=$(printf %x $((table))) blocks=$(printf %x $((bytes / block)))"
-    HEAP_GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+    HEAP_GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
     HEAP_QEMU_FLAGS="-gdb unix:$HEAP_GDB_DIR/gdb,server=on,wait=off"
     trap 'rm -rf "$HEAP_GDB_DIR"' EXIT
 }

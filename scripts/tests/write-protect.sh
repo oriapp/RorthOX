@@ -24,7 +24,7 @@ STEP_TIMEOUT="${STEP_TIMEOUT:-20}"
 CASES="${WRITE_PROTECT_CASES:-disk grub}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/write-protect
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/write-protect
 SHELL_ELF=programs/shell/build/shell.elf
 GDB_DIR=
 DBG_PID=
@@ -51,7 +51,7 @@ command -v python3 > /dev/null || fail "python3 not found"
 [ -f "$SHELL_ELF" ] || fail "$SHELL_ELF not found, run 'make all' first"
 image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
-GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX) || fail "mktemp for the gdb socket failed"
+GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX) || fail "mktemp for the gdb socket failed"
 SOCK="$GDB_DIR/gdb"
 panic_line=$(grep -n 'PANIC(msg, __FILE__, __LINE__);' kernel/idt/idt.c | cut -d: -f1 || true)
 [ "$(echo "$panic_line" | wc -w)" = 1 ] || fail "no single PANIC(msg, __FILE__, __LINE__) in kernel/idt/idt.c"

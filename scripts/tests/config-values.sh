@@ -25,7 +25,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 . ./scripts/qemu-lib.sh   # only for check()
 
-OUT=build/tests/config-values
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/config-values
 rm -rf "$OUT"
 mkdir -p "$OUT"
 FIX="$OUT/config"

@@ -20,7 +20,7 @@ QEMU_TIMEOUT="${QEMU_TIMEOUT:-180}"
 . ./scripts/qemu-lib.sh
 . ./scripts/tests/lib/guest-state.sh
 
-OUT=build/tests/heap-free
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/heap-free
 PROGRAM=programs/heapfree/build/heapfree.elf
 SHELL_ELF=programs/shell/build/shell.elf
 mkdir -p "$OUT"
@@ -52,7 +52,7 @@ GDB_DIR=
 cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
 Q_CLEANUP=cleanup
 trap qemu_exit EXIT
-GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 SOCK="$GDB_DIR/gdb"
 
 echo "heap-free: boot a copy of bin/os.bin with heapfree.elf and run it twice"

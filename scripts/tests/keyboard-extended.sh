@@ -24,7 +24,7 @@ BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-30}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/keyboard-extended
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/keyboard-extended
 PROGRAM=programs/libtest/build/libtest.elf
 mkdir -p "$OUT"
 # Remove the last run's results, so the checks below only see this run.

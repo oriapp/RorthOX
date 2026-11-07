@@ -16,7 +16,7 @@ EXIT_TIMEOUT="${EXIT_TIMEOUT:-15}"
 QEMU_TIMEOUT="${QEMU_TIMEOUT:-180}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/heap
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/heap
 PROGRAM=programs/heaptest/build/heaptest.elf
 SHELL_ELF=programs/shell/build/shell.elf
 mkdir -p "$OUT"

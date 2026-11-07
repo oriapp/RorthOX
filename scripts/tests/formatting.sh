@@ -37,7 +37,7 @@ cd "$(dirname "$0")/../.."
 HOST_CC="${HOST_CC:-cc}"
 . ./scripts/qemu-lib.sh   # only for check()
 
-OUT=build/tests/formatting
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/formatting
 rm -rf "$OUT"
 mkdir -p "$OUT"
 [ -f build/config/rorthox-config.h ] || { echo "formatting: run 'make all' first" >&2; exit 1; }

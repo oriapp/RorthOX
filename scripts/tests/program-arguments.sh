@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 . scripts/qemu-lib.sh
 . scripts/tests/lib/syscheck.sh
-OUT=build/tests/program-arguments
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/program-arguments
 mkdir -p "$OUT"
 host_failed=0
 for oracle in program-arguments user-paging; do

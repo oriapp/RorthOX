@@ -9,7 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 . scripts/qemu-lib.sh
 . scripts/tests/lib/syscheck.sh
-OUT=build/tests/user-pointers
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/user-pointers
 mkdir -p "$OUT"
 base_sum=$(sha256sum bin/os.bin)
 IMAGE="$OUT/os.bin"

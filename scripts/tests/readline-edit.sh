@@ -36,7 +36,7 @@ RUN_TIMEOUT="${RUN_TIMEOUT:-30}"
 STEP_TIMEOUT="${STEP_TIMEOUT:-10}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/readline-edit
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/readline-edit
 PROGRAM=programs/libtest/build/libtest.elf
 mkdir -p "$OUT"
 # Remove the last run's results, so the checks below only see this run.

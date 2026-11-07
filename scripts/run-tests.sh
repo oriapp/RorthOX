@@ -5,15 +5,33 @@
 # other nonzero statuses fail. Exit status 1 if any test failed.
 #
 # Usage:  ./scripts/run-tests.sh        (or: make test)
-#         ./scripts/run-tests.sh scripts/tests/panic.sh ...   (only these)
+#         ./scripts/run-tests.sh scripts/tests/panic.sh ...   (only these; a test named twice runs twice)
+#
+# Every run gets its own directory build/tests/runs/run.XXXXXX (inside $RORTHOX_TEST_ROOT/runs when
+# the runner itself runs inside a test). Each test there gets its own numbered directory, passed to
+# it as RORTHOX_TEST_ROOT (its output goes to $RORTHOX_TEST_ROOT/<name>/), and its own empty TMPDIR,
+# removed when it ends. Run times go to durations.txt in the run directory. A new top-level run
+# removes the earlier runs that have finished.
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+if [ -n "${RORTHOX_TEST_ROOT:-}" ]; then runs="$RORTHOX_TEST_ROOT/runs"; else runs=build/tests/runs; fi
+mkdir -p "$runs" || exit 2
+if [ "$runs" = build/tests/runs ]; then
+    for old in "$runs"/run.*; do
+        if [ -f "$old/finished" ]; then rm -rf "$old"; fi
+    done
+fi
+run_dir="$(mktemp -d "$runs/run.XXXXXX")" || exit 2
+# Unix socket paths are short (108 bytes), so the temporary directories stay on a short absolute path.
+case "${TMPDIR:-}" in /*) tmp_base="$TMPDIR" ;; *) tmp_base=/tmp ;; esac
+run_tmp="$(mktemp -d "$tmp_base/rx.XXXXXX")" || exit 2
+trap 'rm -rf "$run_tmp"; [ -n "${test_logs:-}" ] && rm -rf "$test_logs"; : > "$run_dir/finished"' EXIT
+
 # CI keeps a copy of each test's combined output while tee streams it to the log.
 if [ "${GITHUB_ACTIONS:-}" = true ]; then
-    test_logs="$(mktemp -d)"
-    trap 'rm -rf "$test_logs"' EXIT
+    test_logs="$(mktemp -d "$run_tmp/logs.XXXXXX")"
 fi
 
 annotate() {
@@ -68,18 +86,31 @@ fi
 passed=()
 failed=()
 skipped=()
+n=0
 for t in "${tests[@]}"; do
     echo "=== $t"
+    n=$((n + 1))
+    root="$run_dir/$(printf '%03d' "$n")-$(basename "$t" .sh)"
+    test_tmp="$run_tmp/$n"
+    mkdir -p "$root" "$test_tmp"
+    start=${EPOCHREALTIME/[.,]/}   # microseconds
     if [ "${GITHUB_ACTIONS:-}" = true ]; then
         log="$test_logs/test-${#passed[@]}-${#failed[@]}-${#skipped[@]}"
-        if bash "$t" 2>&1 | tee "$log"; then status=0; else status=${PIPESTATUS[0]}; fi
+        if RORTHOX_TEST_ROOT="$root" TMPDIR="$test_tmp" bash "$t" 2>&1 | tee "$log"; then
+            status=0
+        else
+            status=${PIPESTATUS[0]}
+        fi
         # Keep the next header or annotation separate from unterminated test output.
         if [ -s "$log" ] && [ "$(tail -c1 "$log" | wc -l)" -eq 0 ]; then
             printf '\n'
         fi
     else
-        if bash "$t"; then status=0; else status=$?; fi
+        if RORTHOX_TEST_ROOT="$root" TMPDIR="$test_tmp" bash "$t"; then status=0; else status=$?; fi
     fi
+    rm -rf "$test_tmp"
+    tenths=$(((${EPOCHREALTIME/[.,]/} - start) / 100000))
+    echo "$((tenths / 10)).$((tenths % 10)) $status $t" >> "$run_dir/durations.txt"
     case "$status" in
         0) passed+=("$t") ;;
         77) skipped+=("$t") ;;
@@ -104,6 +135,7 @@ if [ "${GITHUB_ACTIONS:-}" = true ] && [ "${#failed[@]}" -ge 10 ]; then
 fi
 
 echo "=== ${#passed[@]} passed, ${#failed[@]} failed, ${#skipped[@]} skipped"
+echo "=== output in $run_dir"
 for t in "${failed[@]}"; do echo "FAILED: $t"; done
 for t in "${skipped[@]}"; do echo "SKIPPED: $t"; done
 [ ${#failed[@]} -eq 0 ]

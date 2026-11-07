@@ -11,7 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 . ./scripts/qemu-lib.sh   # only for check()
 
-OUT=build/tests/debugger-step
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/debugger-step
 rm -rf "$OUT"
 mkdir -p "$OUT"
 RESULTS="$OUT/results.txt"

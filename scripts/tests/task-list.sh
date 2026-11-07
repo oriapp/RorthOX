@@ -31,7 +31,7 @@ HOST_CC="${HOST_CC:-cc}"
 . ./scripts/qemu-lib.sh
 . ./scripts/tests/lib/guest-state.sh
 
-OUT=build/tests/task-list
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/task-list
 PROGRAM=programs/tasktest/build/tasktest.elf
 mkdir -p "$OUT"
 
@@ -70,7 +70,7 @@ GDB_DIR=
 cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
 Q_CLEANUP=cleanup
 trap qemu_exit EXIT
-GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 SOCK="$GDB_DIR/gdb"
 
 # state <tag> [options]: the guest-state rendezvous, results in $OUT/state-<tag>.txt.

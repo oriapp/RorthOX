@@ -28,7 +28,7 @@ EXIT_TIMEOUT="${EXIT_TIMEOUT:-30}"
 . ./scripts/tests/lib/heap-snapshot.sh
 . ./scripts/tests/lib/guest-state.sh
 
-OUT=build/tests/print-oom
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/print-oom
 PROGRAM=programs/printoom/build/printoom.elf
 mkdir -p "$OUT"
 rm -f "$OUT"/state-*.txt "$OUT"/state-*.txt.log "$OUT/shell.txt" "$OUT"/screen-*.txt

@@ -9,7 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/pic
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/pic
 mkdir -p "$OUT"
 
 echo "pic: boot bin/os.bin and run blank.elf"

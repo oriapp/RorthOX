@@ -20,7 +20,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 HOST_CC="${HOST_CC:-cc}"
-OUT=build/tests/fat-entry
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/fat-entry
 FATIMG="python3 -B scripts/tests/lib/fatimg.py"
 mkdir -p "$OUT"
 [ -f bin/os.bin ] || { echo "fat-entry: run 'make all' first" >&2; exit 1; }

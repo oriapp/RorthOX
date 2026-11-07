@@ -3,7 +3,7 @@
 # Needs python3 and the outputs of make all; no GRUB tools or QEMU required.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-OUT=build/tests/multiboot-header
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/multiboot-header
 mkdir -p "$OUT"
 python3 -B scripts/tests/lib/multiboot_header.py \
     bin/kernel.bin build/kernel.map build/config/rorthox-config.inc build/kernel.asm.o \

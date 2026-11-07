@@ -34,7 +34,7 @@ STEP_TIMEOUT="${STEP_TIMEOUT:-20}"
 CASES="${KERNEL_EXCEPTION_CASES:-early nested kpf df}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/kernel-exceptions
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/kernel-exceptions
 PROGRAM=programs/faulttest/build/faulttest.elf
 rm -rf "$OUT"
 mkdir -p "$OUT"
@@ -104,7 +104,7 @@ image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
 cp bin/os.bin "$OUT/kernel-exceptions.bin"
 mcopy -i "$OUT/kernel-exceptions.bin" "$PROGRAM" ::fault.elf
-GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 # exception_fatal_stop calls PANIC(msg, __FILE__, __LINE__): the location the panic screen shows.
 panic_line=$(grep -n 'PANIC(msg, __FILE__, __LINE__);' kernel/idt/idt.c | cut -d: -f1)
 [ "$(echo "$panic_line" | wc -w)" = 1 ] || { echo "kernel-exceptions: no single PANIC(msg, ...) in idt.c" >&2; exit 1; }

@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 
-OUT=build/tests/grub-boot
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/grub-boot
 rm -rf "$OUT"
 mkdir -p "$OUT"
 if bash scripts/check-iso-tools.sh > "$OUT/tools.log" 2>&1; then

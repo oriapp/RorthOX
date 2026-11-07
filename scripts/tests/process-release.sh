@@ -19,7 +19,7 @@ QEMU_TIMEOUT="${QEMU_TIMEOUT:-180}"
 . ./scripts/qemu-lib.sh
 . ./scripts/tests/lib/guest-state.sh
 
-OUT=build/tests/process-release
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/process-release
 mkdir -p "$OUT"
 rm -f "$OUT"/state-*.txt "$OUT"/state-*.txt.log "$OUT"/shell.txt "$OUT"/screen-*.txt
 
@@ -79,7 +79,7 @@ GDB_DIR=
 cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
 Q_CLEANUP=cleanup
 trap qemu_exit EXIT
-GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 SOCK="$GDB_DIR/gdb"
 
 echo "process-release: count free heap blocks around two launches of blank.elf"

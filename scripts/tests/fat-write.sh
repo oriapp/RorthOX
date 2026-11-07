@@ -34,7 +34,7 @@ HOST_CC="${HOST_CC:-cc}"
 FSCK_FAT="${FSCK_FAT:-fsck.fat}"
 . ./scripts/qemu-lib.sh   # only for check() and finish()
 
-OUT=build/tests/fat-write
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/fat-write
 mkdir -p "$OUT"
 [ -f bin/os.bin ] || { echo "fat-write: run 'make all' first" >&2; exit 1; }
 hash_before=$(sha256sum bin/os.bin | cut -d' ' -f1)

@@ -32,7 +32,7 @@ STATE_TIMEOUT="${STATE_TIMEOUT:-20}"
 . ./scripts/qemu-lib.sh
 . ./scripts/tests/lib/guest-state.sh
 
-OUT=build/tests/fat-directory
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/fat-directory
 PROGRAM=programs/disktest/build/disktest.elf
 BLANK_ELF=programs/blank/build/blank.elf
 FATIMG="python3 -B scripts/tests/lib/fatimg.py"
@@ -106,7 +106,7 @@ GDB_DIR=
 cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
 Q_CLEANUP=cleanup
 trap qemu_exit EXIT
-GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 SOCK="$GDB_DIR/gdb"
 BASE_FLAGS="${QEMU_FLAGS:-} -gdb unix:$SOCK,server=on,wait=off"
 

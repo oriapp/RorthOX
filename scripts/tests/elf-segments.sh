@@ -34,7 +34,7 @@ QEMU_TIMEOUT="${QEMU_TIMEOUT:-180}"
 . ./scripts/qemu-lib.sh
 . ./scripts/tests/lib/guest-state.sh
 
-OUT=build/tests/elf-segments
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/elf-segments
 PROGRAM=programs/elftest/build/elftest.elf
 BLANK_ELF=programs/blank/build/blank.elf
 SHELL_ELF=programs/shell/build/shell.elf
@@ -198,7 +198,7 @@ GDB_DIR=
 cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
 Q_CLEANUP=cleanup
 trap qemu_exit EXIT
-GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 SOCK="$GDB_DIR/gdb"
 
 echo "elf-segments: run elftest.elf twice, counting free heap blocks"

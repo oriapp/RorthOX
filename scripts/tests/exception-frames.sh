@@ -24,7 +24,7 @@ BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 STEP_TIMEOUT="${STEP_TIMEOUT:-20}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/exception-frames
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/exception-frames
 rm -rf "$OUT"
 mkdir -p "$OUT"
 command -v python3 > /dev/null || { echo "exception-frames: python3 not found" >&2; exit 1; }
@@ -32,7 +32,7 @@ command -v python3 > /dev/null || { echo "exception-frames: python3 not found" >
 image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
 cp bin/os.bin "$OUT/exception-frames.bin"
-GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 SOCK="$GDB_DIR/gdb"
 
 echo "exception-frames: boot, enter every stub"

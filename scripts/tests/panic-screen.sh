@@ -33,7 +33,7 @@ cd "$(dirname "$0")/../.."
 HOST_CC="${HOST_CC:-cc}"
 . ./scripts/qemu-lib.sh   # only for check()
 
-OUT=build/tests/panic-screen
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/panic-screen
 rm -rf "$OUT"
 mkdir -p "$OUT"
 [ -f build/config/rorthox-config.h ] || { echo "panic-screen: run 'make all' first" >&2; exit 1; }

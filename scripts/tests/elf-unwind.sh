@@ -19,7 +19,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 HOST_CC="${HOST_CC:-cc}"
-OUT=build/tests/elf-unwind
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/elf-unwind
 BLANK_ELF=programs/blank/build/blank.elf
 mkdir -p "$OUT"
 host_failed=0

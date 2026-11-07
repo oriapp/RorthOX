@@ -21,7 +21,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 HOST_CC="${HOST_CC:-cc}"
-OUT=build/tests/argument-oom
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/argument-oom
 BLANK_ELF=programs/blank/build/blank.elf
 mkdir -p "$OUT"
 host_failed=0

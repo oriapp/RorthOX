@@ -24,7 +24,7 @@ BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-60}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/fat-chain
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/fat-chain
 PROGRAM=programs/fatchain/build/fatchain.elf
 FATIMG="python3 -B scripts/tests/lib/fatimg.py"
 mkdir -p "$OUT"

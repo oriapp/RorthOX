@@ -9,7 +9,8 @@
 # The QEMU helpers are in scripts/qemu-lib.sh.
 #
 # Usage:  ./scripts/smoke.sh            (or: make smoke)
-# Env:    IMAGE=bin/os.bin   OUT=build/smoke   QEMU=qemu-system-i386   QEMU_FLAGS="extra flags"
+# Env:    IMAGE=bin/os.bin   OUT=build/smoke ($RORTHOX_TEST_ROOT/smoke when that is set)
+#         QEMU=qemu-system-i386   QEMU_FLAGS="extra flags"
 #         BOOT_TIMEOUT=60 (seconds to wait for the shell)   RUN_TIMEOUT=30 (for the program)
 #
 # Results land in $OUT: debugcon.log, screen.txt (80x25 text), screen.ppm, monitor.log.
@@ -18,7 +19,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 IMAGE="${IMAGE:-bin/os.bin}"
-OUT="${OUT:-build/smoke}"
+OUT="${OUT:-${RORTHOX_TEST_ROOT:-build}/smoke}"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-30}"
 COMMAND="blank.elf one two"

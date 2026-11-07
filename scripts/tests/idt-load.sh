@@ -16,7 +16,7 @@ cd "$(dirname "$0")/../.."
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/idt-load
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/idt-load
 rm -rf "$OUT"
 mkdir -p "$OUT"
 command -v python3 > /dev/null || { echo "idt-load: python3 not found" >&2; exit 1; }
@@ -24,7 +24,7 @@ command -v python3 > /dev/null || { echo "idt-load: python3 not found" >&2; exit
 image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
 cp bin/os.bin "$OUT/idt-load.bin"
-GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 
 echo "idt-load: boot"
 QEMU_FLAGS="-S -gdb unix:$GDB_DIR/gdb,server=on,wait=off" qemu_start "$OUT/idt-load.bin" "$OUT"

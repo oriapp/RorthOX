@@ -21,7 +21,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 . ./scripts/qemu-lib.sh
 HOST_CC="${HOST_CC:-cc}"
-OUT=build/tests/load-unwind
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/load-unwind
 BLANK_ELF=programs/blank/build/blank.elf
 mkdir -p "$OUT"
 

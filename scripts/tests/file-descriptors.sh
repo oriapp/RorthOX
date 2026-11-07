@@ -17,7 +17,7 @@ cd "$(dirname "$0")/../.."
 HOST_CC="${HOST_CC:-cc}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/file-descriptors
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/file-descriptors
 BLANK_ELF=programs/blank/build/blank.elf
 mkdir -p "$OUT"
 [ -f bin/os.bin ] && [ -f "$BLANK_ELF" ] || { echo "file-descriptors: run 'make all' first" >&2; exit 1; }

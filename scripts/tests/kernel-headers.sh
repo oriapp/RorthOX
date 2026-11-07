@@ -23,7 +23,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 . ./scripts/qemu-lib.sh   # only for check()
 
-OUT=build/tests/kernel-headers
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/kernel-headers
 rm -rf "$OUT"
 mkdir -p "$OUT"
 [ -f build/config/rorthox-config.h ] || { echo "kernel-headers: run 'make all' first" >&2; exit 1; }

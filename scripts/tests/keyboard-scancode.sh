@@ -9,7 +9,7 @@ cd "$(dirname "$0")/../.."
 HOST_CC="${HOST_CC:-cc}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/keyboard-scancode
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/keyboard-scancode
 mkdir -p "$OUT"
 rm -f "$OUT"/host-*
 [ -f build/config/rorthox-config.h ] || { echo "keyboard-scancode: run 'make all' first" >&2; exit 1; }

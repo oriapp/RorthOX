@@ -34,7 +34,7 @@ FSCK_FAT="${FSCK_FAT:-fsck.fat}"
 export QEMU_TIMEOUT="${QEMU_TIMEOUT:-600}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/file-syscalls
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/file-syscalls
 PROGRAM=programs/filetest/build/filetest.elf
 BLANK_ELF=programs/blank/build/blank.elf
 mkdir -p "$OUT"

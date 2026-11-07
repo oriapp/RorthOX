@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 . ./scripts/qemu-lib.sh
-OUT="$(pwd)/build/tests/keyboard-symbols"
+OUT="$(realpath -m "${RORTHOX_TEST_ROOT:-build/tests}/keyboard-symbols")"
 qemu_start bin/os.bin "$OUT"
 wait_screen "$RORTHOX_NAME v$RORTHOX_VERSION" 20
 

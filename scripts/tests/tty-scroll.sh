@@ -32,7 +32,7 @@ RUN_TIMEOUT="${RUN_TIMEOUT:-30}"
 . ./scripts/qemu-lib.sh
 . ./scripts/tests/lib/guest-state.sh
 
-OUT=build/tests/tty-scroll
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/tty-scroll
 PROGRAM=programs/ttytest/build/ttytest.elf
 mkdir -p "$OUT"
 # Remove the last run's results, so the checks below only see this run.
@@ -110,7 +110,7 @@ GDB_DIR=
 cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
 Q_CLEANUP=cleanup
 trap qemu_exit EXIT
-GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 SOCK="$GDB_DIR/gdb"
 
 echo "tty-scroll: run ttytest.elf scroll"

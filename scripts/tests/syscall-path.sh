@@ -23,7 +23,7 @@ EXIT_TIMEOUT="${EXIT_TIMEOUT:-30}"
 . ./scripts/qemu-lib.sh
 . ./scripts/tests/lib/guest-state.sh
 
-OUT=build/tests/syscall-path
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/syscall-path
 PROGRAM=programs/pathtest/build/pathtest.elf
 # Longest name that fits after "0:/" with its terminator (RORTHOX_MAX_PATH is 108).
 FITS=104
@@ -51,7 +51,7 @@ GDB_DIR=
 cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
 Q_CLEANUP=cleanup
 trap qemu_exit EXIT
-GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 SOCK="$GDB_DIR/gdb"
 
 # blank.elf followed by slashes, FITS characters in all.

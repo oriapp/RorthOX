@@ -35,7 +35,7 @@ SAMPLE_TRIES="${SAMPLE_TRIES:-20}"
 . ./scripts/qemu-lib.sh
 . ./scripts/tests/lib/kernel-symbols.sh
 
-OUT=build/tests/sleep-idle
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/sleep-idle
 PROGRAM=programs/libtest/build/libtest.elf
 mkdir -p "$OUT"
 rm -rf "$OUT"/snap-* "$OUT"/*.txt "$OUT"/*.bin

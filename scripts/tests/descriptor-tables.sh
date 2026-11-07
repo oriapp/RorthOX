@@ -26,7 +26,7 @@ BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 STEP_TIMEOUT="${STEP_TIMEOUT:-20}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/descriptor-tables
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/descriptor-tables
 rm -rf "$OUT"
 mkdir -p "$OUT"
 command -v python3 > /dev/null || { echo "descriptor-tables: python3 not found" >&2; exit 1; }
@@ -68,7 +68,7 @@ echo "exit=$host_status" > "$OUT/host-status.txt"
 image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
 cp bin/os.bin "$OUT/descriptor-tables.bin"
-GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 
 echo "descriptor-tables: boot"
 QEMU_FLAGS="-S -gdb unix:$GDB_DIR/gdb,server=on,wait=off" qemu_start "$OUT/descriptor-tables.bin" "$OUT"

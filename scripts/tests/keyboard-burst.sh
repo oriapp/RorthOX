@@ -5,11 +5,11 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 . ./scripts/qemu-lib.sh
 
-OUT="$(pwd)/build/tests/keyboard-burst"
+OUT="$(realpath -m "${RORTHOX_TEST_ROOT:-build/tests}/keyboard-burst")"
 mkdir -p "$OUT"
 # Keep the Unix socket path short even when the checkout path is long.
 cleanup() { qemu_kill; rm -rf "$SOCKET_DIR"; }
-SOCKET_DIR=$(mktemp -d "$HOME/keyboard-burst.XXXXXX")
+SOCKET_DIR=$(mktemp -d --tmpdir keyboard-burst.XXXXXX)
 trap cleanup EXIT
 BASE_FLAGS=${QEMU_FLAGS:-}
 

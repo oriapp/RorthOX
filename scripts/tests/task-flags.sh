@@ -27,7 +27,7 @@ BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 STEP_TIMEOUT="${STEP_TIMEOUT:-60}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/task-flags
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/task-flags
 PROGRAM=programs/flagstest/build/flagstest.elf
 rm -rf "$OUT"
 mkdir -p "$OUT"
@@ -38,7 +38,7 @@ image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
 cp bin/os.bin "$OUT/task-flags.bin"
 mcopy -i "$OUT/task-flags.bin" "$PROGRAM" ::flagtest.elf
-GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 SOCK="$GDB_DIR/gdb"
 
 echo "task-flags: boot, frames built by task_return"

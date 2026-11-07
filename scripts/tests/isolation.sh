@@ -39,7 +39,7 @@ STEP_TIMEOUT="${STEP_TIMEOUT:-20}"
 BOOTS="${ISOLATION_BOOTS:-kernel process foreign}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/isolation
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/isolation
 PROGRAM=programs/faulttest/build/faulttest.elf
 rm -rf "$OUT"
 mkdir -p "$OUT"
@@ -172,7 +172,7 @@ image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
 cp bin/os.bin "$IMAGE"
 mcopy -i "$IMAGE" "$PROGRAM" ::fault.elf
-GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 trap 'rm -rf "$GDB_DIR"' EXIT
 SOCK="$GDB_DIR/gdb"
 

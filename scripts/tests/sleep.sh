@@ -41,7 +41,7 @@ HOST_CC="${HOST_CC:-cc}"
 . ./scripts/qemu-lib.sh
 . ./scripts/tests/lib/guest-state.sh
 
-OUT=build/tests/sleep
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/sleep
 PROGRAM=programs/libtest/build/libtest.elf
 mkdir -p "$OUT"
 rm -f "$OUT"/host-* "$OUT"/*.txt "$OUT"/*.bin "$OUT"/*.log "$OUT/peer-ready"
@@ -77,7 +77,7 @@ GDB_DIR=
 cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
 Q_CLEANUP=cleanup
 trap qemu_exit EXIT
-GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 SOCK="$GDB_DIR/gdb"
 
 # vm_running <seconds>: wait until the monitor says the VM runs (the debugger's continue is in).

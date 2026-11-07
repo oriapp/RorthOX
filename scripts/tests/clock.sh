@@ -26,7 +26,7 @@ STEP_TIMEOUT="${STEP_TIMEOUT:-90}"
 HOST_CC="${HOST_CC:-cc}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/clock
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/clock
 PROGRAM=programs/libtest/build/libtest.elf
 mkdir -p "$OUT"
 rm -f "$OUT"/host-* "$OUT"/*.txt "$OUT"/*.bin

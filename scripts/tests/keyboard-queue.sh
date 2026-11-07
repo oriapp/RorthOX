@@ -9,7 +9,7 @@ cd "$(dirname "$0")/../.."
 HOST_CC="${HOST_CC:-cc}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/keyboard-queue
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/keyboard-queue
 mkdir -p "$OUT"
 rm -f "$OUT"/host-*
 [ -f build/config/rorthox-config.h ] || { echo "keyboard-queue: run 'make all' first" >&2; exit 1; }

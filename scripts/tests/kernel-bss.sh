@@ -25,7 +25,7 @@ cd "$(dirname "$0")/../.."
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/kernel-bss
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/kernel-bss
 rm -rf "$OUT"
 mkdir -p "$OUT"
 for tool in python3 nasm i686-elf-gcc; do
@@ -36,7 +36,7 @@ done
 image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
 kernel_sectors=$(sed -n 's/^%define KERNEL_SECTORS \([0-9]*\)$/\1/p' build/config/rorthox-config.inc)
-GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 
 # run_case <name> <image> <kernel.map> <kernel.bin> [<fixture symbol> <fixture size>]
 run_case() {

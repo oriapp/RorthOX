@@ -32,7 +32,7 @@ BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-20}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/program-lookup
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/program-lookup
 LOOKTEST=programs/looktest/build/looktest.elf
 BLANK=programs/blank/build/blank.elf
 IMAGE="$OUT/program-lookup.bin"

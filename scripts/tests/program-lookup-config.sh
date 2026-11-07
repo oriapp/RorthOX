@@ -22,7 +22,7 @@ cd "$(dirname "$0")/../.."
 HOST_CC="${HOST_CC:-cc}"
 . ./scripts/qemu-lib.sh   # only for check()
 
-OUT=build/tests/program-lookup-config
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/program-lookup-config
 rm -rf "$OUT"
 mkdir -p "$OUT"
 FIX="$OUT/config"

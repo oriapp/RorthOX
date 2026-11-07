@@ -23,7 +23,7 @@ cd "$(dirname "$0")/../.."
 HOST_CC="${HOST_CC:-cc}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/file-read
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/file-read
 FATIMG="python3 -B scripts/tests/lib/fatimg.py"
 mkdir -p "$OUT"
 [ -f bin/os.bin ] || { echo "file-read: run 'make all' first" >&2; exit 1; }

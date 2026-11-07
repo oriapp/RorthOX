@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 . scripts/qemu-lib.sh
 . scripts/tests/lib/syscheck.sh
-OUT=build/tests/raw-program
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/raw-program
 mkdir -p "$OUT"
 rm -f "$OUT/host-check" "$OUT/host-build.log" "$OUT/host-check.log"
 host_failed=0

@@ -24,7 +24,7 @@ cd "$(dirname "$0")/../.."
 HOST_CC="${HOST_CC:-cc}"
 . ./scripts/qemu-lib.sh   # only for check()
 
-OUT=build/tests/interrupt-count
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/interrupt-count
 rm -rf "$OUT"
 mkdir -p "$OUT"
 command -v python3 > /dev/null || { echo "interrupt-count: python3 not found" >&2; exit 1; }

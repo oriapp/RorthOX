@@ -10,7 +10,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/panic
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/panic
 mkdir -p "$OUT"
 rm -f "$OUT/state.txt"
 cp bin/os.bin "$OUT/no-shell.bin"

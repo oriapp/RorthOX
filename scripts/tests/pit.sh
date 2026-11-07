@@ -10,7 +10,7 @@ cd "$(dirname "$0")/../.."
 HOST_CC="${HOST_CC:-cc}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/pit
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/pit
 mkdir -p "$OUT"
 rm -f "$OUT"/host-*
 [ -f build/config/rorthox-config.h ] || { echo "pit: run 'make all' first" >&2; exit 1; }

@@ -18,7 +18,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/screen-waits
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/screen-waits
 rm -rf "$OUT"
 mkdir -p "$OUT/run"
 Q_OUT="$OUT/run"

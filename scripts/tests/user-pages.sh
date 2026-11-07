@@ -23,7 +23,7 @@ EXIT_TIMEOUT="${EXIT_TIMEOUT:-15}"
 QEMU_TIMEOUT="${QEMU_TIMEOUT:-180}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/user-pages
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/user-pages
 PROGRAM=programs/pagetest/build/pagetest.elf
 mkdir -p "$OUT"
 

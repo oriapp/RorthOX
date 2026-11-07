@@ -32,7 +32,7 @@
 # address of the process slots and compiles the struct offsets).
 # Env: BOOT_TIMEOUT=60 (seconds to wait for the shell)  STEP_TIMEOUT=20 (each step after)
 #      EXCEPTION_CASES="ud2 int3 cli pf int14 int18 owner"
-#      EXCEPTIONS_NAME=exceptions (test name and build/tests/<name> output directory)
+#      EXCEPTIONS_NAME=exceptions (test name and output directory name)
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -43,7 +43,7 @@ NAME="${EXCEPTIONS_NAME:-exceptions}"
 . ./scripts/qemu-lib.sh
 . ./scripts/tests/lib/guest-state.sh
 
-OUT=build/tests/$NAME
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/$NAME
 PROGRAM=programs/faulttest/build/faulttest.elf
 rm -rf "$OUT"
 mkdir -p "$OUT"
@@ -121,7 +121,7 @@ GDB_DIR=
 cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
 Q_CLEANUP=cleanup
 trap qemu_exit EXIT
-GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 SOCK="$GDB_DIR/gdb"
 
 # One user fault: boot, launch, arm the debugger, send the key, recover.

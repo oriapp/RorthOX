@@ -38,7 +38,7 @@ QEMU_TIMEOUT="${QEMU_TIMEOUT:-180}"
 . ./scripts/tests/lib/guest-state.sh
 
 SUITE="${OOM_SUITE:-heap-oom}"
-OUT="build/tests/$SUITE"
+OUT="${RORTHOX_TEST_ROOT:-build/tests}/$SUITE"
 PROGRAM=programs/oomtest/build/oomtest.elf
 BLANK_ELF=programs/blank/build/blank.elf
 SHELL_ELF=programs/shell/build/shell.elf

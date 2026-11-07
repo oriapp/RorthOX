@@ -31,7 +31,7 @@ STATE_TIMEOUT="${STATE_TIMEOUT:-20}"
 . ./scripts/qemu-lib.sh
 . ./scripts/tests/lib/guest-state.sh
 
-OUT=build/tests/fat-lookup
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/fat-lookup
 BLANK_ELF=programs/blank/build/blank.elf
 FATIMG="python3 -B scripts/tests/lib/fatimg.py"
 mkdir -p "$OUT"
@@ -146,7 +146,7 @@ GDB_DIR=
 cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
 Q_CLEANUP=cleanup
 trap qemu_exit EXIT
-GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 SOCK="$GDB_DIR/gdb"
 
 # state <tag> [options]: the guest-state rendezvous at the shell's key request, the shell alone.

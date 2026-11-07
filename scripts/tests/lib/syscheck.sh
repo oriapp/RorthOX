@@ -11,7 +11,7 @@ syscheck_setup() {
     guest_state_setup "$OUT"
     Q_CLEANUP=syscheck_cleanup
     trap qemu_exit EXIT
-    SYSCHECK_GDB=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+    SYSCHECK_GDB=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 }
 # wait_exits <dir> <mode>: until syscheck and any program it started have ended: the guest-state
 # rendezvous stops at the shell's key request with the shell alone in the task list, the same

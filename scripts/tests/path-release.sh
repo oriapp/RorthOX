@@ -16,7 +16,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 HOST_CC="${HOST_CC:-cc}"
-OUT=build/tests/path-release
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/path-release
 BLANK_ELF=programs/blank/build/blank.elf
 mkdir -p "$OUT"
 

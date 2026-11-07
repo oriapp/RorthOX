@@ -31,7 +31,7 @@ BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-60}"
 . ./scripts/qemu-lib.sh
 
-OUT=build/tests/disk-read
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/disk-read
 PROGRAM=programs/disktest/build/disktest.elf
 BLANK_ELF=programs/blank/build/blank.elf
 FATIMG="python3 -B scripts/tests/lib/fatimg.py"

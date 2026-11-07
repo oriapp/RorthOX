@@ -37,7 +37,7 @@ RUN_TIMEOUT="${RUN_TIMEOUT:-30}"
 . ./scripts/qemu-lib.sh
 . ./scripts/tests/lib/guest-state.sh
 
-OUT=build/tests/printc
+OUT=${RORTHOX_TEST_ROOT:-build/tests}/printc
 PROGRAM=programs/libtest/build/libtest.elf
 mkdir -p "$OUT"
 # Remove the last run's results, so the checks below only see this run.
@@ -79,7 +79,7 @@ GDB_DIR=
 cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
 Q_CLEANUP=cleanup
 trap qemu_exit EXIT
-GDB_DIR=$(mktemp -d /tmp/rorthox-gdb.XXXXXX)
+GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 SOCK="$GDB_DIR/gdb"
 
 # The VGA page (characters and colours) is saved at libtest's key requests: everything it printed
