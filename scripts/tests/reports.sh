@@ -226,6 +226,63 @@ expect "a passing test, but no reports: exit 1, and it says so" \
     '[ "$status" -eq 1 ] && grep -Fxq "=== 1 passed, 0 failed, 0 skipped" "$OUT/broken.log" &&
      grep -Fxq "=== the reports could not be written" "$OUT/broken.log"'
 
+echo "reports: 6. a failed test cannot redirect results or evidence outside the run"
+mkdir -p "$tmp/victim"
+printf 'unchanged\n' > "$tmp/victim/result"
+cat > "$fx/redirect.sh" <<'EOF'
+mv "$RORTHOX_TEST_ROOT" "$RORTHOX_TEST_ROOT.saved"
+ln -s "$REPORT_VICTIM" "$RORTHOX_TEST_ROOT"
+echo "outside log" > "$REPORT_VICTIM/outside.log"
+exit 3
+EOF
+REPORT_VICTIM="$tmp/victim" top redirect "$fx/redirect.sh"
+expect "symlinked test root is ignored, outside result untouched" \
+    '[ "$status" -eq 1 ] && [ "$(cat "$tmp/victim/result")" = unchanged ] &&
+     ! grep -q "outside log" "$RES/redirect/failed/001-redirect/outside.log" 2>/dev/null &&
+     grep -q "not a real directory" "$RES/redirect/failed/001-redirect/index.txt"'
+cat > "$fx/link-result.sh" <<'EOF'
+ln -s "$REPORT_VICTIM/result" "$RORTHOX_TEST_ROOT/result"
+exit 3
+EOF
+REPORT_VICTIM="$tmp/victim" top link-result "$fx/link-result.sh"
+expect "linked result replaced with a real report file" \
+    '[ "$status" -eq 1 ] && [ "$(cat "$tmp/victim/result")" = unchanged ] &&
+     [ ! -L "$RES/link-result/001-link-result/result" ] &&
+     grep -q 'failed' "$RES/link-result/results.json"'
+
+echo "reports: 7. evidence budgets and non-UTF-8 directory names"
+python3 -B - "$tmp" <<'PY' > "$OUT/bounds.log" 2>&1
+import importlib.util
+import os
+import pathlib
+import sys
+root = pathlib.Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location('runner', 'scripts/run-tests.py')
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+src = root / 'budget-source'
+dst = root / 'budget-copy'
+src.mkdir(); dst.mkdir()
+(src / 'output.log').write_bytes(b'x' * 270000)
+used = mod.copy_evidence(str(src), str(dst), 10000, True)
+assert used <= 10000 and (dst / 'output.log').stat().st_size <= 10000
+print('PASS bounded copy with a room below 64 KiB')
+run = root / 'utf8'
+run.mkdir()
+(run / 'plan').write_bytes(b'/tmp/test.sh\0')
+(run / 'instances').write_bytes(b'1\0' + b'001-bad\xff\0')
+name = os.fsdecode(b'001-bad\xff')
+(run / name).mkdir()
+(run / name / 'result').write_text('0 1 done\n')
+(run / name / 'output.log').write_text('ok\n')
+mod.cmd_report(['--run-dir', str(run), '--jobs', '1', '--shard', '',
+                '--accelerator', 'tcg', '--elapsed', '1'])
+assert (run / 'results.json').is_file() and (run / 'junit.xml').is_file()
+print('PASS non-UTF-8 output directory preserved in reports')
+PY
+expect "small budget does not exceed limit" 'grep -q "PASS bounded copy" "$OUT/bounds.log"'
+expect "invalid UTF-8 output directory does not lose reports" 'grep -q "PASS non-UTF-8" "$OUT/bounds.log"'
+
 if [ "$failures" -ne 0 ]; then
     echo "reports: $failures check(s) failed" >&2
     exit 1

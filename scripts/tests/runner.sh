@@ -292,10 +292,11 @@ pid=$!
 wait_file "$RUNNER_STATE/leave.pids"
 # The runner now waits up to 5 s for the child that ignores TERM.
 sleep 1
-kill -INT -- "-$pid"
+kill -INT -- "-$pid" || fail "could not send INT to the runner's process group"
 if wait "$pid"; then status=0; else status=$?; fi
 expect "INT to the runner's process group while it stops what a test left: test failed, nothing left" \
-    '[ "$status" -eq 1 ] && grep -Fxq "=== 0 passed, 1 failed, 0 skipped" "$OUT/group-int.log" &&
+    '[ "$status" -eq 1 ] && grep -Fxq "=== interrupted by SIGINT: 0 test(s) not started" "$OUT/group-int.log" &&
+     grep -Fxq "=== 0 passed, 1 failed, 0 skipped" "$OUT/group-int.log" &&
      grep -Eq "^\[leave\] run-tests: stopped [12] process\(es\) the test left running$" "$OUT/group-int.log" &&
      all_gone "$RUNNER_STATE/leave.pids"'
 reap "$RUNNER_STATE/leave.pids"
@@ -322,6 +323,25 @@ else
     # Keep every predicate in the FAIL line: CI's annotation otherwise omits it.
     printf -v pipe_detail 'status=%q header=%q expected=%q gone=%s left=%q'         "$pipe_status" "$pipe_header" "=== $fx/chatty.sh" "$pipe_gone" "$pipe_left"
     fail "output closed (| head -n 1): $pipe_detail"
+fi
+reap "$RUNNER_STATE"/hang.*.pids
+rm -rf "$RUNNER_STATE"
+mkdir -p "$RUNNER_STATE" "$roots/pipe-ignored"
+# Start the runner with inherited SIGPIPE ignored (as a parent shell or CI launcher may do).
+# It must restore SIGPIPE itself, not rely on the previous fixture's env reset.
+{ RORTHOX_TEST_ROOT="$roots/pipe-ignored" bash -c 'trap "" PIPE; exec timeout -k 5 15 "$@"' \
+      ignore-pipe "$runner" -j 2 "$fx/hang.sh" "$fx/chatty.sh" 2> "$OUT/pipe-ignored.err"
+  echo $? > "$OUT/pipe-ignored.status"; } | head -n 1 > "$OUT/pipe-ignored.log"
+ignored_status=$(cat "$OUT/pipe-ignored.status")
+ignored_header=$(cat "$OUT/pipe-ignored.log")
+ignored_gone=yes
+ignored_left=$(all_gone "$RUNNER_STATE"/hang.*.pids 2>&1) || ignored_gone=no
+if [ "$ignored_status" = 1 ] && [ "$ignored_header" = "=== $fx/chatty.sh" ] && [ "$ignored_gone" = yes ]; then
+    ok "SIGPIPE ignored at startup: closed output stops the runner and its tests"
+else
+    printf -v ignored_detail 'status=%q header=%q expected=%q gone=%s left=%q' \
+        "$ignored_status" "$ignored_header" "=== $fx/chatty.sh" "$ignored_gone" "$ignored_left"
+    fail "SIGPIPE ignored at startup: $ignored_detail"
 fi
 reap "$RUNNER_STATE"/hang.*.pids
 rm -rf "$RUNNER_STATE"
@@ -443,6 +463,20 @@ done
 expect "the suite's 4 shards hold every test once" \
     '[ -s "$OUT/all" ] && [ "$(sort "$OUT"/suite.[1-4])" = "$(sort "$OUT/all")" ] &&
      [ -s "$OUT/suite.1" ] && [ -s "$OUT/suite.2" ] && [ -s "$OUT/suite.3" ] && [ -s "$OUT/suite.4" ]'
+
+echo "runner: 8. empty shard and hostile error messages"
+rm -rf "$RUNNER_STATE"
+run empty-shard --list --shard= "$fx/pass.sh"
+expect "empty --shard= exits 2 before running" '[ "$status" -eq 2 ] && [ ! -e "$RUNNER_STATE"/ran.* ]'
+run empty-value --list --shard '' "$fx/pass.sh"
+expect "empty --shard argument exits 2" '[ "$status" -eq 2 ] && [ ! -e "$RUNNER_STATE"/ran.* ]'
+run newline-shard --list --shard $'1/2\n::error::not-from-test' "$fx/pass.sh"
+expect "shard error cannot start an annotation" \
+    '[ "$status" -eq 2 ] && ! grep -q "^::" "$OUT/newline-shard.log"'
+printf '{"tests": {"a\\n::error::not-from-test": 0}}\n' > "$fx/t-hostile.json"
+run newline-key --list --timings "$fx/t-hostile.json" "$fx/pass.sh"
+expect "timings error cannot start an annotation" \
+    '[ "$status" -eq 2 ] && ! grep -q "^::" "$OUT/newline-key.log"'
 
 if [ "$failures" -ne 0 ]; then
     echo "runner: $failures check(s) failed" >&2

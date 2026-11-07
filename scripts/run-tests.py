@@ -51,27 +51,27 @@ def load_timings(path):
         seen = {}
         for key, value in pairs:
             if key in seen:
-                raise Usage(f"{path}: '{key}' is there twice")
+                raise Usage(f'{path!a}: duplicate key {key!a}')
             seen[key] = value
         return seen
 
     def no_constant(name):
-        raise Usage(f"{path}: {name} is not a number of seconds")
+        raise Usage(f'{path!a}: {name!a} is not a number of seconds')
 
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f, object_pairs_hook=no_duplicates, parse_constant=no_constant)
     except OSError as e:
-        raise Usage(f"can't read the timings file: {e}")
+        raise Usage(f"can't read the timings file: {e!a}")
     except ValueError as e:
-        raise Usage(f"{path} is not valid JSON: {e}")
+        raise Usage(f'{path!a} is not valid JSON: {e!a}')
     if not isinstance(data, dict) or not isinstance(data.get("tests"), dict):
-        raise Usage(f'{path}: expected {{"tests": {{"<path>": <seconds>, ...}}}}')
+        raise Usage(f'{path!a}: expected {{"tests": {{"<path>": <seconds>, ...}}}}')
     timings = {}
     for key, value in data["tests"].items():
         if isinstance(value, bool) or not isinstance(value, (int, float)) \
                 or not math.isfinite(value) or value <= 0:
-            raise Usage(f"{path}: '{key}' needs a run time above 0 seconds, not {json.dumps(value)}")
+            raise Usage(f'{path!a}: {key!a} needs a run time above 0 seconds, not {value!a}')
         timings[key] = float(value)
     return timings
 
@@ -79,7 +79,7 @@ def load_timings(path):
 def parse_shard(text):
     m = re.fullmatch(r"([1-9][0-9]{0,3})/([1-9][0-9]{0,3})", text)
     if not m or int(m.group(1)) > int(m.group(2)):
-        raise Usage(f"--shard needs I/N with 1 <= I <= N <= 9999, not '{text}'")
+        raise Usage(f'--shard needs I/N with 1 <= I <= N <= 9999, not {text!a}')
     return int(m.group(1)), int(m.group(2))
 
 
@@ -119,7 +119,7 @@ def cmd_plan(args):
             tests = args
             break
         else:
-            raise Usage(f"plan: unexpected argument '{a}'")
+            raise Usage(f'plan: unexpected argument {a!a}')
     if timings_file is None or tests is None:
         raise Usage("plan needs --timings FILE and -- TEST...")
     timings = load_timings(timings_file)
@@ -171,14 +171,22 @@ TEST_LIMIT = 8 << 20
 ALL_LIMIT = 64 << 20
 
 
-def copy_evidence(src_root, dst_root, budget):
+def copy_evidence(src_root, dst_root, budget, output_only=False):
     """Copies a failed test's evidence files; returns the bytes written."""
     notes, used = [], 0
-    for top, dirs, files in os.walk(src_root):
+    try:
+        valid_root = stat.S_ISDIR(os.lstat(src_root).st_mode)
+    except OSError:
+        valid_root = False
+    if not valid_root:
+        notes.append('left out (not a real directory): test output')
+    for top, dirs, files in os.walk(src_root) if valid_root else ():
         dirs.sort()
         for name in sorted(files):
             src = os.path.join(top, name)
             rel = os.path.relpath(src, src_root)
+            if output_only != (rel == 'output.log'):
+                continue
             try:
                 st = os.lstat(src)
             except OSError:
@@ -203,7 +211,7 @@ def copy_evidence(src_root, dst_root, budget):
                         notes.append(f"left out ({st.st_size} bytes, an image too big to keep): {rel}")
                         continue
                     else:
-                        head = f.read(64 << 10)
+                        head = f.read(min(64 << 10, room // 2))
                         f.seek(-(room - len(head) - 128), os.SEEK_END)
                         rest = f.read()
                         gone = st.st_size - len(head) - len(rest)
@@ -217,9 +225,11 @@ def copy_evidence(src_root, dst_root, budget):
             with open(dst, "wb") as f:
                 f.write(data)
             used += len(data)
-    with open(os.path.join(dst_root, "index.txt"), "w", encoding="utf-8", errors="replace") as f:
-        f.write("Copied: output.log, and the test's log, text and screen files.\n")
-        f.write("".join(n + "\n" for n in notes) or "Nothing was cut or left out.\n")
+    with open(os.path.join(dst_root, "index.txt"), "a", encoding="utf-8", errors="replace") as f:
+        if output_only:
+            f.write("Copied: output.log, and the test's log, text and screen files.\n")
+        if notes:
+            f.write(''.join(n + '\n' for n in notes))
     return used
 
 
@@ -229,7 +239,7 @@ def cmd_report(args):
     while args:
         a = args.pop(0)
         if a not in names or not args:
-            raise Usage(f"report: unexpected argument '{a}'")
+            raise Usage(f'report: unexpected argument {a!a}')
         opts[a] = args.pop(0)
     if len(opts) != len(names):
         raise Usage("report needs " + " ".join(names[:-1]))
@@ -237,18 +247,19 @@ def cmd_report(args):
     limit = int(opts["--summary-limit"])
     plan = split_nul(os.path.join(run_dir, "plan"))
     started = split_nul(os.path.join(run_dir, "instances"))
-    dirs = {int(started[k]): started[k + 1].decode() for k in range(0, len(started) - 1, 2)}
+    dirs = {int(started[k]): os.fsdecode(started[k + 1]) for k in range(0, len(started) - 1, 2)}
     tests, total = [], 0.0
     for i, path in enumerate(plan):
         d = dirs.get(i + 1)
         if d is not None and ("/" in d or d in ("", ".", "..")):
-            raise Usage(f"bad test directory name '{d}'")
+            raise Usage(f'bad test directory name {d!a}')
         status = duration = None
         if d is None:
             result = "not run"
         else:
             try:
-                with open(os.path.join(run_dir, d, "result")) as f:
+                fd = os.open(os.path.join(run_dir, d, "result"), os.O_RDONLY | os.O_NOFOLLOW)
+                with os.fdopen(fd) as f:
                     st, tenths, how = f.read().split()
                 status, duration = int(st), int(tenths) / 10
                 total += duration
@@ -320,11 +331,13 @@ def cmd_report(args):
         f.write("".join(out))
 
     budget = ALL_LIMIT
-    for t in bad:
-        if t["output_dir"] is not None:
-            dst = os.path.join(run_dir, "failed", t["output_dir"])
-            os.makedirs(dst, exist_ok=True)
-            budget -= copy_evidence(os.path.join(run_dir, t["output_dir"]), dst, budget)
+    for output_only in (True, False):
+        for t in bad:
+            if t["output_dir"] is not None:
+                dst = os.path.join(run_dir, "failed", t["output_dir"])
+                os.makedirs(dst, exist_ok=True)
+                budget -= copy_evidence(os.path.join(run_dir, t["output_dir"]), dst,
+                                        budget, output_only)
     return 0
 
 
@@ -335,6 +348,9 @@ def main(argv):
         return 2
     try:
         return commands[argv[1]](argv[2:])
+    except (OverflowError, RecursionError) as e:
+        print(f'run-tests: invalid input: {type(e).__name__}', file=sys.stderr)
+        return 2
     except Usage as e:
         print(f"run-tests: {e}", file=sys.stderr)
         return 2

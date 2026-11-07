@@ -44,6 +44,14 @@
 # them by session or by their TMPDIR (rx.XXXXXX).
 
 set -uo pipefail
+# Bash cannot trap a signal that was ignored when it started. Restore SIGPIPE before any
+# output: a closed CI log pipe must interrupt the run and stop every active test.
+if [ -r /proc/$$/status ]; then
+    ignored=$(awk '$1 == "SigIgn:" { print $2 }' "/proc/$$/status")
+    if [[ $ignored =~ ^[0-9A-Fa-f]+$ ]] && (( (16#$ignored & (1 << 12)) != 0 )); then
+        exec env --default-signal=PIPE bash "$0" "$@"
+    fi
+fi
 cd "$(dirname "$0")/.." || exit 2
 
 usage() {
@@ -59,6 +67,7 @@ jobs=1
 timeout_s=${RORTHOX_TEST_TIMEOUT:-900}
 list=no
 shard=
+shard_set=no
 timings=scripts/test-timings.json
 results=
 tests=()
@@ -68,8 +77,8 @@ while [ $# -gt 0 ]; do
         -j*) jobs=${1#-j}; shift ;;
         --timeout) [ $# -ge 2 ] || usage; timeout_s=$2; shift 2 ;;
         --timeout=*) timeout_s=${1#--timeout=}; shift ;;
-        --shard) [ $# -ge 2 ] || usage; shard=$2; shift 2 ;;
-        --shard=*) shard=${1#--shard=}; shift ;;
+        --shard) [ $# -ge 2 ] || usage; shard=$2; shard_set=yes; shift 2 ;;
+        --shard=*) shard=${1#--shard=}; shard_set=yes; shift ;;
         --timings) [ $# -ge 2 ] || usage; timings=$2; shift 2 ;;
         --timings=*) timings=${1#--timings=}; shift ;;
         --list) list=yes; shift ;;
@@ -93,7 +102,7 @@ for t in "${tests[@]}"; do
 done
 # The helper checks the timings and picks the shard's tests.
 plan_args=(--timings "$timings")
-[ -z "$shard" ] || plan_args+=(--shard "$shard")
+[ "$shard_set" = no ] || plan_args+=(--shard "$shard")
 plan="$(mktemp)" || exit 2
 if ! python3 -B scripts/run-tests.py plan "${plan_args[@]}" -- "${tests[@]}" > "$plan"; then
     rm -f "$plan"
@@ -319,7 +328,10 @@ finish_test() {
     statuses[i]=$status
     tenths=$(((${EPOCHREALTIME/[.,]/} - starts[i]) / 100000))
     echo "$((tenths / 10)).$((tenths % 10)) $status $t" >> "$run_dir/durations.txt"
-    echo "$status $tenths ${stopping[i]:-done}" > "${roots[i]}/result"
+    if [ -d "${roots[i]}" ] && [ ! -L "${roots[i]}" ]; then
+        rm -f -- "${roots[i]}/result"
+        echo "$status $tenths ${stopping[i]:-done}" > "${roots[i]}/result"
+    fi
     echo "=== $(one_line "$t")"
     replay "$(basename "$t" .sh)" "${logs[i]}"
     case "$status" in
