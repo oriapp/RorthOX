@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""Check the security and required-job contract of the build workflow (stdlib only)."""
+import pathlib
+import re
+import sys
+
+
+class Invalid(Exception):
+    pass
+
+
+def require(ok, message):
+    if not ok:
+        raise Invalid(message)
+
+
+def lint(text):
+    require(re.search(r'^permissions: \{\}$', text, re.M), 'top-level permissions must be empty')
+    require(not re.search(r'^\s*(workflow_run|pull_request_target):', text, re.M),
+            'untrusted trigger')
+    require(re.search(r'^  push:\s*\n    branches: \[main, features\]', text, re.M)
+            and re.search(r'^  pull_request:', text, re.M), 'missing push or PR trigger')
+    require(re.search(r'^  cancel-in-progress: .*github.ref != .refs/heads/main.', text, re.M)
+            and re.search(r'^  group: .*github.sha', text, re.M), 'main run must never be superseded')
+    for action, release in [('checkout', 'v6'), ('cache', 'v6'),
+                            ('download-artifact', 'v6'), ('upload-artifact', 'v6')]:
+        require(re.search(r'^\s*# actions/' + action + ' ' + release + r'\b', text, re.M),
+                f'missing release comment: {action}')
+    uses = re.findall(r'^\s*(?:-\s*)?uses: (\S+)', text, re.M)
+    require(bool(uses) and all(re.fullmatch(r'actions/(checkout|cache|upload-artifact|download-artifact)@[a-f0-9]{40}', a)
+                                for a in uses), 'actions must be first-party and pinned to 40-hex SHA')
+    require('persist-credentials: false' in text and
+            text.count('persist-credentials: false') == uses.count(next(a for a in uses if '/checkout@' in a)),
+            'checkout must not persist credentials')
+    require(not re.search(r'^\s*(run-id|github-token):', text, re.M),
+            'artifact downloads must be same-run')
+    jobs = re.split(r'^  (build|test|result):\s*$', text, flags=re.M)
+    require(len(jobs) == 7 and jobs[1::2] == ['build', 'test', 'result'], 'expected three jobs')
+    for name, body in zip(jobs[1::2], jobs[2::2]):
+        require(re.search(r'^    permissions:\n      contents: read$', body, re.M),
+                f'{name}: missing least privilege')
+    require('needs: build' in jobs[4] and 'fail-fast: false' in jobs[4]
+            and 'shard: [1, 2, 3, 4]' in jobs[4], 'four independent shards required')
+    require('needs: [build, test]' in jobs[6] and re.search(r'^    if: always\(\)$', jobs[6], re.M)
+            and 'scripts/ci-result.py' in jobs[6], 'aggregate must run after failure')
+    require('scripts/ci-artifact.py extract' in jobs[4]
+            and 'scripts/ci-artifact.py create' in jobs[2], 'build handoff must be verified')
+    require('RORTHOX_REQUIRE_ISO:' in jobs[4] and 'run-tests.sh --shard' in jobs[4],
+            'required sharded test invocation missing')
+
+
+if __name__ == '__main__':
+    try:
+        lint(pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else '.github/workflows/build.yml').read_text())
+    except (Invalid, OSError, StopIteration) as e:
+        print(f'workflow lint: {e}', file=sys.stderr)
+        sys.exit(1)
+    print('workflow lint: OK')

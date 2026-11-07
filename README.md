@@ -505,10 +505,12 @@ the GRUB case of `write-protect` fail when `bin/rorthox.iso` is missing or holds
 `bin/kernel.bin` (`make test` builds it first). `fsck.fat` (package `dosfstools`)
 is optional: without it `fat-write` and `file-syscalls` say they skip that one check and still run the rest.
 
-CI (`.github/workflows/build.yml`) installs the packages including GRUB and `dosfstools`, builds the toolchain
-(cached), runs `make all iso` and `RORTHOX_REQUIRE_ISO=1 make test` on Ubuntu 24.04 for every push to `main` and
-every pull request, and keeps the disk image, the ISO and the test output as artifacts. Failing tests show up as error
-annotations on the CI run.
+CI (`.github/workflows/build.yml`) runs on Ubuntu 24.04 for pushes to `main` or `features` and for pull requests.
+The build job compiles the cross toolchain (cached), runs `make all iso` once and uploads a `production` archive with
+its revision, tool versions and file checksums. Four independent test jobs download that same-run archive, verify its
+manifest and run one shard each without rebuilding production files; their `results-1` through `results-4` artifacts
+keep JUnit, JSON, summaries and bounded failed-test logs. The final result job runs even if the build or a shard
+fails, and only passes if all required jobs and reports passed. Failed tests also appear as error annotations.
 
 ## Project layout
 

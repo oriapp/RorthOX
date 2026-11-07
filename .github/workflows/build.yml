@@ -1,59 +1,151 @@
 name: build
 
-# Pushes to main and features, and pull requests (a PR branch runs once, through its pull request).
 on:
   push:
     branches: [main, features]
   pull_request:
   workflow_dispatch:
 
-# The job only reads the repository and uploads artifacts.
-permissions:
-  contents: read
+permissions: {}
+# Never cancel a main commit's run. PRs and features keep only their newest run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'workflow_dispatch' }}
 
 jobs:
   build:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      manifest: ${{ steps.package.outputs.manifest }}
     steps:
-      - uses: actions/checkout@v4
-
+      # actions/checkout v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
       - name: Install packages
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bison flex libgmp3-dev libmpc-dev \
             libmpfr-dev texinfo curl xz-utils nasm qemu-system-x86 mtools python3 \
             grub-common grub-pc-bin xorriso dosfstools
-
-      # Building binutils + GCC takes a while, so keep ~/opt/cross between runs.
-      # A change to configure.sh (versions, options) builds a new one.
+      # actions/cache v6; configure.sh is the source of the toolchain versions and options.
       - name: Cache the cross toolchain
         id: cross-cache
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ~/opt/cross
           key: cross-ubuntu-24.04-${{ hashFiles('configure.sh') }}
-
       - name: Build the cross toolchain
         if: steps.cross-cache.outputs.cache-hit != 'true'
         run: ./configure.sh
-
       - name: Add the cross toolchain to PATH
         run: echo "$HOME/opt/cross/bin" >> "$GITHUB_PATH"
-
-      - name: Build
-        run: make all iso
-
-      - name: Tests
-        run: RORTHOX_REQUIRE_ISO=1 make test
-
-      - name: Upload the disk image and test output
-        if: always()
-        uses: actions/upload-artifact@v4
+      - name: Build and package
+        id: package
+        run: |
+          make all iso
+          python3 -B scripts/ci-artifact.py create "$RUNNER_TEMP/production.tar.gz" "$RUNNER_TEMP/production.sha256"
+          read -r manifest < "$RUNNER_TEMP/production.sha256"
+          echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+      # actions/upload-artifact v6
+      - name: Upload production build
+        if: steps.package.outcome == 'success'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
-          name: rorthox
+          name: production
+          path: ${{ runner.temp }}/production.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+      - name: Upload build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: build-failure
           path: |
-            bin/os.bin
-            bin/rorthox.iso
-            build/smoke/
-            build/tests/
+            bin/
+            build/kernel.map
           if-no-files-found: ignore
+
+  test:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      # actions/checkout v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Install packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bison flex libgmp3-dev libmpc-dev \
+            libmpfr-dev texinfo curl xz-utils nasm qemu-system-x86 mtools python3 \
+            grub-common grub-pc-bin xorriso dosfstools
+      # actions/cache v6
+      - name: Cache the cross toolchain
+        id: cross-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/opt/cross
+          key: cross-ubuntu-24.04-${{ hashFiles('configure.sh') }}
+      - name: Build the cross toolchain
+        if: steps.cross-cache.outputs.cache-hit != 'true'
+        run: ./configure.sh
+      - name: Add the cross toolchain to PATH
+        run: echo "$HOME/opt/cross/bin" >> "$GITHUB_PATH"
+      # actions/download-artifact v6; defaults to an artifact of this run.
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        with:
+          name: production
+          path: ${{ runner.temp }}/production
+      - name: Verify and test
+        env:
+          MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}
+          SHARD: ${{ matrix.shard }}
+          RORTHOX_REQUIRE_ISO: '1'
+        run: |
+          python3 -B scripts/ci-artifact.py extract "$RUNNER_TEMP/production/production.tar.gz" "$MANIFEST_SHA256"
+          ./scripts/run-tests.sh --shard "$SHARD/4" -j 2 --results "build/tests/runs/shard-$SHARD"
+      # Upload the reports and bounded failed-only evidence, even on a red shard.
+      - name: Upload shard results
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: results-${{ matrix.shard }}
+          path: |
+            build/tests/runs/shard-${{ matrix.shard }}/results.json
+            build/tests/runs/shard-${{ matrix.shard }}/junit.xml
+            build/tests/runs/shard-${{ matrix.shard }}/summary.md
+            build/tests/runs/shard-${{ matrix.shard }}/failed/
+          if-no-files-found: warn
+
+  result:
+    needs: [build, test]
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      # actions/download-artifact v6; missing artifacts are checked by ci-result.py.
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        if: needs.build.result == 'success'
+        continue-on-error: true # Missing shard artifacts are marked red by the result step.
+        with:
+          pattern: results-*
+          path: ${{ runner.temp }}/ci-results
+      - name: Check every job
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+        run: python3 -B scripts/ci-result.py "$RUNNER_TEMP/ci-results" "$BUILD_RESULT" "$TEST_RESULT"
