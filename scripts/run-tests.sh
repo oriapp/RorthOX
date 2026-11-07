@@ -14,6 +14,7 @@
 #                there counts as the median. Checked on every run, also without --shard.
 #   --list       print the tests that would run (with --shard: that shard's), one per line, in the
 #                order they would start, and run nothing
+#   --results D  put the run's directory at D (new or empty) instead of build/tests/runs/run.XXXXXX
 #   test.sh ...  only these tests (a test named twice runs twice); default: scripts/smoke.sh and
 #                every scripts/tests/*.sh
 #
@@ -28,8 +29,11 @@
 # removed when it ends. What a test prints goes to output.log in its numbered directory; when the
 # test ends the runner prints it with "[<name>] " in front of every line (also after a carriage
 # return), so a test's output can never pass for a line of the runner's own, such as a CI error
-# annotation. Run times and exit statuses go to durations.txt in the run directory. A new top-level
-# run removes the earlier runs that have finished. A top-level run also fails when a file name in its
+# annotation. Run times and exit statuses go to durations.txt in the run directory, and at the end the
+# runner writes its reports there (scripts/run-tests.py report): results.json, junit.xml, summary.md
+# (also added to $GITHUB_STEP_SUMMARY when that is set and the runner doesn't run inside a test) and
+# failed/, a bounded copy of the output and logs of the tests that failed. A new top-level run
+# removes the earlier runs that have finished. A top-level run also fails when a file name in its
 # run directory has a character CI's artifact upload refuses (see the end).
 #
 # Every test runs in its own session. When it ends or runs out of time, or when the runner gets
@@ -43,7 +47,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 
 usage() {
-    echo "usage: $0 [-j N] [--timeout S] [--shard I/N] [--timings F] [--list] [test.sh ...]" >&2
+    echo "usage: $0 [-j N] [--timeout S] [--shard I/N] [--timings F] [--list] [--results D] [test.sh ...]" >&2
     exit 2
 }
 if ((BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 1))); then
@@ -56,6 +60,7 @@ timeout_s=${RORTHOX_TEST_TIMEOUT:-900}
 list=no
 shard=
 timings=scripts/test-timings.json
+results=
 tests=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -68,6 +73,8 @@ while [ $# -gt 0 ]; do
         --timings) [ $# -ge 2 ] || usage; timings=$2; shift 2 ;;
         --timings=*) timings=${1#--timings=}; shift ;;
         --list) list=yes; shift ;;
+        --results) [ $# -ge 2 ] || usage; results=$2; shift 2 ;;
+        --results=*) results=${1#--results=}; shift ;;
         --) shift; tests+=("$@"); break ;;
         -*) echo "unknown option: $1" >&2; usage ;;
         *) tests+=("$1"); shift ;;
@@ -99,14 +106,26 @@ if [ "$list" = yes ]; then
     exit 0
 fi
 
-if [ -n "${RORTHOX_TEST_ROOT:-}" ]; then runs="$RORTHOX_TEST_ROOT/runs"; else runs=build/tests/runs; fi
-mkdir -p "$runs" || exit 2
-if [ "$runs" = build/tests/runs ]; then
-    for old in "$runs"/run.*; do
-        if [ -f "$old/finished" ]; then rm -rf "$old"; fi
-    done
+if [ -n "$results" ]; then
+    mkdir -p "$results" || exit 2
+    [ -z "$(ls -A "$results")" ] || { echo "--results: $results is not empty" >&2; exit 2; }
+    run_dir=$results
+else
+    if [ -n "${RORTHOX_TEST_ROOT:-}" ]; then runs="$RORTHOX_TEST_ROOT/runs"; else runs=build/tests/runs; fi
+    mkdir -p "$runs" || exit 2
+    if [ "$runs" = build/tests/runs ]; then
+        for old in "$runs"/run.*; do
+            if [ -f "$old/finished" ]; then rm -rf "$old"; fi
+        done
+    fi
+    run_dir="$(mktemp -d "$runs/run.XXXXXX")" || exit 2
 fi
-run_dir="$(mktemp -d "$runs/run.XXXXXX")" || exit 2
+[ ${#tests[@]} -eq 0 ] || printf '%s\0' "${tests[@]}" > "$run_dir/plan"
+: >> "$run_dir/plan"
+: >> "$run_dir/instances"
+run_start=$SECONDS
+# qemu-lib.sh runs QEMU without an accelerator option: TCG.
+accelerator=tcg
 # Unix socket paths are short (108 bytes), so the temporary directories stay on a short absolute
 # path. The runner finds a test's processes by that path (pgrep -f takes a regular expression), so
 # a TMPDIR with other characters than these isn't used.
@@ -250,13 +269,15 @@ passed=()
 failed=()
 skipped=()
 failed_order=()
-declare -a statuses=() logs=() starts=() deadlines=() stopping=() sessions=()
+declare -a statuses=() logs=() starts=() deadlines=() stopping=() sessions=() roots=()
 next=0
 
 start_test() {
     local i="$1" t="${tests[$1]}" root
     root="$run_dir/$(printf '%03d' $((i + 1)))-$(basename "$t" .sh)"
     mkdir -p "$root" "$run_tmp/$((i + 1))"
+    roots[i]=$root
+    printf '%s\0%s\0' "$((i + 1))" "${root##*/}" >> "$run_dir/instances"
     logs[i]="$root/output.log"
     starts[i]=${EPOCHREALTIME/[.,]/}   # microseconds
     deadlines[i]=$((SECONDS + timeout_s))
@@ -298,6 +319,7 @@ finish_test() {
     statuses[i]=$status
     tenths=$(((${EPOCHREALTIME/[.,]/} - starts[i]) / 100000))
     echo "$((tenths / 10)).$((tenths % 10)) $status $t" >> "$run_dir/durations.txt"
+    echo "$status $tenths ${stopping[i]:-done}" > "${roots[i]}/result"
     echo "=== $(one_line "$t")"
     replay "$(basename "$t" .sh)" "${logs[i]}"
     case "$status" in
@@ -371,6 +393,18 @@ fi
 [ -z "$cancel" ] || echo "=== interrupted by SIG$cancel: $((${#tests[@]} - next)) test(s) not started"
 echo "=== ${#passed[@]} passed, ${#failed[@]} failed, ${#skipped[@]} skipped"
 echo "=== output in $run_dir"
+reports=ok
+if python3 -B scripts/run-tests.py report --run-dir "$run_dir" --jobs "$jobs" --shard "$shard" \
+    --accelerator "$accelerator" --elapsed "$((SECONDS - run_start))"; then
+    [ ! -d "$run_dir/failed" ] || echo "=== output of the failed tests in $run_dir/failed"
+    # Only the top-level runner writes the CI job summary (summary.md stays below 1 MiB).
+    if [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ -z "${RORTHOX_TEST_ROOT:-}" ]; then
+        cat "$run_dir/summary.md" >> "$GITHUB_STEP_SUMMARY" || reports=failed
+    fi
+else
+    reports=failed
+fi
+[ "$reports" = ok ] || echo "=== the reports could not be written"
 for t in "${failed[@]}"; do echo "FAILED: $(one_line "$t")"; done
 for t in "${skipped[@]}"; do echo "SKIPPED: $(one_line "$t")"; done
 
@@ -392,4 +426,4 @@ if [ ${#bad_names[@]} -gt 0 ]; then
         annotate 'File names CI cannot upload' "$run_tmp/bad-names" 1 overflow
     fi
 fi
-[ ${#failed[@]} -eq 0 ] && [ -z "$cancel" ] && [ ${#bad_names[@]} -eq 0 ]
+[ ${#failed[@]} -eq 0 ] && [ -z "$cancel" ] && [ ${#bad_names[@]} -eq 0 ] && [ "$reports" = ok ]

@@ -422,6 +422,15 @@ isn't in the file counts as the median. Shards are numbered from 1, every select
 be empty: it runs nothing and passes. A bad shard or timings file (`--timings` names another) exits with 2 before
 any test starts. Relative paths on the command line are from the top of the repository.
 
+When a run ends, the runner writes its reports into the run's directory: `results.json` (each test's name,
+number, result, exit status, run time and output directory), `junit.xml`, and `summary.md`, a table of the tests
+(failures first) with the totals, how many ran at once, the shard and the accelerator (`tcg`: QEMU without KVM).
+In CI, `summary.md` also goes into the job summary, only from the top-level runner (never from a runner inside a
+test) and below 1 MiB. `failed/` keeps a copy of what each failed test printed and of its logs: debugcon, the
+monitor log, the screen text and image, the debugger logs, but no disk images. A log over 1 MiB keeps its start
+and end, a test keeps at most 8 MiB and a run 64 MiB, and `index.txt` next to the copy says what was cut or left
+out. `--results DIR` puts the run's directory at DIR (new or empty) instead of `build/tests/runs/`.
+
 Every test runs in a session of its own. The runner keeps what it prints in `output.log` in the test's directory
 and shows it when the test ends, each line behind the test's name (`[heap] heap: all checks passed`), so the
 output of tests running at the same time doesn't mix and nothing a test prints is read as a CI command. When a test
