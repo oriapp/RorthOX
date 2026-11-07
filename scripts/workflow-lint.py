@@ -40,9 +40,32 @@ def lint(text):
         grants = re.findall(r'^    permissions:\n((?:      [^\n]+\n?)+)', body, re.M)
         require(len(grants) == 1 and grants[0].splitlines() == ['      contents: read'],
                 f'{name}: permissions must be exactly contents: read')
-    # Only block-style, unaliased YAML keys are supported by this line-oriented lint.
-    require(not re.search(r'^\s*(?:-\s*)?(?:["\']run["\']|run\s+):', text, re.M),
-            'unsupported run key form')
+    # Parse real YAML when available; the fail-closed syntax restrictions below also
+    # protect hosts without the optional YAML package.
+    try:
+        import yaml
+    except ImportError:
+        yaml = None
+    if yaml is not None:
+        try:
+            document = yaml.safe_load(text)
+        except yaml.YAMLError as error:
+            raise Invalid(f'invalid workflow YAML: {error}') from error
+        require(isinstance(document, dict) and isinstance(document.get('jobs'), dict),
+                'invalid workflow jobs')
+        for job in document['jobs'].values():
+            require(isinstance(job, dict) and isinstance(job.get('steps'), list),
+                    'invalid workflow steps')
+            for step in job['steps']:
+                require(isinstance(step, dict), 'invalid workflow step')
+                require('${{' not in str(step.get('run', '')), 'expression inside run')
+    # Only block-style, unaliased YAML keys are supported by the fallback lint.
+    require(not re.search(r'^\s*(?:-\s*)?["\'][^\r\n]*?["\']\s*:', text, re.M),
+            'quoted YAML mapping keys are not supported')
+    require(not re.search(r'^\s*(?:-\s*)?run\s+:', text, re.M),
+            'spaced run key is not supported')
+    require(not re.search(r'^\s*(?:-\s*)?[?!]', text, re.M),
+            'explicit keys and YAML tags are not supported')
     require(not re.search(r'^\s*-\s*\{', text, re.M), 'flow-mapping step')
     require(not re.search(r'(?:^\s*-\s*|:\s*)[&*][A-Za-z0-9_-]+\b', text, re.M),
             'YAML anchors and aliases are not supported')

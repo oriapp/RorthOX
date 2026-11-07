@@ -6,6 +6,7 @@ OUT=${RORTHOX_TEST_ROOT:-build/tests}/workflow
 mkdir -p "$OUT"
 python3 -B - "$PWD" "$OUT" <<'PY'
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -17,10 +18,18 @@ lint = root / 'scripts/workflow-lint.py'
 with tempfile.TemporaryDirectory() as temp:
     temp = pathlib.Path(temp)
     workflow = temp / 'build.yml'
+    no_yaml = temp / 'no-yaml'
+    no_yaml.mkdir()
+    (no_yaml / 'yaml.py').write_text('raise ImportError("simulated missing PyYAML")\n')
     def run(text, valid):
         workflow.write_text(text)
-        result = subprocess.run(['python3', '-B', str(lint), str(workflow)], cwd=root, capture_output=True)
-        assert (result.returncode == 0) == valid, result.stderr
+        for path in (None, no_yaml):
+            env = os.environ.copy()
+            if path is not None:
+                env['PYTHONPATH'] = str(path)
+            result = subprocess.run(['python3', '-B', str(lint), str(workflow)], cwd=root,
+                                    capture_output=True, env=env)
+            assert (result.returncode == 0) == valid, result.stderr
     run(text, True)
     # A dash-style run's sibling name/env expressions are not shell expressions.
     run(text.replace('      - name: Build and package',
@@ -43,7 +52,12 @@ with tempfile.TemporaryDirectory() as temp:
                         ('quoted-run', text.replace('        run: |', '        "run": echo "${{ github.event.inputs.arg }}"', 1)),
                         ('spaced-run', text.replace('        run: |', '        run : echo "${{ github.event.inputs.arg }}"', 1)),
                         ('flow-run', text.replace('      - name: Build and package', '      - {name: Build and package, run: "echo ${{ github.event.inputs.arg }}"}\n      - name: Build and package', 1)),
-                        ('alias-run', text.replace('      - name: Build and package', '      - name: Label\n        value: &cmd "echo ${{ github.event.inputs.arg }}"\n      - run: *cmd\n      - name: Build and package', 1))):
+                        ('alias-run', text.replace('      - name: Build and package', '      - name: Label\n        value: &cmd "echo ${{ github.event.inputs.arg }}"\n      - run: *cmd\n      - name: Build and package', 1)),
+                        ('quoted-space-run', text.replace('run: |\n          make all iso', '"run" : echo "${{ github.event.inputs.arg }}"', 1)),
+                        ('single-quoted-space-run', text.replace('run: |\n          make all iso', "'run'  : echo '${{ github.event.inputs.arg }}'", 1)),
+                        ('escaped-key-run', text.replace('run: |\n          make all iso', '"r\\x75n": echo "${{ github.event.inputs.arg }}"', 1)),
+                        ('explicit-key-run', text.replace('run: |\n          make all iso', '? run\n        : echo "${{ github.event.inputs.arg }}"', 1)),
+                        ('tagged-key-run', text.replace('run: |\n          make all iso', '!!str run: echo "${{ github.event.inputs.arg }}"', 1))):
         print('checking', tag, flush=True)
         run(broken, False)
         print('PASS rejected', tag)

@@ -96,17 +96,39 @@ fi
 sed "s|/opt/rorthox-build-image|$tmp/in-image-marker|" ci/run.sh > "$tmp/in-image.sh"
 touch "$tmp/in-image-marker"
 [ "$(RORTHOX_IN_IMAGE=1 bash "$tmp/in-image.sh" printf '%s' in-image)" = in-image ] || fail 'in-image execution failed'
-# /dev/null is a root-group character device: it must never add gid 0.
+# /dev/null is a root-group character device only when its gid is mapped to zero.
 kvm_script=$(mktemp "$root/ci/.kvm-fixture.XXXXXX.sh")
 sed 's|/dev/kvm|/dev/null|g' ci/run.sh > "$kvm_script"
-( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/kvm-argv" RORTHOX_IMAGE_REF="$digest" RORTHOX_ACCEL=auto
+if [ "$(stat -c %g /dev/null)" = 0 ]; then
+    ( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/kvm-argv" RORTHOX_IMAGE_REF="$digest" RORTHOX_ACCEL=auto
+      unset RORTHOX_TEST_ROOT RORTHOX_IN_IMAGE
+      bash "$kvm_script" true )
+    mapfile -d '' -t kvm_args < "$tmp/kvm-argv"
+    device=0
+    for i in "${!kvm_args[@]}"; do
+        [ "${kvm_args[i]}" != --group-add ] || fail 'root group forwarded'
+        if [ "${kvm_args[i]}" = --device ] && [ "${kvm_args[i+1]:-}" = /dev/null ]; then device=1; fi
+    done
+    [ "$device" = 1 ] || fail 'character device not forwarded'
+fi
+# A nonzero device gid must reach docker even when the host primary gid differs.
+cat > "$tmp/bin/stat" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = -c ] && [ "${2:-}" = %g ] && [ "${3:-}" = /dev/null ]; then
+    echo 4242
+else
+    exec /usr/bin/stat "$@"
+fi
+SH
+chmod +x "$tmp/bin/stat"
+( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/kvm-nonroot-argv" RORTHOX_IMAGE_REF="$digest" RORTHOX_ACCEL=auto
   unset RORTHOX_TEST_ROOT RORTHOX_IN_IMAGE
   bash "$kvm_script" true )
-mapfile -d '' -t kvm_args < "$tmp/kvm-argv"
-device=0
+mapfile -d '' -t kvm_args < "$tmp/kvm-nonroot-argv"
+device=0 group=0
 for i in "${!kvm_args[@]}"; do
-    [ "${kvm_args[i]}" != --group-add ] || fail 'root group forwarded'
     if [ "${kvm_args[i]}" = --device ] && [ "${kvm_args[i+1]:-}" = /dev/null ]; then device=1; fi
+    if [ "${kvm_args[i]}" = --group-add ] && [ "${kvm_args[i+1]:-}" = 4242 ]; then group=1; fi
 done
-[ "$device" = 1 ] || fail 'character device not forwarded'
+[ "$device" = 1 ] && [ "$group" = 1 ] || fail 'nonzero KVM group was not forwarded'
 echo 'PASS ci-image: key, context, reference, Dockerfile, isolated argv and exit status'
