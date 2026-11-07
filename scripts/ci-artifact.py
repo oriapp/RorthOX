@@ -102,18 +102,20 @@ def extract(archive, expected):
                 or manifest['revision'] != subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()):
             raise ValueError('archive file list or revision mismatch')
         for name, hexdigest in files.items():
-            if not allowed(name) or not re.fullmatch('[0-9a-f]{64}', hexdigest):
+            # Set equality above ties each key to a member already checked by allowed().
+            if not re.fullmatch('[0-9a-f]{64}', hexdigest):
                 raise ValueError(f'bad manifest entry: {name}')
         # Detect corruption before extraction (including an archive missing a file).
         for name in files:
             entry = tar.extractfile(name)
             if entry is None or digest(entry.read()) != files[name]:
                 raise ValueError(f'checksum mismatch: {name}')
-    # Refuse stale outputs; the checkout holds no built production files yet.
-    for name in files:
-        if (ROOT / name).exists() and name not in ('programs/stdlib/stdlib.elf',):
-            raise ValueError(f'production file already present: {name}')
-    subprocess.run(['tar', '--no-same-owner', '-xzf', archive], check=True)
+        # Refuse stale outputs; the checkout holds no built production files yet.
+        for name in files:
+            if (ROOT / name).exists() or (ROOT / name).is_symlink():
+                raise ValueError(f'production file already present: {name}')
+        # The checked tarfile members must be the members that write the files.
+        tar.extractall(path=ROOT, members=members, filter='data')
     for name, hexdigest in files.items():
         if digest((ROOT / name).read_bytes()) != hexdigest:
             raise ValueError(f'extracted file checksum mismatch: {name}')

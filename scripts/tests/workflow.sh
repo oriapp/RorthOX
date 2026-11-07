@@ -27,7 +27,9 @@ with tempfile.TemporaryDirectory() as temp:
                         ('other-run', text.replace('name: production\n          path:', 'name: production\n          run-id: 12\n          path:')),
                         ('trigger', text.replace('  pull_request:', '  pull_request_target:')),
                         ('skipped-aggregate', text.replace('    if: always()\n    runs-on:', '    if: success()\n    runs-on:')),
-                        ('permissions', text.replace('permissions: {}', 'permissions:\n  contents: write'))):
+                        ('permissions', text.replace('permissions: {}', 'permissions:\n  contents: write')),
+                        ('extra-grant', text.replace('      contents: read', '      contents: read\n      id-token: write', 1)),
+                        ('shell-expression', text.replace('          make all iso', '          echo "${{ github.event.inputs.arg }}"\n          make all iso'))):
         print('checking', tag, flush=True)
         run(broken, False)
         print('PASS rejected', tag)
@@ -43,10 +45,16 @@ with tempfile.TemporaryDirectory() as temp:
         assert (proc.returncode == 0) == success, proc.stdout + proc.stderr
     check('success', 'success', True)
     check('failure', 'skipped', False)
-    (results / 'results-3/results.json').write_text(json.dumps({'tests': [{'result': 'failed'}]}))
-    check('success', 'failure', False)
+    report = results / 'results-3/results.json'
+    report.write_text(json.dumps({'tests': [{'result': 'failed'}]}))
+    check('success', 'success', False)
     assert 'failed' in subprocess.run(['python3', '-B', str(aggregate), str(results),
-                                       'success', 'failure'], capture_output=True, text=True).stdout
+                                       'success', 'success'], capture_output=True, text=True).stdout
+    report.write_text('{not json')
+    check('success', 'success', False)
+    report.write_text(json.dumps({'tests': [{}]}))
+    check('success', 'success', False)
+    report.write_text(json.dumps({'tests': [{'result': 'passed'}]}))
     (results / 'results-2/results.json').unlink()
     check('success', 'success', False)
     print('PASS aggregate requires every job and report')

@@ -487,6 +487,9 @@ test that hangs past `--timeout`) are kept, no more than `-j` tests run at once,
 test started outlives it (also after TERM or INT to the runner), and no output line of a test can pass for a CI
 command (`::error`, also after a carriage return); `--shard` splits a selection exactly, by the timings, and a bad
 shard or timings file runs nothing.
+`ci-artifact` checks the build archive manifest, checksums and member safety before extraction, including unsafe tar
+headers and missing files. `workflow` checks action pins, job permissions and triggers, plus the final job's handling
+of failed, missing and malformed shard reports, without QEMU.
 `reports` checks the reports with small scripts: they agree with the run, `junit.xml` parses back, test names with
 Markdown, XML and control characters are escaped, the summary keeps to its size limit, `failed/` holds only the
 failed tests' output and logs within its limits, and a failing test fails only its own shard and shows up in that

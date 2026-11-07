@@ -331,13 +331,17 @@ def cmd_report(args):
         f.write("".join(out))
 
     budget = ALL_LIMIT
+    per_test = {}
     for output_only in (True, False):
         for t in bad:
             if t["output_dir"] is not None:
-                dst = os.path.join(run_dir, "failed", t["output_dir"])
+                name = t["output_dir"]
+                dst = os.path.join(run_dir, "failed", name)
                 os.makedirs(dst, exist_ok=True)
-                budget -= copy_evidence(os.path.join(run_dir, t["output_dir"]), dst,
-                                        budget, output_only)
+                copied = copy_evidence(os.path.join(run_dir, name), dst,
+                                       min(budget, TEST_LIMIT - per_test.get(name, 0)), output_only)
+                per_test[name] = per_test.get(name, 0) + copied
+                budget -= copied
     return 0
 
 

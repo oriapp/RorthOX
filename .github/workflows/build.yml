@@ -15,6 +15,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 120 # Cold toolchain build on an empty cache.
     permissions:
       contents: read
     outputs:
@@ -71,6 +72,7 @@ jobs:
   test:
     needs: build
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     permissions:
       contents: read
     strategy:
@@ -130,6 +132,7 @@ jobs:
     needs: [build, test]
     if: always()
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:

@@ -267,6 +267,31 @@ src.mkdir(); dst.mkdir()
 used = mod.copy_evidence(str(src), str(dst), 10000, True)
 assert used <= 10000 and (dst / 'output.log').stat().st_size <= 10000
 print('PASS bounded copy with a room below 64 KiB')
+# Under a tight run budget, output.log from every failure must precede extra logs.
+mod.ALL_LIMIT, mod.TEST_LIMIT = 10000, 12000
+run = root / 'output-first'
+run.mkdir()
+(run / 'plan').write_bytes(b'/tmp/one.sh\0/tmp/two.sh\0')
+(run / 'instances').write_bytes(bytes([0]).join((b'1', b'001-one', b'2', b'002-two', b'')))
+for d in ('001-one', '002-two'):
+    p = run / d
+    p.mkdir()
+    (p / 'result').write_text('1 1 done\n')
+    (p / 'output.log').write_bytes(b'o' * 4096)
+(run / '001-one' / 'trace.log').write_bytes(b't' * 9000)
+mod.cmd_report(['--run-dir', str(run), '--jobs', '1', '--shard', '',
+                '--accelerator', 'tcg', '--elapsed', '1'])
+assert (run / 'failed/002-two/output.log').stat().st_size == 4096
+print('PASS output.log first under a tight run budget')
+import shutil
+cap = root / 'cap-check'
+shutil.copytree(run, cap, ignore=shutil.ignore_patterns('failed', 'results.json', 'junit.xml', 'summary.md'))
+mod.ALL_LIMIT, mod.TEST_LIMIT = 40000, 8000
+mod.cmd_report(['--run-dir', str(cap), '--jobs', '1', '--shard', '',
+                '--accelerator', 'tcg', '--elapsed', '1'])
+first = cap / 'failed/001-one'
+assert sum(p.stat().st_size for p in first.rglob('*.log')) <= mod.TEST_LIMIT
+print('PASS per-test cap shared between passes')
 run = root / 'utf8'
 run.mkdir()
 (run / 'plan').write_bytes(b'/tmp/test.sh\0')
@@ -281,6 +306,9 @@ assert (run / 'results.json').is_file() and (run / 'junit.xml').is_file()
 print('PASS non-UTF-8 output directory preserved in reports')
 PY
 expect "small budget does not exceed limit" 'grep -q "PASS bounded copy" "$OUT/bounds.log"'
+expect "each failed output.log is kept before other logs, with one per-test cap" \
+    'grep -q "PASS output.log first under a tight run budget" "$OUT/bounds.log" &&
+     grep -q "PASS per-test cap shared between passes" "$OUT/bounds.log"'
 expect "invalid UTF-8 output directory does not lose reports" 'grep -q "PASS non-UTF-8" "$OUT/bounds.log"'
 
 if [ "$failures" -ne 0 ]; then
