@@ -13,7 +13,7 @@ work=
 kvm_script=
 trap 'rm -rf "$tmp"; [ -z "$work" ] || rm -rf "$work"; [ -z "$fallback" ] || rm -rf "$fallback"; [ -z "$kvm_script" ] || rm -f "$kvm_script"' EXIT
 fail() { echo "FAIL ci-image: $*" >&2; exit 1; }
-for file in ci/Dockerfile ci/image-key.sh ci/run.sh ci/image.ref; do
+for file in ci/Dockerfile ci/image-key.sh ci/run.sh ci/image.ref .devcontainer/devcontainer.json; do
     [ -f "$file" ] || fail "missing $file"
 done
 bash -n ci/image-key.sh ci/run.sh configure.sh
@@ -36,6 +36,7 @@ if bash ci/image-key.sh --context "$tmp/context" >/dev/null 2>&1; then fail 'non
 # The recorded placeholder has the same digest form as the published reference.
 ref=$(grep -v '^#' ci/image.ref | head -n1)
 [[ "$ref" =~ ^ghcr\.io/oriapp/rorthox-build@sha256:[0-9a-f]{64}$ ]] || fail 'invalid reference'
+[ "$(python3 -B -c 'import json; print(json.load(open(".devcontainer/devcontainer.json"))["image"])')" = "$ref" ] || fail 'devcontainer reference differs from image.ref'
 [ "$(grep -c '^FROM ' ci/Dockerfile)" -eq 2 ] || fail 'unexpected image stages'
 if grep '^FROM ' ci/Dockerfile | grep -Ev '^FROM ubuntu:24\.04@sha256:[0-9a-f]{64}( AS [a-z]+)?$' >/dev/null; then
     fail 'unfixed base'

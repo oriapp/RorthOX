@@ -1,2 +1,2 @@
-# Candidate image is not published yet. CI-F replaces this placeholder with a verified digest.
+# A person records the verified published digest in CI-G; CI does not modify this file.
 ghcr.io/oriapp/rorthox-build@sha256:0000000000000000000000000000000000000000000000000000000000000000

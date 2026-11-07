@@ -489,9 +489,9 @@ test started outlives it (also after TERM or INT to the runner), and no output l
 command (`::error`, also after a carriage return); `--shard` splits a selection exactly, by the timings, and a bad
 shard or timings file runs nothing.
 `ci-artifact` checks the build archive manifest, checksums and member safety before extraction, including unsafe tar
-headers and missing files. `ci-image` checks the minimal context, image digest and container launch.
-`workflow` checks action pins, job permissions and triggers, plus the final job's handling
-of failed, missing and malformed shard reports, without QEMU.
+headers and missing files. `ci-image` checks the minimal build context, digest and container launch boundary;
+`ci-image-job` checks archive integrity and publication order. `workflow` checks action pins, job permissions and
+triggers, plus the final job's handling of failed, missing and malformed shard reports, without QEMU.
 `reports` checks the reports with small scripts: they agree with the run, `junit.xml` parses back, test names with
 Markdown, XML and control characters are escaped, the summary keeps to its size limit, `failed/` holds only the
 failed tests' output and logs within its limits, and a failing test fails only its own shard and shows up in that
@@ -510,9 +510,13 @@ the GRUB case of `write-protect` fail when `bin/rorthox.iso` is missing or holds
 `bin/kernel.bin` (`make test` builds it first). `fsck.fat` (package `dosfstools`)
 is optional: without it `fat-write` and `file-syscalls` say they skip that one check and still run the rest.
 
-A candidate build-image recipe lives in `ci/Dockerfile`, with its content key in `ci/image-key.sh`. The digest in
-`ci/image.ref` is a placeholder until the image is built and validated in CI; the existing build commands above remain
-the supported local path. `ci/run.sh` is a candidate container entry point, not yet a replacement for them.
+The candidate build image is `ghcr.io/oriapp/rorthox-build`: its tag is the full content hash of `ci/Dockerfile`
+and `configure.sh`, while pulls use a registry digest. CI builds it once per missing public tag and only trusted branch
+pushes can publish it. Until the first published image is public, or for a pull request changing its inputs, CI
+transfers a checksummed image archive and runs it by its verified image ID. The candidate runs the full TCG suite
+separately; only the existing four shards are required. The digest in `ci/image.ref` stays a placeholder until a
+person records the published digest in a later commit; CI never edits or pushes that file. After that, a local
+`./ci/run.sh make test` runs in the image (build `make all iso` first); the existing local commands still work.
 
 CI (`.github/workflows/build.yml`) runs on Ubuntu 24.04 for pushes to `main` or `features` and for pull requests.
 The build job compiles the cross toolchain (cached), runs `make all iso` once and uploads a `production` archive with
@@ -520,6 +524,7 @@ its revision, tool versions and file checksums. Four independent test jobs downl
 manifest and run one shard each without rebuilding production files; their `results-1` through `results-4` artifacts
 keep JUnit, JSON, summaries and bounded failed-test logs. The final result job runs even if the build or a shard
 fails, and only passes if all required jobs and reports passed. Failed tests also appear as error annotations.
+The candidate image jobs are advisory, so a cold image build cannot delay the required jobs or make their result red.
 
 ## Project layout
 
