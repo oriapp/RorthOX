@@ -15,11 +15,19 @@ case "$work" in
     "$root"/*) subdir=${work#"$root"} ;;
     *) echo 'error: run from inside the checkout' >&2; exit 2 ;;
 esac
-ref=${RORTHOX_IMAGE_REF:-$(grep -v '^#' "$root/ci/image.ref" | head -n1)}
-if [[ ! "$ref" =~ ^ghcr\.io/oriapp/rorthox-build@sha256:[0-9a-f]{64}$ ]] ||
-   [[ "$ref" == *'@sha256:0000000000000000000000000000000000000000000000000000000000000000' ]]; then
-    echo 'error: no published image digest; set RORTHOX_IMAGE_REF to a verified digest' >&2
-    exit 2
+if [ -n "${RORTHOX_IMAGE_ID:-}" ]; then
+    ref=$RORTHOX_IMAGE_ID
+    if [[ ! "$ref" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        echo 'error: invalid loaded image ID' >&2
+        exit 2
+    fi
+else
+    ref=${RORTHOX_IMAGE_REF:-$(grep -v '^#' "$root/ci/image.ref" | head -n1)}
+    if [[ ! "$ref" =~ ^ghcr\.io/oriapp/rorthox-build@sha256:[0-9a-f]{64}$ ]] ||
+       [[ "$ref" == *'@sha256:0000000000000000000000000000000000000000000000000000000000000000' ]]; then
+        echo 'error: no published image digest; set RORTHOX_IMAGE_REF to a verified digest' >&2
+        exit 2
+    fi
 fi
 # This list is deliberately explicit: do not inherit credentials or Actions file-command paths.
 args=(--rm --init --user "$(id -u):$(id -g)" --network none
