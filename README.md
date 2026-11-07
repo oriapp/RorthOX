@@ -413,6 +413,15 @@ stops a test that takes longer than 300 seconds and counts it as failed (default
 QEMU_TIMEOUT still limits each boot inside a test). Exit status 0 means every test passed or was skipped, 1 that a
 test failed, crashed, timed out or the run was interrupted, 2 a bad command line.
 
+`./scripts/run-tests.sh --shard 2/4` runs the second of four shards: the selected tests are split into four parts
+of about the same run time, by the seconds per test in `scripts/test-timings.json` (from a serial run). The
+longest tests go first, each to the shard with the least work so far (the lower number on a tie); a test that
+isn't in the file counts as the median. Shards are numbered from 1, every selected test is in exactly one of them
+(a test named twice twice), and the split depends only on the selection and the file, so
+`--list --shard 2/4` prints exactly what shard 2 runs, in the order it starts them (longest first). A shard can
+be empty: it runs nothing and passes. A bad shard or timings file (`--timings` names another) exits with 2 before
+any test starts. Relative paths on the command line are from the top of the repository.
+
 Every test runs in a session of its own. The runner keeps what it prints in `output.log` in the test's directory
 and shows it when the test ends, each line behind the test's name (`[heap] heap: all checks passed`), so the
 output of tests running at the same time doesn't mix and nothing a test prints is read as a CI command. When a test
@@ -467,7 +476,8 @@ while the debugger is attached, and no change to the build.
 `runner` checks the runner itself with small scripts instead of QEMU: exit statuses (pass, skip, fail, a crash, a
 test that hangs past `--timeout`) are kept, no more than `-j` tests run at once, `-j 1` keeps the order, nothing a
 test started outlives it (also after TERM or INT to the runner), and no output line of a test can pass for a CI
-command (`::error`, also after a carriage return).
+command (`::error`, also after a carriage return); `--shard` splits a selection exactly, by the timings, and a bad
+shard or timings file runs nothing.
 `debugger-step` checks the tests' own gdbstub helper against a fake stub, without QEMU: QEMU can report a single
 step as finished without having run the instruction, so stepping off a breakpoint is retried a few times and then
 fails instead of hitting the same breakpoint twice.

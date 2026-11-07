@@ -3,17 +3,24 @@
 # Runs the smoke test and every test in scripts/tests/ (each boots RorthOX in QEMU), up to N at a
 # time, keeps going after a failure, and prints a summary.
 #
-# Usage:  ./scripts/run-tests.sh [-j N] [--timeout S] [--list] [test.sh ...]     (or: make test)
+# Usage:  ./scripts/run-tests.sh [-j N] [--timeout S] [--shard I/N] [--timings F] [--list] [test.sh ...]
+#                                                                             (or: make test)
 #   -j N         run up to N tests at once (default 1: one after the other, in the given order)
 #   --timeout S  stop a test that runs longer than S seconds; it fails (default 900, or
 #                $RORTHOX_TEST_TIMEOUT). QEMU_TIMEOUT still limits each QEMU run inside a test.
-#   --list       print the tests that would run, one per line, and run nothing
+#   --shard I/N  split the selected tests into N shards of about the same run time and run only
+#                shard I (1 to N), longest test first. Every selected test is in exactly one shard.
+#   --timings F  run times for --shard (default scripts/test-timings.json); a test that isn't
+#                there counts as the median. Checked on every run, also without --shard.
+#   --list       print the tests that would run (with --shard: that shard's), one per line, in the
+#                order they would start, and run nothing
 #   test.sh ...  only these tests (a test named twice runs twice); default: scripts/smoke.sh and
 #                every scripts/tests/*.sh
 #
 # Exit status: 0 when every test passed or was skipped (a test that exits with 77 is skipped),
 # 1 when a test failed, crashed or timed out or the run was interrupted (or, at the top level, a file
-# name in the run directory is one CI can't upload), 2 for a bad command line (no test runs then).
+# name in the run directory is one CI can't upload), 2 for a bad command line or bad timings file
+# (no test runs then). A shard with no tests runs nothing and exits 0.
 #
 # Every run gets its own directory build/tests/runs/run.XXXXXX (inside $RORTHOX_TEST_ROOT/runs when
 # the runner itself runs inside a test). Each test there gets its own numbered directory, passed to
@@ -36,7 +43,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 
 usage() {
-    echo "usage: $0 [-j N] [--timeout S] [--list] [test.sh ...]" >&2
+    echo "usage: $0 [-j N] [--timeout S] [--shard I/N] [--timings F] [--list] [test.sh ...]" >&2
     exit 2
 }
 if ((BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 1))); then
@@ -47,6 +54,8 @@ fi
 jobs=1
 timeout_s=${RORTHOX_TEST_TIMEOUT:-900}
 list=no
+shard=
+timings=scripts/test-timings.json
 tests=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -54,6 +63,10 @@ while [ $# -gt 0 ]; do
         -j*) jobs=${1#-j}; shift ;;
         --timeout) [ $# -ge 2 ] || usage; timeout_s=$2; shift 2 ;;
         --timeout=*) timeout_s=${1#--timeout=}; shift ;;
+        --shard) [ $# -ge 2 ] || usage; shard=$2; shift 2 ;;
+        --shard=*) shard=${1#--shard=}; shift ;;
+        --timings) [ $# -ge 2 ] || usage; timings=$2; shift 2 ;;
+        --timings=*) timings=${1#--timings=}; shift ;;
         --list) list=yes; shift ;;
         --) shift; tests+=("$@"); break ;;
         -*) echo "unknown option: $1" >&2; usage ;;
@@ -71,8 +84,18 @@ fi
 for t in "${tests[@]}"; do
     [ -f "$t" ] || { echo "no such test: $t" >&2; exit 2; }
 done
+# The helper checks the timings and picks the shard's tests.
+plan_args=(--timings "$timings")
+[ -z "$shard" ] || plan_args+=(--shard "$shard")
+plan="$(mktemp)" || exit 2
+if ! python3 -B scripts/run-tests.py plan "${plan_args[@]}" -- "${tests[@]}" > "$plan"; then
+    rm -f "$plan"
+    exit 2
+fi
+mapfile -d '' tests < "$plan"
+rm -f "$plan"
 if [ "$list" = yes ]; then
-    printf '%s\n' "${tests[@]}"
+    [ ${#tests[@]} -eq 0 ] || printf '%s\n' "${tests[@]}"
     exit 0
 fi
 

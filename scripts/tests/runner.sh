@@ -21,6 +21,11 @@
 #    running tests before it exits.
 # 6. A top-level run (no RORTHOX_TEST_ROOT) fails when a file name in its run directory has a
 #    character CI's artifact upload refuses (" : < > | * ? CR LF) and names it; a clean run passes.
+# 7. --shard I/N: the shards together hold every selected test exactly once (a test named twice
+#    twice), the longest first by the timings file, ties by path and then by shard number, tests
+#    it doesn't know as the median, the same whatever the order given; a shard runs just its
+#    tests, a shard with none runs nothing and passes; a bad shard or timings file exits 2 and
+#    runs nothing. The real timings file splits the whole suite into 4 shards.
 #
 # The runs of the runner under test go to a temporary directory (CI uploads build/tests); what
 # each one printed stays in $OUT/<case>.log.
@@ -320,6 +325,7 @@ echo "runner: 6. file names CI can't upload"
 # $tmp/top/build/tests/runs, not to this checkout's.
 mkdir -p "$tmp/top/scripts"
 cp "$runner" "$tmp/top/scripts/run-tests.sh"
+cp scripts/run-tests.py scripts/test-timings.json "$tmp/top/scripts/"
 printf 'echo pass\n' > "$fx/bad:name.sh"
 cat > "$fx/odd-output.sh" <<'EOF'
 touch "$RORTHOX_TEST_ROOT/a?b" "$RORTHOX_TEST_ROOT/c"$'\r'"d"
@@ -348,6 +354,80 @@ expect "bad names: exit 1, both named, one annotation" \
 GITHUB_ACTIONS=false top top-local "$fx/bad:name.sh"
 expect "bad names outside CI: exit 1, no annotation" \
     '[ "$status" -eq 1 ] && grep -q "^BAD NAME: .*001-bad:name$" "$OUT/top-local.log" && ! grep -q "^::" "$OUT/top-local.log"'
+
+echo "runner: 7. shards"
+rm -rf "$RUNNER_STATE"
+mkdir -p "$RUNNER_STATE"
+for n in A B C D M N; do
+    printf 'echo "%s" >> "$RUNNER_STATE/seq"\n' "$n" > "$fx/$n.sh"
+done
+printf '{"tests": {"%s": 10, "%s": 6, "%s": 4, "%s": 4.0, "%s/gone.sh": 2}}\n' \
+    "$fx/A.sh" "$fx/B.sh" "$fx/C.sh" "$fx/D.sh" "$fx" > "$fx/timings.json"
+# shards <case> <shard count> <tests>...: every shard's --list into $OUT/<case>.<i>.
+shards() {
+    local name="$1" n="$2" i
+    shift 2
+    for ((i = 1; i <= n; i++)); do
+        run list --list --timings "$fx/timings.json" --shard "$i/$n" "$@"
+        [ "$status" -eq 0 ] || fail "$name: --shard $i/$n exit $status"
+        cp "$OUT/list.log" "$OUT/$name.$i"
+    done
+}
+# A=10, B=6, C=4, D=4, then M and N (unknown: the median, 4): A to 1, B to 2, C to 2 (C before D
+# by path), D to 1 (10 = 10: the lower number), M to 2 (14 > 10; M before N by path), N to 1 (14 =
+# 14). With a weight below 4 for M, N would go to 2 as well.
+shards order 2 "$fx/A.sh" "$fx/B.sh" "$fx/C.sh" "$fx/D.sh" "$fx/N.sh" "$fx/M.sh"
+expect "2 shards: longest first, ties by path and shard number, a new test as the median" \
+    '[ "$(cat "$OUT/order.1")" = "$fx/A.sh$nl$fx/D.sh$nl$fx/N.sh" ] &&
+     [ "$(cat "$OUT/order.2")" = "$fx/B.sh$nl$fx/C.sh$nl$fx/M.sh" ]'
+shards again 2 "$fx/M.sh" "$fx/N.sh" "$fx/D.sh" "$fx/C.sh" "$fx/B.sh" "$fx/A.sh"
+expect "the same shards whatever the order given" \
+    'cmp -s "$OUT/order.1" "$OUT/again.1" && cmp -s "$OUT/order.2" "$OUT/again.2"'
+sel=("$fx/A.sh" "$fx/N.sh" "$fx/pass.sh" "$fx/B.sh" "$fx/A.sh" "$fx/C.sh" "$fx/skip.sh" "$fx/D.sh" "$fx/A.sh")
+shards dup 4 "${sel[@]}"
+expect "4 shards hold the selection exactly, a test named three times three times" \
+    '[ "$(cat "$OUT"/dup.[1-4] | sort)" = "$(printf "%s\n" "${sel[@]}" | sort)" ]'
+expect "... none of them empty, A in three of them" \
+    '[ -s "$OUT/dup.1" ] && [ -s "$OUT/dup.4" ] && [ "$(grep -lFx "$fx/A.sh" "$OUT"/dup.[1-4] | wc -l)" -eq 3 ]'
+run shard2 --timings "$fx/timings.json" --shard 2/2 "$fx/A.sh" "$fx/B.sh" "$fx/C.sh" "$fx/D.sh" "$fx/N.sh" "$fx/M.sh"
+expect "--shard 2/2 runs B, C and M, in that order" \
+    '[ "$status" -eq 0 ] && [ "$(cat "$RUNNER_STATE/seq")" = "B${nl}C${nl}M" ] &&
+     grep -Fxq "=== 3 passed, 0 failed, 0 skipped" "$OUT/shard2.log"'
+rm -f "$RUNNER_STATE/seq"
+run empty --timings "$fx/timings.json" --shard 3/3 "$fx/A.sh" "$fx/B.sh"
+expect "a shard with no tests runs nothing and passes" \
+    '[ "$status" -eq 0 ] && grep -Fxq "=== 0 passed, 0 failed, 0 skipped" "$OUT/empty.log" && [ ! -e "$RUNNER_STATE/seq" ]'
+printf '{"tests": {"a": 1}}' > "$fx/t-ok.json"
+printf '{"tests": {"a": 1' > "$fx/t-cut.json"
+printf '{"tests": {"a": 0}}' > "$fx/t-zero.json"
+printf '{"tests": {"a": -3}}' > "$fx/t-neg.json"
+printf '{"tests": {"a": NaN}}' > "$fx/t-nan.json"
+printf '{"tests": {"a": 1e999}}' > "$fx/t-inf.json"
+printf '{"tests": {"a": "4"}}' > "$fx/t-text.json"
+printf '{"tests": {"a": true}}' > "$fx/t-bool.json"
+printf '{"tests": {"a": 1, "a": 2}}' > "$fx/t-twice.json"
+printf '{"a": 1}' > "$fx/t-flat.json"
+for args in "--shard 0/2" "--shard 3/2" "--shard 2" "--shard 1/0" "--shard x/2" "--shard /2" "--shard 1/2/3" \
+    "--shard 1/2 --timings $fx/missing.json" "--timings $fx/t-cut.json" "--shard 1/2 --timings $fx/t-zero.json" \
+    "--shard 1/2 --timings $fx/t-neg.json" "--shard 1/2 --timings $fx/t-nan.json" "--shard 1/2 --timings $fx/t-inf.json" \
+    "--shard 1/2 --timings $fx/t-text.json" "--shard 1/2 --timings $fx/t-bool.json" \
+    "--shard 1/2 --timings $fx/t-twice.json" "--shard 1/2 --timings $fx/t-flat.json" "--shard"; do
+    # shellcheck disable=SC2086
+    run bad $args "$fx/pass.sh"
+    expect "exit 2, nothing run: $args" '[ "$status" -eq 2 ] && ! grep -q "^===" "$OUT/bad.log" && [ ! -e "$RUNNER_STATE"/ran.* ]'
+done
+run good --shard 1/1 --timings "$fx/t-ok.json" "$fx/pass.sh"
+expect "... and a good one runs" '[ "$status" -eq 0 ] && grep -Fxq "=== 1 passed, 0 failed, 0 skipped" "$OUT/good.log"'
+run list --list
+cp "$OUT/list.log" "$OUT/all"
+for i in 1 2 3 4; do
+    run list --list --shard "$i/4"
+    [ "$status" -eq 0 ] || fail "suite --shard $i/4 exit $status"
+    cp "$OUT/list.log" "$OUT/suite.$i"
+done
+expect "the suite's 4 shards hold every test once" \
+    '[ -s "$OUT/all" ] && [ "$(sort "$OUT"/suite.[1-4])" = "$(sort "$OUT/all")" ] &&
+     [ -s "$OUT/suite.1" ] && [ -s "$OUT/suite.2" ] && [ -s "$OUT/suite.3" ] && [ -s "$OUT/suite.4" ]'
 
 if [ "$failures" -ne 0 ]; then
     echo "runner: $failures check(s) failed" >&2
