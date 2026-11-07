@@ -402,10 +402,21 @@ qemu-system-i386 -m 128 -drive file=bin/os.bin,format=raw,index=0,media=disk \
 make test
 ```
 
-This builds everything (and the GRUB ISO, when its packages are installed) and runs 68 tests (`scripts/smoke.sh` plus
-every `scripts/tests/*.sh`); it keeps going after a failure and prints a summary (`68 passed, 0 failed, 0 skipped`)
-and where the output went. A full run takes about 14 minutes. `make smoke` runs only the smoke test, and
-`./scripts/run-tests.sh scripts/tests/panic.sh` runs single tests (a test named twice runs twice).
+This builds everything (and the GRUB ISO, when its packages are installed) and runs 69 tests (`scripts/smoke.sh` plus
+every `scripts/tests/*.sh`), as many at once as there are CPUs (about 2 minutes with 16); it keeps going after a
+failure and prints a summary (`69 passed, 0 failed, 0 skipped`) and where the output went. `make test TEST_JOBS=1`
+runs them one after the other, as before (about 14 minutes); `TEST_JOBS=4` runs four at once. `make smoke` runs
+only the smoke test, and `./scripts/run-tests.sh scripts/tests/panic.sh` runs single tests (a test named twice runs
+twice). `./scripts/run-tests.sh -j 4` runs four at a time, `--list` prints the tests it would run, and `--timeout 300`
+stops a test that takes longer than 300 seconds and counts it as failed (default 900, or `RORTHOX_TEST_TIMEOUT`;
+QEMU_TIMEOUT still limits each boot inside a test). Exit status 0 means every test passed or was skipped, 1 that a
+test failed, crashed, timed out or the run was interrupted, 2 a bad command line.
+
+Every test runs in a session of its own. The runner keeps what it prints in `output.log` in the test's directory
+and shows it when the test ends, each line behind the test's name (`[heap] heap: all checks passed`), so the
+output of tests running at the same time doesn't mix and nothing a test prints is read as a CI command. When a test
+ends, runs out of time or the runner gets TERM or INT, whatever is left of it (QEMU, a debugger) is stopped; a test
+that leaves something running fails.
 
 The tests boot RorthOX headless in QEMU and drive it through the QEMU monitor: they type with `sendkey`, read the
 screen straight from video memory and wait for text instead of sleeping. `wait_screen_lines` in `scripts/qemu-lib.sh`
@@ -450,6 +461,10 @@ while the debugger is attached, and no change to the build.
 | Console, keyboard, user library | `tty-scroll`, `tty-backspace`, `printc`, `formatting`, `keyboard-burst`, `keyboard-queue`, `keyboard-scancode`, `keyboard-symbols`, `keyboard-extended`, `readline`, `readline-edit`, `strtok` | scrolling and backspace; colours, and the key and cursor syscalls pass their values whole; bounded formatting; no lost keys; a full key queue keeps unread keys and every key value comes back unchanged; the decoder for every key with Shift, Caps and Num Lock, plus the E0/E1 sequences (fake shifts, Print Screen, Pause); the special keys and Num Lock as QEMU sends them; cursor moves stay on the page and change no text; line editing in the middle of a line, across a row edge and while the screen scrolls; `strtok` |
 
 `ci-annotations` checks that CI names failing tests in error annotations, including escaped failure output, without QEMU.
+`runner` checks the runner itself with small scripts instead of QEMU: exit statuses (pass, skip, fail, a crash, a
+test that hangs past `--timeout`) are kept, no more than `-j` tests run at once, `-j 1` keeps the order, nothing a
+test started outlives it (also after TERM or INT to the runner), and no output line of a test can pass for a CI
+command (`::error`, also after a carriage return).
 `debugger-step` checks the tests' own gdbstub helper against a fake stub, without QEMU: QEMU can report a single
 step as finished without having run the instruction, so stepping off a breakpoint is retried a few times and then
 fails instead of hitting the same breakpoint twice.
