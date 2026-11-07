@@ -231,15 +231,13 @@ for k in 1 2; do
         echo "run $k kept=$((counts[k - 1] - counts[k]))" >> "$OUT/counts.txt"
     fi
 done
-# Each run was seen gone at a rendezvous (the shell alone in the task list), and the screen saved
-# there (nothing is printing or scrolling) has the exit row below that run's last row.
-ended=$(cat "$OUT"/state-one.txt "$OUT"/state-two.txt "$OUT"/state-after.txt 2> /dev/null |
-    grep -cxE 'PASS (one|two|after)_task_count' || true)
-echo "ended=${ended:-0}" >> "$OUT/counts.txt"
+# Each run was seen gone at a rendezvous (stop_checks below: the shell alone in the task list), and the
+# screen saved there (nothing is printing or scrolling) has the exit row below that run's last row.
 for s in boot one two after; do [ -f "$OUT/screen-$s.txt" ] || : > "$OUT/screen-$s.txt"; done
-# exit_below <screen> <ERE>: 1 if a "Process was terminated" row is below the last row matching <ERE>.
+# exit_below <screen> <ERE>: 1 if a "Process was terminated" row (the shell's prompt may be in front)
+# is below the last row matching <ERE>.
 exit_below() {
-    awk -v re="^($2)\$" '$0 ~ re { r = NR; f = 0 } r && $0 == "Process was terminated" { f = 1 } END { print f + 0 }' "$1"
+    awk -v re="^($2)\$" '$0 ~ re { r = NR; f = 0 } r && $0 ~ /^(> )?Process was terminated$/ { f = 1 } END { print f + 0 }' "$1"
 }
 terminated=$(($(exit_below "$OUT/screen-one.txt" '(> )?elftest one: (PASS|FAILED).*') +
     $(exit_below "$OUT/screen-two.txt" '(> )?elftest two: (PASS|FAILED).*') + $(exit_below "$OUT/screen-after.txt" '(> )?after')))
@@ -270,7 +268,6 @@ stop_checks boot  "boot"
 stop_checks one   "first run ended"
 stop_checks two   "second run ended"
 stop_checks after "blank.elf ended"
-check "all three processes ended (each seen gone)"   "$OUT/counts.txt"   "ended=3" line
 check "an exit row below each run's last row"         "$OUT/counts.txt"   "terminated=3" line
 
 hash_after=$(image_hash)

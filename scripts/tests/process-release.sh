@@ -104,14 +104,13 @@ for k in 1 2; do
         echo "launch $k kept=$((counts[k - 1] - counts[k]))" >> "$OUT/counts.txt"
     fi
 done
-# Each launch was seen gone at a rendezvous (the shell alone in the task list), and the screen
-# saved there (nothing is printing or scrolling) has the exit row below that launch's argument row.
-ended=$(cat "$OUT"/state-tag1.txt "$OUT"/state-tag2.txt 2> /dev/null | grep -cxE 'PASS tag[12]_task_count' || true)
-echo "ended=${ended:-0}" >> "$OUT/counts.txt"
+# Each launch was seen gone at a rendezvous (stop_checks below: the shell alone in the task list), and
+# the screen saved there (nothing is printing or scrolling) has the exit row below its argument row.
 for s in boot tag1 tag2; do [ -f "$OUT/screen-$s.txt" ] || : > "$OUT/screen-$s.txt"; done
-# exit_below <screen> <ERE>: 1 if a "Process was terminated" row is below the last row matching <ERE>.
+# exit_below <screen> <ERE>: 1 if a "Process was terminated" row (the shell's prompt may be in front)
+# is below the last row matching <ERE>.
 exit_below() {
-    awk -v re="^($2)\$" '$0 ~ re { r = NR; f = 0 } r && $0 == "Process was terminated" { f = 1 } END { print f + 0 }' "$1"
+    awk -v re="^($2)\$" '$0 ~ re { r = NR; f = 0 } r && $0 ~ /^(> )?Process was terminated$/ { f = 1 } END { print f + 0 }' "$1"
 }
 echo "terminated=$(($(exit_below "$OUT/screen-tag1.txt" '(> )?tag1') + $(exit_below "$OUT/screen-tag2.txt" '(> )?tag2')))" >> "$OUT/counts.txt"
 
@@ -131,7 +130,6 @@ stop_checks() {
 stop_checks boot "boot"
 stop_checks tag1 "launch 1 ended"
 stop_checks tag2 "launch 2 ended"
-check "both launches ended (each seen gone)"        "$OUT/counts.txt"   "ended=2" line
 check "an exit row below each launch's argument"    "$OUT/counts.txt"   "terminated=2" line
 check "launch 1 kept $KEPT_PER_LAUNCH blocks"       "$OUT/counts.txt"   "launch 1 kept=$KEPT_PER_LAUNCH" line
 check "launch 2 kept $KEPT_PER_LAUNCH blocks"       "$OUT/counts.txt"   "launch 2 kept=$KEPT_PER_LAUNCH" line
