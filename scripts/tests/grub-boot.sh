@@ -2,6 +2,7 @@
 # Boot the real BIOS GRUB ISO, then prove that its Multiboot entry (not the disk
 # boot sector) installs the bootstrap state. Programs still come from ATA FAT16.
 # Missing optional ISO tools: exit 77 locally, or fail with RORTHOX_REQUIRE_ISO=1.
+# The ISO must already be built (make test builds it first, or make iso); the test never builds it.
 # Env: BOOT_TIMEOUT=60 (seconds from power-on to the Multiboot entry under the debugger)
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -10,25 +11,10 @@ BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 OUT=${RORTHOX_TEST_ROOT:-build/tests}/grub-boot
 rm -rf "$OUT"
 mkdir -p "$OUT"
-if bash scripts/check-iso-tools.sh > "$OUT/tools.log" 2>&1; then
-    :
-else
-    status=$?
-    cat "$OUT/tools.log"
-    if [ "$status" -eq 77 ] && [ "${RORTHOX_REQUIRE_ISO:-0}" != 1 ]; then
-        echo "SKIP grub-boot: optional BIOS ISO tools unavailable (see package line above)"
-        exit 77
-    fi
-    echo "FAIL grub-boot: ISO prerequisites unavailable or preflight failed" >&2
-    exit 1
-fi
-# Once preflight succeeds, every build error is a failure, never a skip.
-if ! make iso > "$OUT/build.log" 2>&1; then
-    cat "$OUT/build.log"
-    echo "FAIL grub-boot: make iso failed" >&2
-    exit 1
-fi
 . ./scripts/qemu-lib.sh
+. ./scripts/tests/lib/iso-check.sh
+if iso_check "$OUT" grub-boot; then status=0; else status=$?; fi
+[ "$status" -eq 0 ] || exit "$status"
 sha256sum bin/os.bin bin/rorthox.iso > "$OUT/images.sha256"
 GDB_DIR=$(mktemp -d)
 cleanup() {

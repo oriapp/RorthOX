@@ -432,8 +432,10 @@ user_programs_clean:
 smoke: all
 	./scripts/smoke.sh
 
-# The smoke test plus every test in scripts/tests/ (each boots the OS in QEMU).
+# The smoke test plus every test in scripts/tests/ (each boots the OS in QEMU). The GRUB ISO is built
+# first when its tools are installed: the tests only read bin/ and build/, they never build anything.
 test: all
+	@if ./scripts/check-iso-tools.sh > /dev/null 2>&1; then $(MAKE) --no-print-directory iso; fi
 	./scripts/run-tests.sh
 
 clean: user_programs_clean

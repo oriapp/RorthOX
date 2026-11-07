@@ -15,6 +15,7 @@
 # goes through: a breakpoint after it reports that at once.
 #
 # The grub case needs the ISO tools: without them it is skipped, or fails with RORTHOX_REQUIRE_ISO=1.
+# It boots the ISO that make test (or make iso) built; the test never builds it.
 # Needs python3. Env: BOOT_TIMEOUT=60  STEP_TIMEOUT=20  WRITE_PROTECT_CASES="disk grub"
 
 set -euo pipefail
@@ -23,6 +24,7 @@ BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 STEP_TIMEOUT="${STEP_TIMEOUT:-20}"
 CASES="${WRITE_PROTECT_CASES:-disk grub}"
 . ./scripts/qemu-lib.sh
+. ./scripts/tests/lib/iso-check.sh
 
 OUT=${RORTHOX_TEST_ROOT:-build/tests}/write-protect
 SHELL_ELF=programs/shell/build/shell.elf
@@ -135,19 +137,12 @@ for c in $CASES; do
             run_case disk "$OUT/disk.bin"
             ;;
         grub)
-            if bash scripts/check-iso-tools.sh > "$OUT/tools.log" 2>&1; then
-                if ! make iso > "$OUT/iso-build.log" 2>&1; then
-                    cat "$OUT/iso-build.log"
-                    fail "make iso failed"
-                fi
+            if iso_check "$OUT" "write-protect grub"; then
+                :
             else
                 status=$?
-                cat "$OUT/tools.log"
-                if [ "$status" -eq 77 ] && [ "${RORTHOX_REQUIRE_ISO:-0}" != 1 ]; then
-                    echo "SKIP write-protect grub: optional BIOS ISO tools unavailable"
-                    continue
-                fi
-                fail "ISO prerequisites unavailable or preflight failed"
+                [ "$status" -eq 77 ] && continue
+                fail "no up-to-date GRUB ISO (see above)"
             fi
             # "jmp $" in place of the boot sector's first bytes: only GRUB can start the kernel.
             python3 -B - "$OUT/trap.img" << 'PY' || fail "could not write the trap disk image"

@@ -402,9 +402,10 @@ qemu-system-i386 -m 128 -drive file=bin/os.bin,format=raw,index=0,media=disk \
 make test
 ```
 
-This builds everything and runs 67 tests (`scripts/smoke.sh` plus every `scripts/tests/*.sh`); it keeps going after a
-failure and prints a summary (`67 passed, 0 failed, 0 skipped`). A full run takes about 14 minutes. `make smoke`
-runs only the smoke test, and `./scripts/run-tests.sh scripts/tests/panic.sh` runs single tests.
+This builds everything (and the GRUB ISO, when its packages are installed) and runs 68 tests (`scripts/smoke.sh` plus
+every `scripts/tests/*.sh`); it keeps going after a failure and prints a summary (`68 passed, 0 failed, 0 skipped`)
+and where the output went. A full run takes about 14 minutes. `make smoke` runs only the smoke test, and
+`./scripts/run-tests.sh scripts/tests/panic.sh` runs single tests (a test named twice runs twice).
 
 The tests boot RorthOX headless in QEMU and drive it through the QEMU monitor: they type with `sendkey`, read the
 screen straight from video memory and wait for text instead of sleeping. `wait_screen_lines` in `scripts/qemu-lib.sh`
@@ -422,8 +423,19 @@ the CPU through the gdbstub to check registers and memory (the out-of-memory tes
 kernel's heap table that way: no
 test program reads kernel memory itself), and some compile the real kernel source with the host C compiler (with AddressSanitizer
 where it matters) to check one function against every input. Tests that need extra programs (`programs/*test*`,
-`programs/syscheck` and so on) add them to a copy of `bin/os.bin`, never to the real image. Output goes to
-`build/smoke/` and `build/tests/<name>/`.
+`programs/syscheck` and so on) add them to a copy of `bin/os.bin`, never to the real image.
+
+Tests can run side by side. Every test boots its own copy of the disk (QEMU locks a disk image it writes) and only
+reads `bin/`, `build/` and `programs/*/build/` (fixtures it compiles go to its own output directory); no test builds
+the ISO. The runner gives every test it starts its own output directory and temporary directory: a run's output goes
+to `build/tests/runs/run.XXXXXX/`, one numbered directory per test (`003-heap/heap/`), with each test's run time in
+`durations.txt`; a new run removes the finished runs before it. A test reads its output directory from
+`RORTHOX_TEST_ROOT` and its temporary directory (gdb and QMP sockets, the monitor pipe) from `TMPDIR`. Run
+directly, as `bash scripts/tests/heap.sh` after `make all` (and `make iso` for `grub-boot` and `write-protect`), a
+test writes to `build/tests/<name>/` (the smoke test to `build/smoke/`) and uses `$TMPDIR` or `/tmp`, so two direct
+runs of the same test share a directory. A test stops its own QEMU, debugger and temporary files when it ends, also
+on TERM. `test-isolation` checks all of that: two runners at once with the same tests, a TERM during start-up and
+while the debugger is attached, and no change to the build.
 
 | Area | Tests | What they prove |
 |---|---|---|
@@ -447,7 +459,9 @@ accept too early, the new ones wait for the step's own rows on one screen and gi
 test that ends normally, by an error or by TERM right after starting QEMU leaves no QEMU and runs its own cleanup.
 
 `grub-boot` needs the GRUB packages. Without them it is reported as skipped (`1 skipped` and a `SKIPPED:` line)
-instead of failing; `RORTHOX_REQUIRE_ISO=1 make test` turns that into a failure. `fsck.fat` (package `dosfstools`)
+instead of failing; `RORTHOX_REQUIRE_ISO=1 make test` turns that into a failure. With the packages, `grub-boot` and
+the GRUB case of `write-protect` fail when `bin/rorthox.iso` is missing or holds another `kernel.bin` than
+`bin/kernel.bin` (`make test` builds it first). `fsck.fat` (package `dosfstools`)
 is optional: without it `fat-write` and `file-syscalls` say they skip that one check and still run the rest.
 
 CI (`.github/workflows/build.yml`) installs the packages including GRUB and `dosfstools`, builds the toolchain
