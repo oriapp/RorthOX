@@ -128,6 +128,172 @@ jobs:
             build/tests/runs/shard-${{ matrix.shard }}/failed/
           if-no-files-found: warn
 
+  # The read-only producer runs on forks as well as trusted branches. The required path does not wait for it.
+  image-prep:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120 # Cold build: two source-built cross compilers.
+    permissions:
+      contents: read
+    outputs:
+      key: ${{ steps.prepare.outputs.key }}
+      mode: ${{ steps.prepare.outputs.mode }}
+      ref: ${{ steps.prepare.outputs.ref }}
+      id: ${{ steps.prepare.outputs.id }}
+      checksum: ${{ steps.prepare.outputs.checksum }}
+    steps:
+      # actions/checkout v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Fetch or build and validate candidate
+        id: prepare
+        run: bash ci/image-job.sh prepare 2>&1 | tee "$RUNNER_TEMP/image-prep.log"
+      # actions/upload-artifact v6
+      - name: Upload preparation failure
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: image-prep-failure
+          path: ${{ runner.temp }}/image-prep.log
+          if-no-files-found: warn
+      # actions/upload-artifact v6
+      - name: Transfer candidate image
+        if: steps.prepare.outputs.mode == 'archive'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: candidate-image
+          path: ${{ runner.temp }}/candidate-image.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+
+  # Only this job may write packages, and only on first-party branch pushes.
+  image:
+    needs: image-prep
+    if: github.event_name == 'push' && github.repository == 'oriapp/RorthOX' && (github.ref == 'refs/heads/features' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    concurrency:
+      group: image-${{ needs.image-prep.outputs.key }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      ref: ${{ steps.publish.outputs.ref || steps.existing.outputs.ref }}
+    steps:
+      # actions/checkout v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      # actions/download-artifact v6
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        if: needs.image-prep.outputs.mode == 'archive'
+        with:
+          name: candidate-image
+          path: ${{ runner.temp }}
+      - name: Check archive before publication
+        id: receive
+        if: needs.image-prep.outputs.mode == 'archive'
+        env:
+          IMAGE_SHA256: ${{ needs.image-prep.outputs.checksum }}
+          IMAGE_ID: ${{ needs.image-prep.outputs.id }}
+        run: bash ci/image-job.sh receive
+      - name: Publish only after validation
+        id: publish
+        if: needs.image-prep.outputs.mode == 'archive'
+        env:
+          IMAGE_ID: ${{ steps.receive.outputs.id }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash ci/image-job.sh publish
+      - name: Log out of registry
+        if: always()
+        run: docker logout ghcr.io
+      - name: Record existing public digest
+        id: existing
+        if: needs.image-prep.outputs.mode == 'digest'
+        env:
+          IMAGE_REF: ${{ needs.image-prep.outputs.ref }}
+        run: |
+          echo "ref=$IMAGE_REF" >> "$GITHUB_OUTPUT"
+          echo "Already public: $IMAGE_REF" >> "$GITHUB_STEP_SUMMARY"
+
+  # Advisory only; no dependency from result to this job.
+  candidate:
+    needs: image-prep
+    if: always()
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      # actions/download-artifact v6
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        if: needs.image-prep.outputs.mode == 'archive'
+        with:
+          name: candidate-image
+          path: ${{ runner.temp }}
+      - name: Verify image identity
+        id: image-id
+        env:
+          IMAGE_REF: ${{ needs.image-prep.outputs.ref }}
+          IMAGE_SHA256: ${{ needs.image-prep.outputs.checksum }}
+          IMAGE_ID: ${{ needs.image-prep.outputs.id }}
+          IMAGE_MODE: ${{ needs.image-prep.outputs.mode }}
+        run: |
+          if [ "$IMAGE_MODE" = archive ]; then
+            bash ci/image-job.sh receive
+          elif [ "$IMAGE_MODE" = digest ]; then
+            bash ci/image-job.sh fetch
+          else
+            exit 1
+          fi
+      - name: Build and test inside candidate image (TCG)
+        id: suite
+        env:
+          RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}
+          RORTHOX_REQUIRE_ISO: '1'
+          RORTHOX_ACCEL: tcg
+        run: |
+          ./ci/run.sh make all iso
+          ./ci/run.sh ./scripts/run-tests.sh -j 2 --results build/tests/runs/candidate
+      - name: Record certification evidence
+        if: always()
+        env:
+          IMAGE_ID: ${{ steps.image-id.outputs.id }}
+          IMAGE_REF: ${{ needs.image-prep.outputs.ref }}
+          IMAGE_MODE: ${{ needs.image-prep.outputs.mode }}
+          SUITE_OUTCOME: ${{ steps.suite.outcome }}
+        run: |
+          {
+            echo '## Candidate image (advisory; required build and four shards remain authoritative)'
+            echo "Suite: $SUITE_OUTCOME; source: $IMAGE_MODE; reference: ${IMAGE_REF:-not yet published}"
+            if [ -n "$IMAGE_ID" ]; then
+              echo "Image ID: $IMAGE_ID"
+              echo "Size: $(docker image inspect --format '{{.Size}}' "$IMAGE_ID") bytes"
+              for tool in 'i686-elf-gcc --version' 'x86_64-elf-gcc --version' 'nasm -v' 'qemu-system-i386 --version' 'grub-mkrescue --version' 'xorriso -version' 'python3 --version'; do
+                printf '%s: ' "$tool"
+                docker run --rm --network none "$IMAGE_ID" sh -c "$tool" | sed -n '1p'
+              done
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      # actions/upload-artifact v6
+      - name: Upload candidate diagnostics
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: candidate-results
+          path: |
+            build/tests/runs/candidate/results.json
+            build/tests/runs/candidate/junit.xml
+            build/tests/runs/candidate/summary.md
+            build/tests/runs/candidate/failed/
+          if-no-files-found: ignore
+
   result:
     needs: [build, test]
     if: always()

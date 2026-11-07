@@ -57,7 +57,13 @@ with tempfile.TemporaryDirectory() as temp:
                         ('single-quoted-space-run', text.replace('run: |\n          make all iso', "'run'  : echo '${{ github.event.inputs.arg }}'", 1)),
                         ('escaped-key-run', text.replace('run: |\n          make all iso', '"r\\x75n": echo "${{ github.event.inputs.arg }}"', 1)),
                         ('explicit-key-run', text.replace('run: |\n          make all iso', '? run\n        : echo "${{ github.event.inputs.arg }}"', 1)),
-                        ('tagged-key-run', text.replace('run: |\n          make all iso', '!!str run: echo "${{ github.event.inputs.arg }}"', 1))):
+                        ('tagged-key-run', text.replace('run: |\n          make all iso', '!!str run: echo "${{ github.event.inputs.arg }}"', 1)),
+                        ('publication-gate', text.replace("github.repository == 'oriapp/RorthOX' && ", '', 1)),
+                        ('publication-permission', text.replace('      packages: write', '      packages: read', 1)),
+                        ('prep-permission', text.replace('  image-prep:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 120 # Cold build: two source-built cross compilers.\n    permissions:\n      contents: read', '  image-prep:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 120 # Cold build: two source-built cross compilers.\n    permissions:\n      contents: read\n      packages: write', 1)),
+                        ('candidate-required', text.replace('needs: [build, test]', 'needs: [build, test, candidate]', 1)),
+                        ('candidate-not-advisory', text.replace('    continue-on-error: true\n    runs-on:', '    continue-on-error: false\n    runs-on:', 1)),
+                        ('candidate-missing', text.replace('needs: image-prep\n    if: always()\n    continue-on-error: true', 'needs: build\n    if: always()\n    continue-on-error: true', 1))):
         print('checking', tag, flush=True)
         run(broken, False)
         print('PASS rejected', tag)

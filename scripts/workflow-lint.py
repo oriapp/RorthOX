@@ -34,12 +34,19 @@ def lint(text):
             'checkout must not persist credentials')
     require(not re.search(r'^\s*(run-id|github-token):', text, re.M),
             'artifact downloads must be same-run')
-    jobs = re.split(r'^  (build|test|result):\s*$', text, flags=re.M)
-    require(len(jobs) == 7 and jobs[1::2] == ['build', 'test', 'result'], 'expected three jobs')
-    for name, body in zip(jobs[1::2], jobs[2::2]):
+    parts = re.split(r'^  (build|test|image-prep|image|candidate|result):\s*$', text, flags=re.M)
+    require(len(parts) == 13 and parts[1::2] ==
+            ['build', 'test', 'image-prep', 'image', 'candidate', 'result'],
+            'expected six jobs')
+    jobs = dict(zip(parts[1::2], parts[2::2]))
+    gate = "github.event_name == 'push' && github.repository == 'oriapp/RorthOX' && (github.ref == 'refs/heads/features' || github.ref == 'refs/heads/main')"
+    require(re.findall(r'^    if: (.+)$', jobs['image'], re.M) == [gate],
+            'publication must have the exact trusted-push job gate')
+    for name, body in jobs.items():
         grants = re.findall(r'^    permissions:\n((?:      [^\n]+\n?)+)', body, re.M)
-        require(len(grants) == 1 and grants[0].splitlines() == ['      contents: read'],
-                f'{name}: permissions must be exactly contents: read')
+        expected = ['      contents: read'] + (['      packages: write'] if name == 'image' else [])
+        require(len(grants) == 1 and grants[0].splitlines() == expected,
+                f'{name}: unexpected permissions')
     # Parse real YAML when available; the fail-closed syntax restrictions below also
     # protect hosts without the optional YAML package.
     try:
@@ -81,13 +88,25 @@ def lint(text):
             if command.strip() and len(command) - len(command.lstrip()) <= indent:
                 break
             require('${{' not in command, 'expression inside run')
-    require('needs: build' in jobs[4] and 'fail-fast: false' in jobs[4]
-            and 'shard: [1, 2, 3, 4]' in jobs[4], 'four independent shards required')
-    require('needs: [build, test]' in jobs[6] and re.search(r'^    if: always\(\)$', jobs[6], re.M)
-            and 'scripts/ci-result.py' in jobs[6], 'aggregate must run after failure')
-    require('scripts/ci-artifact.py extract' in jobs[4]
-            and 'scripts/ci-artifact.py create' in jobs[2], 'build handoff must be verified')
-    require('RORTHOX_REQUIRE_ISO:' in jobs[4] and 'run-tests.sh --shard' in jobs[4],
+    require('needs: build' in jobs['test'] and 'fail-fast: false' in jobs['test']
+            and 'shard: [1, 2, 3, 4]' in jobs['test'], 'four independent shards required')
+    require('needs: [build, test]' in jobs['result'] and re.search(r'^    if: always\(\)$', jobs['result'], re.M)
+            and 'scripts/ci-result.py' in jobs['result'], 'aggregate must run after failure')
+    require('needs: image-prep' in jobs['candidate'] and
+            re.search(r'^    continue-on-error: true$', jobs['candidate'], re.M) and
+            not re.search(r'needs:.*candidate', jobs['result']),
+            'advisory image suite must not affect required result')
+    require('needs: image-prep' in jobs['image'] and
+            'cancel-in-progress: false' in jobs['image'] and
+            'group: image-${{ needs.image-prep.outputs.key }}' in jobs['image'],
+            'publication must serialize on the input hash')
+    require('ci/image-job.sh prepare' in jobs['image-prep'] and
+            'ci/image-job.sh receive' in jobs['candidate'] and
+            'ci/image-job.sh publish' in jobs['image'] and
+            'ci/image-job.sh fetch' in jobs['candidate'], 'missing verified image handoff')
+    require('scripts/ci-artifact.py extract' in jobs['test']
+            and 'scripts/ci-artifact.py create' in jobs['build'], 'build handoff must be verified')
+    require('RORTHOX_REQUIRE_ISO:' in jobs['test'] and 'run-tests.sh --shard' in jobs['test'],
             'required sharded test invocation missing')
 
 
