@@ -21,7 +21,14 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 case "${TMPDIR:-}" in /*) tmp_base="$TMPDIR" ;; *) tmp_base=/tmp ;; esac
 TMP=$(mktemp -d "$tmp_base/isolation.XXXXXX")
-trap 'rm -rf "$TMP"' EXIT
+# What this test started in the background (runners, a test): stopped and waited for before $TMP goes.
+children=()
+stop_children() {
+    local p
+    for p in "${children[@]}"; do kill -TERM "$p" 2> /dev/null || :; done
+    for p in "${children[@]}"; do wait "$p" 2> /dev/null || :; done
+}
+trap 'stop_children; rm -rf "$TMP"' EXIT
 
 production() {
     find bin build programs \( -path build/tests -o -path build/smoke \) -prune -o -type f -print |
@@ -30,17 +37,22 @@ production() {
 production > "$OUT/production-before.sha256"
 
 # pair <test> [<test again for runner a>]: two runners at once; $OUT/<name>-a and -b get their output.
+# They are not this CI job's runner: their failures show here as FAIL lines, not as annotations.
 pair() {
     local name a b sa=0 sb=0
     name=$(basename "$1" .sh)
     echo "test-isolation: two runners with $name at once"
     mkdir -p "$OUT/$name-a" "$OUT/$name-b"
-    RORTHOX_TEST_ROOT="$OUT/$name-a" TMPDIR="$TMP" ./scripts/run-tests.sh "$@" > "$OUT/$name-a.log" 2>&1 &
+    GITHUB_ACTIONS=false RORTHOX_TEST_ROOT="$OUT/$name-a" TMPDIR="$TMP" ./scripts/run-tests.sh "$@" \
+        > "$OUT/$name-a.log" 2>&1 &
     a=$!
-    RORTHOX_TEST_ROOT="$OUT/$name-b" TMPDIR="$TMP" ./scripts/run-tests.sh "$1" > "$OUT/$name-b.log" 2>&1 &
+    GITHUB_ACTIONS=false RORTHOX_TEST_ROOT="$OUT/$name-b" TMPDIR="$TMP" ./scripts/run-tests.sh "$1" \
+        > "$OUT/$name-b.log" 2>&1 &
     b=$!
+    children=("$a" "$b")
     wait "$a" || sa=$?
     wait "$b" || sb=$?
+    children=()
     echo "a=$sa b=$sb" > "$OUT/$name-status.txt"
     grep -h '^=== [0-9]* passed\|FAIL' "$OUT/$name-a.log" "$OUT/$name-b.log" | sed 's/^/  /' || true
 }
@@ -66,6 +78,7 @@ term() {
     RORTHOX_TEST_ROOT="$root" TMPDIR="$tmp" KERNEL_EXCEPTION_CASES=early \
         bash scripts/tests/kernel-exceptions.sh > "$root.log" 2>&1 &
     pid=$!
+    children=("$pid")
     for ((i = 0; i < 600; i++)); do
         kill -0 "$pid" 2> /dev/null || break
         case "$2" in
@@ -77,6 +90,7 @@ term() {
     done
     kill -TERM "$pid" 2> /dev/null || :
     wait "$pid" || status=$?
+    children=()
     for ((i = 0; i < 100; i++)); do
         left=$(pgrep -f -- "$tmp/" | wc -l || true)
         [ "$left" -eq 0 ] && break

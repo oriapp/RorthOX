@@ -82,7 +82,7 @@ qemu_kill() {
     [ -n "${Q_TMP:-}" ] && rm -rf "$Q_TMP"
     # Anything else this shell started and that still runs, e.g. the debugger it was waiting for when
     # TERM came: only this shell's own children (only EXIT traps call qemu_kill).
-    pkill -TERM -P $$ 2> /dev/null || :
+    pkill -TERM -P "$BASHPID" 2> /dev/null || :
     return 0
 }
 

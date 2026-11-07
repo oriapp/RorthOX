@@ -428,7 +428,7 @@ where it matters) to check one function against every input. Tests that need ext
 Tests can run side by side. Every test boots its own copy of the disk (QEMU locks a disk image it writes) and only
 reads `bin/`, `build/` and `programs/*/build/` (fixtures it compiles go to its own output directory); no test builds
 the ISO. The runner gives every test it starts its own output directory and temporary directory: a run's output goes
-to `build/tests/runs/run.XXXXXX/`, one numbered directory per test (`003-heap/heap/`), with each test's run time in
+to `build/tests/runs/run.XXXXXX/`, one numbered directory per test (`001-smoke/smoke/`), with each test's run time in
 `durations.txt`; a new run removes the finished runs before it. A test reads its output directory from
 `RORTHOX_TEST_ROOT` and its temporary directory (gdb and QMP sockets, the monitor pipe) from `TMPDIR`. Run
 directly, as `bash scripts/tests/heap.sh` after `make all` (and `make iso` for `grub-boot` and `write-protect`), a

@@ -40,6 +40,8 @@ BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 STEP_TIMEOUT="${STEP_TIMEOUT:-20}"
 CASES="${EXCEPTION_CASES:-ud2 int3 cli pf int14 int18 owner}"
 NAME="${EXCEPTIONS_NAME:-exceptions}"
+# The name becomes a directory that is removed and made again: keep it one plain path component.
+[[ $NAME =~ ^[a-z0-9-]+$ ]] || { echo "EXCEPTIONS_NAME must match ^[a-z0-9-]+\$" >&2; exit 2; }
 . ./scripts/qemu-lib.sh
 . ./scripts/tests/lib/guest-state.sh
 

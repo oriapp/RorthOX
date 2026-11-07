@@ -241,8 +241,8 @@ for mode in normal default error term-running term-now term-launch; do
             [ -n "$started_pids" ] && [ "$alive" = 0 ] && break
             sleep 0.1
         done
-        echo "blocked=$(pgrep -g "$child" | wc -l)" > "$d/blocked.txt"
-        pkill -g "$child" || :
+        echo "blocked=$(pgrep -g "$child" -f "$OUT/child.sh" | wc -l)" > "$d/blocked.txt"
+        pkill -g "$child" -f "$OUT/child.sh" || :
     fi
     left=0
     for p in $(cat "$d/pids" 2> /dev/null); do

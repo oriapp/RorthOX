@@ -38,6 +38,8 @@ QEMU_TIMEOUT="${QEMU_TIMEOUT:-180}"
 . ./scripts/tests/lib/guest-state.sh
 
 SUITE="${OOM_SUITE:-heap-oom}"
+# The name becomes a directory: keep it one plain path component.
+[[ $SUITE =~ ^[a-z0-9-]+$ ]] || { echo "OOM_SUITE must match ^[a-z0-9-]+\$" >&2; exit 2; }
 OUT="${RORTHOX_TEST_ROOT:-build/tests}/$SUITE"
 PROGRAM=programs/oomtest/build/oomtest.elf
 BLANK_ELF=programs/blank/build/blank.elf
