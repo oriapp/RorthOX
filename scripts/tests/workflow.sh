@@ -29,7 +29,13 @@ with tempfile.TemporaryDirectory() as temp:
                         ('skipped-aggregate', text.replace('    if: always()\n    runs-on:', '    if: success()\n    runs-on:')),
                         ('permissions', text.replace('permissions: {}', 'permissions:\n  contents: write')),
                         ('extra-grant', text.replace('      contents: read', '      contents: read\n      id-token: write', 1)),
-                        ('shell-expression', text.replace('          make all iso', '          echo "${{ github.event.inputs.arg }}"\n          make all iso'))):
+                        ('shell-expression', text.replace('          make all iso', '          echo "${{ github.event.inputs.arg }}"\n          make all iso')),
+                        ('dash-run', text.replace('      - name: Build and package', '      - run: echo "${{ github.event.inputs.arg }}"\n      - name: Build and package', 1)),
+                        ('next-line-run', text.replace('run: |\n          make all iso', 'run:\n          echo "${{ github.event.inputs.arg }}"', 1)),
+                        ('keep-run', text.replace('run: |\n          make all iso', 'run: |+\n          echo "${{ github.event.inputs.arg }}"', 1)),
+                        ('indent-run', text.replace('run: |\n          make all iso', 'run: |2\n          echo "${{ github.event.inputs.arg }}"', 1)),
+                        ('fold-run', text.replace('run: |\n          make all iso', 'run: >+\n          echo "${{ github.event.inputs.arg }}"', 1)),
+                        ('continued-run', text.replace('run: |\n          make all iso', 'run: make all iso\n            echo "${{ github.event.inputs.arg }}"', 1))):
         print('checking', tag, flush=True)
         run(broken, False)
         print('PASS rejected', tag)

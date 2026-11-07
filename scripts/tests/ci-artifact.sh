@@ -48,6 +48,17 @@ with tempfile.TemporaryDirectory() as tmp:
     assert (repo / 'bin/os.bin').read_bytes() == b'fixture bin/os.bin'
     for name in required:
         (repo / name).unlink()
+    manifest_path = repo / 'build/ci-manifest.json'
+    manifest_path.unlink()
+    target = repo / 'build/target'
+    target.write_bytes(b'keep')
+    manifest_path.symlink_to(target)
+    run('extract', archive, digest, expected=1)
+    assert target.read_bytes() == b'keep'
+    assert not (repo / 'bin/os.bin').exists()
+    manifest_path.unlink()
+    target.unlink()
+    print('PASS refused preexisting manifest symlink')
     for case in ('symlink', 'traversal', 'traversal-listed', 'outside-listed', 'corrupt', 'missing', 'prefix'):
         bad = pathlib.Path(tmp) / (case + '.tar.gz')
         expected = digest
@@ -111,6 +122,7 @@ with tempfile.TemporaryDirectory() as tmp:
         if case == 'prefix':
             assert (repo / 'bin/os.bin').read_bytes() == b'fixture bin/os.bin'
             assert (repo / 'build/ci-manifest.json').is_file()
+            (repo / 'build/ci-manifest.json').unlink()
         else:
             assert not (repo / 'bin/os.bin').exists(), case
         assert not (repo / 'ci-manifest.json').exists(), case

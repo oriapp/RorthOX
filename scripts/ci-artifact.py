@@ -111,7 +111,7 @@ def extract(archive, expected):
             if entry is None or digest(entry.read()) != files[name]:
                 raise ValueError(f'checksum mismatch: {name}')
         # Refuse stale outputs; the checkout holds no built production files yet.
-        for name in files:
+        for name in (*files, MANIFEST):
             if (ROOT / name).exists() or (ROOT / name).is_symlink():
                 raise ValueError(f'production file already present: {name}')
         # The checked tarfile members must be the members that write the files.

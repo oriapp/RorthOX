@@ -43,16 +43,15 @@ def lint(text):
     # Expressions in shell commands are interpreted before shell quoting; use env: instead.
     lines = text.splitlines()
     for i, line in enumerate(lines):
-        match = re.match(r'^(\s*)run:\s*(.*)$', line)
+        match = re.match(r'^(\s*)(?:-\s+)?run:\s*(.*)$', line)
         if match is None:
             continue
         indent = len(match[1])
         require('${{' not in match[2], 'expression inside run')
-        if match[2] in ('|', '|-', '>', '>-'):
-            for command in lines[i + 1:]:
-                if command.strip() and len(command) - len(command.lstrip()) <= indent:
-                    break
-                require('${{' not in command, 'expression inside run')
+        for command in lines[i + 1:]:
+            if command.strip() and len(command) - len(command.lstrip()) <= indent:
+                break
+            require('${{' not in command, 'expression inside run')
     require('needs: build' in jobs[4] and 'fail-fast: false' in jobs[4]
             and 'shard: [1, 2, 3, 4]' in jobs[4], 'four independent shards required')
     require('needs: [build, test]' in jobs[6] and re.search(r'^    if: always\(\)$', jobs[6], re.M)

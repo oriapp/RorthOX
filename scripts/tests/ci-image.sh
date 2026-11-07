@@ -38,7 +38,9 @@ grep -q 'snapshot.ubuntu.com/ubuntu/[0-9]\{8\}T[0-9]\{6\}Z' ci/Dockerfile || fai
 ! grep -Eq '(^|[[:space:]])(COPY[[:space:]]+\.|ADD[[:space:]]+https?://|latest)' ci/Dockerfile || fail 'unbounded Docker input'
 grep -q 'org.opencontainers.image.licenses="GPL-2.0"' ci/Dockerfile || fail 'license label'
 # Fake docker records exact argv with NUL separators; no daemon is needed.
-mkdir -p "$tmp/bin" "$tmp/work with spaces"
+root=$PWD
+work="$root/$OUT/work with spaces"
+mkdir -p "$tmp/bin" "$work"
 cat > "$tmp/bin/docker" <<'SH'
 #!/usr/bin/env bash
 printf '%s\0' "$@" > "$DOCKER_ARGS"
@@ -47,9 +49,9 @@ SH
 chmod +x "$tmp/bin/docker"
 digest=ghcr.io/oriapp/rorthox-build@sha256:1111111111111111111111111111111111111111111111111111111111111111
 (
-    cd "$tmp/work with spaces"
+    cd "$work"
     export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/argv" DOCKER_EXIT=37
-    unset RORTHOX_TEST_ROOT RORTHOX_TEST_TIMEOUT
+    unset RORTHOX_IN_IMAGE RORTHOX_TEST_ROOT RORTHOX_TEST_TIMEOUT
     export RORTHOX_IMAGE_REF="$digest" GITHUB_ACTIONS=true RORTHOX_REQUIRE_ISO=1
     export GITHUB_TOKEN=secret ACTIONS_RUNTIME_TOKEN=secret GITHUB_ENV="$tmp/secret"
     export GITHUB_OUTPUT="$tmp/secret" GITHUB_STEP_SUMMARY="$tmp/secret"
@@ -61,15 +63,25 @@ digest=ghcr.io/oriapp/rorthox-build@sha256:1111111111111111111111111111111111111
 mapfile -d '' -t actual < "$tmp/argv"
 expected=(run --rm --init --user "$(id -u):$(id -g)" --network none
           --cap-drop ALL --security-opt no-new-privileges --pids-limit 512
-          --memory 4g -v "$tmp/work with spaces:/work" -w /work)
-if [ -c /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then expected+=(--device /dev/kvm); fi
+          --memory 4g -v "$root:/work" -w "/work/${work#"$root"/}")
+# Forced-TCG candidate jobs must not attach KVM even on a host where it is available.
 expected+=(-e GITHUB_ACTIONS=true -e RORTHOX_ACCEL=tcg -e RORTHOX_REQUIRE_ISO=1
            "$digest" /bin/printf '%s' 'a b')
 [ "${#expected[@]}" = "${#actual[@]}" ] || fail "docker argv length ${#actual[@]}, expected ${#expected[@]}"
 for i in "${!expected[@]}"; do
     [ "${actual[i]}" = "${expected[i]}" ] || fail "docker argv[$i]: ${actual[i]}"
 done
-if ( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/argv"; unset RORTHOX_IMAGE_REF; bash ci/run.sh true ) >/dev/null 2>&1; then
+if ( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/argv"; unset RORTHOX_IN_IMAGE RORTHOX_IMAGE_REF; bash ci/run.sh true ) >/dev/null 2>&1; then
     fail 'placeholder digest accepted'
 fi
+if ( cd "$tmp" && RORTHOX_IMAGE_REF="$digest" bash "$root/ci/run.sh" true ) >/dev/null 2>&1; then
+    fail 'outside checkout accepted'
+fi
+if ( RORTHOX_TEST_ROOT="$tmp" RORTHOX_IMAGE_REF="$digest" bash ci/run.sh true ) >/dev/null 2>&1; then
+    fail 'outside test root accepted'
+fi
+# The in-image path must bypass docker, even when the host fixture inherited RORTHOX_IN_IMAGE.
+sed "s|/opt/rorthox-build-image|$tmp/in-image-marker|" ci/run.sh > "$tmp/in-image.sh"
+touch "$tmp/in-image-marker"
+[ "$(RORTHOX_IN_IMAGE=1 bash "$tmp/in-image.sh" printf '%s' in-image)" = in-image ] || fail 'in-image execution failed'
 echo 'PASS ci-image: key, context, reference, Dockerfile, isolated argv and exit status'

@@ -14,16 +14,16 @@
 # Then run (no sudo):   ./configure.sh
 # And add the toolchain to your PATH:   export PATH="$HOME/opt/cross/bin:$PATH"
 #
-# Environment overrides: TARGET (i686-elf or x86_64-elf), PREFIX (install dir),
+# Environment overrides: CROSS_TARGET (i686-elf or x86_64-elf), PREFIX (install dir),
 # SRC_DIR (download/build parent), JOBS (parallel make jobs), GNU_MIRROR,
-# FORCE=1 (rebuild even if installed).
+# FORCE=1 (rebuild even if installed). An unrelated exported TARGET is ignored.
 
 set -euo pipefail
 
-TARGET="${TARGET:-i686-elf}"
-case "$TARGET" in
+CROSS_TARGET="${CROSS_TARGET:-i686-elf}"
+case "$CROSS_TARGET" in
     i686-elf|x86_64-elf) ;;
-    *) printf 'error: unsupported target: %s\n' "$TARGET" >&2; exit 1 ;;
+    *) printf 'error: unsupported target: %s\n' "$CROSS_TARGET" >&2; exit 1 ;;
 esac
 BINUTILS_VERSION=2.42
 GCC_VERSION=13.2.0
@@ -32,7 +32,7 @@ BINUTILS_SHA256=f6e4d41fd5fc778b06b7891457b3620da5ecea1006c6a4a41ae998109f85a800
 GCC_SHA256=e275e76442a6067341a27f04c5c6b83d8613144004c0413528863dc6b5c743da
 
 PREFIX="${PREFIX:-$HOME/opt/cross}"
-SRC_DIR="${SRC_DIR:-$HOME/src/rorthox-toolchain}/$TARGET"
+SRC_DIR="${SRC_DIR:-$HOME/src/rorthox-toolchain}/$CROSS_TARGET"
 JOBS="${JOBS:-$(nproc)}"
 GNU_MIRROR="${GNU_MIRROR:-https://ftp.gnu.org/gnu}"
 
@@ -74,7 +74,7 @@ build_binutils() {
     mkdir build-binutils
     (
         cd build-binutils
-        "../binutils-$BINUTILS_VERSION/configure" --target="$TARGET" --prefix="$PREFIX" \
+        "../binutils-$BINUTILS_VERSION/configure" --target="$CROSS_TARGET" --prefix="$PREFIX" \
             --with-sysroot --disable-nls --disable-werror
         make -j"$JOBS"
         make install
@@ -83,7 +83,7 @@ build_binutils() {
 
 build_gcc() {
     log "Building GCC $GCC_VERSION"
-    command -v "$TARGET-as" >/dev/null || die "$TARGET-as is not in PATH; binutils must be installed first"
+    command -v "$CROSS_TARGET-as" >/dev/null || die "$CROSS_TARGET-as is not in PATH; binutils must be installed first"
     fetch "$GNU_MIRROR/gcc/gcc-$GCC_VERSION/gcc-$GCC_VERSION.tar.xz" \
           "gcc-$GCC_VERSION.tar.xz" "$GCC_SHA256"
     rm -rf "gcc-$GCC_VERSION" build-gcc
@@ -91,7 +91,7 @@ build_gcc() {
     mkdir build-gcc
     (
         cd build-gcc
-        "../gcc-$GCC_VERSION/configure" --target="$TARGET" --prefix="$PREFIX" \
+        "../gcc-$GCC_VERSION/configure" --target="$CROSS_TARGET" --prefix="$PREFIX" \
             --disable-nls --enable-languages=c --without-headers
         make -j"$JOBS" all-gcc all-target-libgcc
         make install-gcc install-target-libgcc
@@ -103,23 +103,23 @@ main() {
     mkdir -p "$SRC_DIR" "$PREFIX"
     cd "$SRC_DIR"
 
-    if [ "${FORCE:-0}" != 1 ] && [ -x "$PREFIX/bin/$TARGET-ld" ] &&
-       "$PREFIX/bin/$TARGET-ld" --version 2>/dev/null | head -n1 | grep -q " $BINUTILS_VERSION\$"; then
+    if [ "${FORCE:-0}" != 1 ] && [ -x "$PREFIX/bin/$CROSS_TARGET-ld" ] &&
+       "$PREFIX/bin/$CROSS_TARGET-ld" --version 2>/dev/null | head -n1 | grep -q " $BINUTILS_VERSION\$"; then
         log "binutils $BINUTILS_VERSION already installed in $PREFIX (FORCE=1 to rebuild)"
     else
         build_binutils
     fi
 
-    if [ "${FORCE:-0}" != 1 ] && [ -x "$PREFIX/bin/$TARGET-gcc" ] &&
-       [ "$("$PREFIX/bin/$TARGET-gcc" -dumpfullversion -dumpversion 2>/dev/null)" = "$GCC_VERSION" ]; then
+    if [ "${FORCE:-0}" != 1 ] && [ -x "$PREFIX/bin/$CROSS_TARGET-gcc" ] &&
+       [ "$("$PREFIX/bin/$CROSS_TARGET-gcc" -dumpfullversion -dumpversion 2>/dev/null)" = "$GCC_VERSION" ]; then
         log "GCC $GCC_VERSION already installed in $PREFIX (FORCE=1 to rebuild)"
     else
         build_gcc
     fi
 
     log "Done"
-    "$TARGET-gcc" --version | head -n1
-    "$TARGET-ld" --version | head -n1
+    "$CROSS_TARGET-gcc" --version | head -n1
+    "$CROSS_TARGET-ld" --version | head -n1
     echo
     echo "Add the toolchain to your PATH (e.g. in ~/.bashrc):"
     echo "  export PATH=\"$PREFIX/bin:\$PATH\""

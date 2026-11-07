@@ -489,7 +489,8 @@ test started outlives it (also after TERM or INT to the runner), and no output l
 command (`::error`, also after a carriage return); `--shard` splits a selection exactly, by the timings, and a bad
 shard or timings file runs nothing.
 `ci-artifact` checks the build archive manifest, checksums and member safety before extraction, including unsafe tar
-headers and missing files. `workflow` checks action pins, job permissions and triggers, plus the final job's handling
+headers and missing files. `ci-image` checks the minimal context, image digest and container launch.
+`workflow` checks action pins, job permissions and triggers, plus the final job's handling
 of failed, missing and malformed shard reports, without QEMU.
 `reports` checks the reports with small scripts: they agree with the run, `junit.xml` parses back, test names with
 Markdown, XML and control characters are escaped, the summary keeps to its size limit, `failed/` holds only the
@@ -510,7 +511,7 @@ the GRUB case of `write-protect` fail when `bin/rorthox.iso` is missing or holds
 is optional: without it `fat-write` and `file-syscalls` say they skip that one check and still run the rest.
 
 A candidate build-image recipe lives in `ci/Dockerfile`, with its content key in `ci/image-key.sh`. The digest in
-`ci/image.ref` is a placeholder until the image is built and validated in CI; the existing build commands below remain
+`ci/image.ref` is a placeholder until the image is built and validated in CI; the existing build commands above remain
 the supported local path. `ci/run.sh` is a candidate container entry point, not yet a replacement for them.
 
 CI (`.github/workflows/build.yml`) runs on Ubuntu 24.04 for pushes to `main` or `features` and for pull requests.
