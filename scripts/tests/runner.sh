@@ -41,7 +41,7 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 fx="$tmp/fixtures"
 mkdir -p "$fx"
-export RUNNER_STATE="$tmp/state" GITHUB_STEP_SUMMARY="$tmp/summary.md"
+export RUNNER_STATE="$tmp/state" GITHUB_STEP_SUMMARY="$tmp/summary.md" GITHUB_ACTIONS=false
 failures=0
 cr=$'\r'
 nl=$'\n'
@@ -65,10 +65,14 @@ run() {
 all_gone() {
     local f p
     for f in "$@"; do
+        if [ ! -s "$f" ]; then
+            echo "  missing or empty pid file: $f"
+            return 1
+        fi
         while read -r p; do
             [ -n "$p" ] || continue
             if kill -0 "$p" 2> /dev/null || pgrep -g "$p" > /dev/null || pgrep -s "$p" > /dev/null; then
-                echo "  left: $(ps -o pid=,pgid=,sid=,args= -g "$p" -s "$p" -p "$p")"
+                echo "  left: $(ps -o pid=,pgid=,sid=,stat=,args= -g "$p" -s "$p" -p "$p")"
                 return 1
             fi
         done < "$f"
@@ -261,6 +265,7 @@ for ((i = 0; i < 100; i++)); do
     [ -e "$1" ] && break
     sleep 0.1
 done
+[ -e "$1" ] || { echo "hang did not become ready" >&2; exit 1; }
 seq 1 200000
 EOF
 # reap <pid files>...: KILL what a broken runner left (pids, their groups and sessions).
@@ -303,11 +308,21 @@ expect "TMPDIR with + and (: what spawn left is found and stopped" \
 reap "$RUNNER_STATE"/spawn.*.pids
 rm -rf "$RUNNER_STATE"
 mkdir -p "$RUNNER_STATE" "$roots/pipe"
-{ RORTHOX_TEST_ROOT="$roots/pipe" timeout -k 5 60 "$runner" -j 2 "$fx/hang.sh" "$fx/chatty.sh" 2> "$OUT/pipe.err"
-  echo $? > "$RUNNER_STATE/pipe.status"; } | head -n 1 > "$OUT/pipe.log"
-expect "output closed (| head -n 1): exit 1, the running test stopped" \
-    '[ "$(cat "$RUNNER_STATE/pipe.status")" = 1 ] && [ "$(cat "$OUT/pipe.log")" = "=== $fx/chatty.sh" ] &&
-     all_gone "$RUNNER_STATE"/hang.*.pids'
+# A signal ignored when bash starts cannot be trapped. Set this fixture's signal
+# disposition explicitly, just as the INT fixtures do.
+{ RORTHOX_TEST_ROOT="$roots/pipe" env --default-signal=PIPE timeout -k 5 60 "$runner" -j 2 "$fx/hang.sh" "$fx/chatty.sh" 2> "$OUT/pipe.err"
+  echo $? > "$OUT/pipe.status"; } | head -n 1 > "$OUT/pipe.log"
+pipe_status=$(cat "$OUT/pipe.status")
+pipe_header=$(cat "$OUT/pipe.log")
+pipe_gone=yes
+pipe_left=$(all_gone "$RUNNER_STATE"/hang.*.pids 2>&1) || pipe_gone=no
+if [ "$pipe_status" = 1 ] && [ "$pipe_header" = "=== $fx/chatty.sh" ] && [ "$pipe_gone" = yes ]; then
+    ok "output closed (| head -n 1): exit 1, the running test stopped"
+else
+    # Keep every predicate in the FAIL line: CI's annotation otherwise omits it.
+    printf -v pipe_detail 'status=%q header=%q expected=%q gone=%s left=%q'         "$pipe_status" "$pipe_header" "=== $fx/chatty.sh" "$pipe_gone" "$pipe_left"
+    fail "output closed (| head -n 1): $pipe_detail"
+fi
 reap "$RUNNER_STATE"/hang.*.pids
 rm -rf "$RUNNER_STATE"
 mkdir -p "$RUNNER_STATE" "$roots/usr1"
