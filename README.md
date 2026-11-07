@@ -315,7 +315,8 @@ make all
 ```
 
 `configure.sh` takes a while the first time. Run again, it sees the installed toolchain and stops (`FORCE=1` rebuilds
-it). `make all` gives:
+it). `TARGET=x86_64-elf ./configure.sh` builds a separate 64-bit cross compiler in the same prefix; the kernel still
+builds for i686. `make all` gives:
 
 | File | What |
 |---|---|
@@ -508,6 +509,10 @@ the GRUB case of `write-protect` fail when `bin/rorthox.iso` is missing or holds
 `bin/kernel.bin` (`make test` builds it first). `fsck.fat` (package `dosfstools`)
 is optional: without it `fat-write` and `file-syscalls` say they skip that one check and still run the rest.
 
+A candidate build-image recipe lives in `ci/Dockerfile`, with its content key in `ci/image-key.sh`. The digest in
+`ci/image.ref` is a placeholder until the image is built and validated in CI; the existing build commands below remain
+the supported local path. `ci/run.sh` is a candidate container entry point, not yet a replacement for them.
+
 CI (`.github/workflows/build.yml`) runs on Ubuntu 24.04 for pushes to `main` or `features` and for pull requests.
 The build job compiles the cross toolchain (cached), runs `make all iso` once and uploads a `production` archive with
 its revision, tool versions and file checksums. Four independent test jobs download that same-run archive, verify its
@@ -529,7 +534,7 @@ scripts/           smoke test, test runner, QEMU helpers (qemu-lib.sh), ISO tool
 scripts/tests/     the tests; host/ has the host C checks, lib/ the Python and gdbstub helpers
 config.mk          shared values: disk layout, addresses, selectors, syscall numbers, key codes, program search list, RAM size
 Makefile           builds bin/boot.bin, bin/kernel.bin and bin/os.bin; make iso, make test, make smoke
-configure.sh       builds the i686-elf cross toolchain
+configure.sh       builds the i686-elf or x86_64-elf cross toolchain
 build.sh, qemu.sh, clean.sh, uninstall-config.sh   small wrappers
 iso.sh             make iso with the cross compiler on the PATH
 ```
