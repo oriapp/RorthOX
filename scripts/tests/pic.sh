@@ -12,8 +12,9 @@ cd "$(dirname "$0")/../.."
 OUT=${RORTHOX_TEST_ROOT:-build/tests}/pic
 mkdir -p "$OUT"
 
-echo "pic: boot bin/os.bin and run blank.elf"
-qemu_start bin/os.bin "$OUT"
+echo "pic: boot a copy of bin/os.bin and run blank.elf"
+cp bin/os.bin "$OUT/pic.bin"
+qemu_start "$OUT/pic.bin" "$OUT"
 if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" 60; then
     type_line "blank.elf"
     wait_screen "Process was terminated" 30 || true

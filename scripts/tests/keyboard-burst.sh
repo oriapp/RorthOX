@@ -19,7 +19,8 @@ for key in dot ret; do
     SOCK="$SOCKET_DIR/qmp"
     rm -f "$SOCK"
     QEMU_FLAGS="$BASE_FLAGS -qmp unix:$SOCK,server=on,wait=off"
-    qemu_start bin/os.bin "$SESSION"
+    cp bin/os.bin "$SESSION/disk.bin"
+    qemu_start "$SESSION/disk.bin" "$SESSION"
     trap cleanup EXIT
     wait_screen "$RORTHOX_NAME v$RORTHOX_VERSION" 20
 

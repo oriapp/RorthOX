@@ -80,6 +80,9 @@ qemu_kill() {
     if [ -n "${Q_PID:-}" ]; then kill "$Q_PID" 2> /dev/null || :; wait "$Q_PID" 2> /dev/null || :; fi
     Q_PID=
     [ -n "${Q_TMP:-}" ] && rm -rf "$Q_TMP"
+    # Anything else this shell started and that still runs, e.g. the debugger it was waiting for when
+    # TERM came: only this shell's own children (only EXIT traps call qemu_kill).
+    pkill -TERM -P $$ 2> /dev/null || :
     return 0
 }
 

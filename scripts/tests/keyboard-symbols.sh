@@ -4,7 +4,9 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 . ./scripts/qemu-lib.sh
 OUT="$(realpath -m "${RORTHOX_TEST_ROOT:-build/tests}/keyboard-symbols")"
-qemu_start bin/os.bin "$OUT"
+mkdir -p "$OUT"
+cp bin/os.bin "$OUT/disk.bin"
+qemu_start "$OUT/disk.bin" "$OUT"
 wait_screen "$RORTHOX_NAME v$RORTHOX_VERSION" 20
 
 press() {

@@ -61,11 +61,12 @@ run_program() {
     check "QEMU exited normally" "$Q_OUT/qemu-status.txt" "exit=0" line
 }
 
-# Production disk is untouched. Capture the menu without pressing any keys;
+# Production disk is untouched (the boot gets a copy). Capture the menu without pressing any keys;
 # resuming the VM leaves GRUB's five-second countdown to choose the entry.
 echo "grub-boot: normal ISO boot"
 ISO_FLAGS="${QEMU_FLAGS:-} -boot d -cdrom bin/rorthox.iso"
-QEMU_FLAGS="$ISO_FLAGS" qemu_start bin/os.bin "$OUT/normal"
+cp bin/os.bin "$OUT/normal.bin"
+QEMU_FLAGS="$ISO_FLAGS" qemu_start "$OUT/normal.bin" "$OUT/normal"
 trap cleanup EXIT
 wait_screen "GNU GRUB" 20 || fail "GRUB menu not visible"
 # GRUB draws the header before the entries: wait until one snapshot has both.

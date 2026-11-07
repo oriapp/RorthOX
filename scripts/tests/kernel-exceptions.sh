@@ -104,6 +104,11 @@ image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
 cp bin/os.bin "$OUT/kernel-exceptions.bin"
 mcopy -i "$OUT/kernel-exceptions.bin" "$PROGRAM" ::fault.elf
+# On every exit (an error, TERM) stop QEMU, then remove the gdb socket directory.
+GDB_DIR=
+cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
+Q_CLEANUP=cleanup
+trap qemu_exit EXIT
 GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 # exception_fatal_stop calls PANIC(msg, __FILE__, __LINE__): the location the panic screen shows.
 panic_line=$(grep -n 'PANIC(msg, __FILE__, __LINE__);' kernel/idt/idt.c | cut -d: -f1)

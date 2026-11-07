@@ -29,7 +29,11 @@ SHELL_READY="${RORTHOX_NAME} v${RORTHOX_VERSION}"            # the shell's banne
 PROGRAM_DONE="Process was terminated"   # printed by the kernel when a program exits
 
 echo "smoke: boot $IMAGE"
-qemu_start "$IMAGE" "$OUT"
+[ -f "$IMAGE" ] || { echo "$IMAGE not found, run 'make all' first" >&2; exit 2; }
+# Boot a copy: QEMU locks the disk it writes, and another test may have $IMAGE open.
+mkdir -p "$OUT"
+cp "$IMAGE" "$OUT/disk.bin"
+qemu_start "$OUT/disk.bin" "$OUT"
 # If a wait times out, carry on: the checks below report what is missing.
 if wait_screen "$SHELL_READY" "$BOOT_TIMEOUT"; then
     type_line "$COMMAND"

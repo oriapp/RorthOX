@@ -68,6 +68,11 @@ echo "exit=$host_status" > "$OUT/host-status.txt"
 image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
 cp bin/os.bin "$OUT/descriptor-tables.bin"
+# On every exit (an error, TERM) stop QEMU, then remove the gdb socket directory.
+GDB_DIR=
+cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
+Q_CLEANUP=cleanup
+trap qemu_exit EXIT
 GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 
 echo "descriptor-tables: boot"

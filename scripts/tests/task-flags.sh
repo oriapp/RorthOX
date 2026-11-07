@@ -38,6 +38,11 @@ image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
 cp bin/os.bin "$OUT/task-flags.bin"
 mcopy -i "$OUT/task-flags.bin" "$PROGRAM" ::flagtest.elf
+# On every exit (an error, TERM) stop QEMU, then remove the gdb socket directory.
+GDB_DIR=
+cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; }
+Q_CLEANUP=cleanup
+trap qemu_exit EXIT
 GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 SOCK="$GDB_DIR/gdb"
 

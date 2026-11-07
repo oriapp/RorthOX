@@ -18,7 +18,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 . ./scripts/qemu-lib.sh
 
-OUT=${RORTHOX_TEST_ROOT:-build/tests}/screen-waits
+OUT="$(realpath -m "${RORTHOX_TEST_ROOT:-build/tests}/screen-waits")"
 rm -rf "$OUT"
 mkdir -p "$OUT/run"
 Q_OUT="$OUT/run"
@@ -213,30 +213,36 @@ for mode in normal default error term-running term-now term-launch; do
     d="$OUT/hook-$mode"
     mkdir -p "$d"
     : > "$d/disk.img"
-    printf '#!/usr/bin/env bash\necho $$ >> "%s/pids"\nexec sleep 7391\n' "$PWD/$d" > "$d/qemu"
+    printf '#!/usr/bin/env bash\necho $$ >> "%s/pids"\nexec sleep 7391\n' "$d" > "$d/qemu"
     chmod +x "$d/qemu"
     repo="$PWD"
     if [ "$mode" = term-launch ]; then
-        repo="$PWD/$d/repo"
+        repo="$d/repo"
         mkdir -p "$repo/scripts" "$d/tmp"
         ln -sfn "$PWD/build" "$repo/build"
         sed 's/^    Q_PID=\$!$/    kill -TERM $$; Q_PID=$!/' scripts/qemu-lib.sh > "$repo/scripts/qemu-lib.sh"
         grep -qF 'kill -TERM $$; Q_PID=' "$repo/scripts/qemu-lib.sh" || echo "no kill put in" > "$d/inject.txt"
     fi
-    if timeout 30 bash "$OUT/child.sh" "$mode" "$PWD/$d" "$repo" > "$d/child.log" 2>&1; then
+    # timeout leads a process group of its own: what is left of this child afterwards is in group
+    # $child, and only that group is counted and stopped (never another run's child).
+    timeout 30 bash "$OUT/child.sh" "$mode" "$d" "$repo" > "$d/child.log" 2>&1 &
+    child=$!
+    if wait "$child"; then
         status=0
     else
         status=$?
     fi
     if [ "$mode" = term-launch ]; then
         for ((i = 0; i < 80; i++)); do
+            # Read the pid list once: it may be written between two reads of it.
+            started_pids=$(cat "$d/pids" 2> /dev/null || true)
             alive=0
-            for p in $(cat "$d/pids" 2> /dev/null); do kill -0 "$p" 2> /dev/null && alive=1; done
-            [ -s "$d/pids" ] && [ "$alive" = 0 ] && break
+            for p in $started_pids; do kill -0 "$p" 2> /dev/null && alive=1; done
+            [ -n "$started_pids" ] && [ "$alive" = 0 ] && break
             sleep 0.1
         done
-        echo "blocked=$(pgrep -f "child.sh term-launch" | wc -l)" > "$d/blocked.txt"
-        pkill -f "child.sh term-launch" || :
+        echo "blocked=$(pgrep -g "$child" | wc -l)" > "$d/blocked.txt"
+        pkill -g "$child" || :
     fi
     left=0
     for p in $(cat "$d/pids" 2> /dev/null); do
