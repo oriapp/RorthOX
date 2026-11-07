@@ -1,20 +1,76 @@
 #!/usr/bin/env bash
 #
-# Runs the smoke test and every test in scripts/tests/ (each boots RorthOX in QEMU),
-# keeps going after a failure, and prints a summary. Exit status 77 means skipped;
-# other nonzero statuses fail. Exit status 1 if any test failed.
+# Runs the smoke test and every test in scripts/tests/ (each boots RorthOX in QEMU), up to N at a
+# time, keeps going after a failure, and prints a summary.
 #
-# Usage:  ./scripts/run-tests.sh        (or: make test)
-#         ./scripts/run-tests.sh scripts/tests/panic.sh ...   (only these; a test named twice runs twice)
+# Usage:  ./scripts/run-tests.sh [-j N] [--timeout S] [--list] [test.sh ...]     (or: make test)
+#   -j N         run up to N tests at once (default 1: one after the other, in the given order)
+#   --timeout S  stop a test that runs longer than S seconds; it fails (default 900, or
+#                $RORTHOX_TEST_TIMEOUT). QEMU_TIMEOUT still limits each QEMU run inside a test.
+#   --list       print the tests that would run, one per line, and run nothing
+#   test.sh ...  only these tests (a test named twice runs twice); default: scripts/smoke.sh and
+#                every scripts/tests/*.sh
+#
+# Exit status: 0 when every test passed or was skipped (a test that exits with 77 is skipped),
+# 1 when a test failed, crashed or timed out or the run was interrupted, 2 for a bad command line
+# (no test runs then).
 #
 # Every run gets its own directory build/tests/runs/run.XXXXXX (inside $RORTHOX_TEST_ROOT/runs when
 # the runner itself runs inside a test). Each test there gets its own numbered directory, passed to
 # it as RORTHOX_TEST_ROOT (its output goes to $RORTHOX_TEST_ROOT/<name>/), and its own empty TMPDIR,
-# removed when it ends. Run times go to durations.txt in the run directory. A new top-level run
-# removes the earlier runs that have finished.
+# removed when it ends. What a test prints goes to output.log in its numbered directory; when the
+# test ends the runner prints it with "[<name>] " in front of every line (also after a carriage
+# return), so a test's output can never pass for a line of the runner's own, such as a CI error
+# annotation. Run times and exit statuses go to durations.txt in the run directory. A new top-level
+# run removes the earlier runs that have finished.
+#
+# Every test runs in its own session. When it ends or runs out of time, or when the runner gets
+# TERM, INT or HUP, whatever still runs in that session (QEMU, a debugger, timeout and their
+# children) gets TERM and, 5 seconds later, KILL.
 
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 2
+
+usage() {
+    echo "usage: $0 [-j N] [--timeout S] [--list] [test.sh ...]" >&2
+    exit 2
+}
+if ((BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 1))); then
+    echo "run-tests.sh needs bash 5.1 or newer (wait -n -p)" >&2
+    exit 2
+fi
+
+jobs=1
+timeout_s=${RORTHOX_TEST_TIMEOUT:-900}
+list=no
+tests=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -j) [ $# -ge 2 ] || usage; jobs=$2; shift 2 ;;
+        -j*) jobs=${1#-j}; shift ;;
+        --timeout) [ $# -ge 2 ] || usage; timeout_s=$2; shift 2 ;;
+        --timeout=*) timeout_s=${1#--timeout=}; shift ;;
+        --list) list=yes; shift ;;
+        --) shift; tests+=("$@"); break ;;
+        -*) echo "unknown option: $1" >&2; usage ;;
+        *) tests+=("$1"); shift ;;
+    esac
+done
+[[ $jobs =~ ^[1-9][0-9]{0,3}$ ]] || { echo "-j needs a number from 1 to 9999, not '$jobs'" >&2; exit 2; }
+[[ $timeout_s =~ ^[1-9][0-9]{0,6}$ ]] || { echo "--timeout needs a number of seconds, not '$timeout_s'" >&2; exit 2; }
+if [ ${#tests[@]} -eq 0 ]; then
+    tests=(scripts/smoke.sh)
+    for t in scripts/tests/*.sh; do
+        [ -e "$t" ] && tests+=("$t")
+    done
+fi
+for t in "${tests[@]}"; do
+    [ -f "$t" ] || { echo "no such test: $t" >&2; exit 2; }
+done
+if [ "$list" = yes ]; then
+    printf '%s\n' "${tests[@]}"
+    exit 0
+fi
 
 if [ -n "${RORTHOX_TEST_ROOT:-}" ]; then runs="$RORTHOX_TEST_ROOT/runs"; else runs=build/tests/runs; fi
 mkdir -p "$runs" || exit 2
@@ -27,16 +83,19 @@ run_dir="$(mktemp -d "$runs/run.XXXXXX")" || exit 2
 # Unix socket paths are short (108 bytes), so the temporary directories stay on a short absolute path.
 case "${TMPDIR:-}" in /*) tmp_base="$TMPDIR" ;; *) tmp_base=/tmp ;; esac
 run_tmp="$(mktemp -d "$tmp_base/rx.XXXXXX")" || exit 2
-trap 'rm -rf "$run_tmp"; [ -n "${test_logs:-}" ] && rm -rf "$test_logs"; : > "$run_dir/finished"' EXIT
-
-# CI keeps a copy of each test's combined output while tee streams it to the log.
-if [ "${GITHUB_ACTIONS:-}" = true ]; then
-    test_logs="$(mktemp -d "$run_tmp/logs.XXXXXX")"
-fi
+ticker=
+# A signal only marks the run as interrupted: the main loop then stops every running test, and the
+# run directory is marked finished only after that.
+cancel=
+trap 'cancel=TERM' TERM
+trap 'cancel=INT' INT
+trap 'cancel=HUP' HUP
+trap '[ -n "$ticker" ] && kill "$ticker" 2> /dev/null; rm -rf "$run_tmp"; : > "$run_dir/finished"' EXIT
+grace=5
 
 annotate() {
     local title="$1" log="$2" status="$3" message='' line count=0
-    local details="$test_logs/details" escaped overflow="${4:-}"
+    local details="$run_tmp/details" escaped overflow="${4:-}"
     if [ "$overflow" = overflow ]; then
         cp "$log" "$details"
     else
@@ -44,7 +103,7 @@ annotate() {
     fi
     if [ ! -s "$details" ] && [ "$overflow" != overflow ]; then
         tail -n 20 "$log" > "$details"
-        # The saved output may end mid-line even though the live stream was separated.
+        # The saved output may end mid-line.
         if [ -s "$details" ] && [ "$(tail -c1 "$details" | wc -l)" -eq 0 ]; then
             printf '\n' >> "$details"
         fi
@@ -74,68 +133,186 @@ annotate() {
     printf '::error title=%s::%s\n' "$title" "$escaped"
 }
 
-if [ $# -gt 0 ]; then
-    tests=("$@")
-else
-    tests=(scripts/smoke.sh)
-    for t in scripts/tests/*.sh; do
-        [ -e "$t" ] && tests+=("$t")
+# A test's name as the runner prints it: one line, whatever the file is called.
+one_line() {
+    local s="${1//$'\r'/?}"
+    printf '%s' "${s//$'\n'/?}"
+}
+
+# replay <name> <file>: print a test's output, "[<name>] " in front of every line and after every
+# carriage return that doesn't end a line (a CI log also starts a line there). NUL bytes are dropped;
+# output.log keeps them.
+replay() {
+    local LC_ALL=C prefix line cr
+    prefix="[$(one_line "$1")] "
+    cr=$'\r'"$prefix"
+    while IFS= read -r line || [ -n "$line" ]; do
+        line=${line%$'\r'}
+        printf '%s%s\n' "$prefix" "${line//$'\r'/"$cr"}"
+    done < "$2"
+}
+
+# leftovers <session> <test tmp>: what still runs in the test's session, or outside it with the
+# test's TMPDIR in its command line (QEMU's sockets and pipes are there).
+leftovers() {
+    { pgrep -s "$1"; pgrep -f -- "$2/"; } 2> /dev/null | sort -u
+}
+
+# stop_test <session> <test tmp>: TERM to everything the test left, KILL to what is still there
+# $grace seconds later. Prints how many processes were left.
+stop_test() {
+    local sid="$1" dir="$2" left i
+    left=$(leftovers "$sid" "$dir" | wc -l)
+    [ "$left" -gt 0 ] || { echo 0; return 0; }
+    pkill -TERM -s "$sid" 2> /dev/null
+    pkill -TERM -f -- "$dir/" 2> /dev/null
+    for ((i = 0; i < grace * 10; i++)); do
+        [ -n "$(leftovers "$sid" "$dir")" ] || { echo "$left"; return 0; }
+        sleep 0.1
     done
-fi
+    pkill -KILL -s "$sid" 2> /dev/null
+    pkill -KILL -f -- "$dir/" 2> /dev/null
+    for ((i = 0; i < 50; i++)); do
+        [ -n "$(leftovers "$sid" "$dir")" ] || break
+        sleep 0.1
+    done
+    echo "$left"
+}
+
+# ours <pid>: the pid is still a test this runner started (its child and a session leader), not a
+# finished one whose number came back.
+ours() {
+    local stat rest
+    { read -r stat < "/proc/$1/stat"; } 2> /dev/null || return 1
+    read -r -a rest <<< "${stat##*) }"
+    [ "${rest[1]}" = "$$" ] && [ "${rest[3]}" = "$1" ]
+}
 
 passed=()
 failed=()
 skipped=()
-n=0
-for t in "${tests[@]}"; do
-    echo "=== $t"
-    n=$((n + 1))
-    root="$run_dir/$(printf '%03d' "$n")-$(basename "$t" .sh)"
-    test_tmp="$run_tmp/$n"
-    mkdir -p "$root" "$test_tmp"
-    start=${EPOCHREALTIME/[.,]/}   # microseconds
-    if [ "${GITHUB_ACTIONS:-}" = true ]; then
-        log="$test_logs/test-${#passed[@]}-${#failed[@]}-${#skipped[@]}"
-        if RORTHOX_TEST_ROOT="$root" TMPDIR="$test_tmp" bash "$t" 2>&1 | tee "$log"; then
-            status=0
-        else
-            status=${PIPESTATUS[0]}
-        fi
-        # Keep the next header or annotation separate from unterminated test output.
-        if [ -s "$log" ] && [ "$(tail -c1 "$log" | wc -l)" -eq 0 ]; then
-            printf '\n'
-        fi
-    else
-        if RORTHOX_TEST_ROOT="$root" TMPDIR="$test_tmp" bash "$t"; then status=0; else status=$?; fi
-    fi
-    rm -rf "$test_tmp"
-    tenths=$(((${EPOCHREALTIME/[.,]/} - start) / 100000))
-    echo "$((tenths / 10)).$((tenths % 10)) $status $t" >> "$run_dir/durations.txt"
-    case "$status" in
-        0) passed+=("$t") ;;
-        77) skipped+=("$t") ;;
+failed_order=()
+declare -a statuses=() logs=() starts=() deadlines=() stopping=() sessions=()
+declare -A active=()   # session (= the pid the runner started) -> index in tests
+next=0
+
+start_test() {
+    local i="$1" t="${tests[$1]}" root
+    root="$run_dir/$(printf '%03d' $((i + 1)))-$(basename "$t" .sh)"
+    mkdir -p "$root" "$run_tmp/$((i + 1))"
+    logs[i]="$root/output.log"
+    starts[i]=${EPOCHREALTIME/[.,]/}   # microseconds
+    deadlines[i]=$((SECONDS + timeout_s))
+    # A background job of a script is never a process group leader, so setsid runs bash in place:
+    # $! is the session id. That shell runs the test and exits with its status (it only dies of a
+    # signal itself on KILL); its own messages, such as "Killed" for the test, go nowhere.
+    RORTHOX_TEST_ROOT="$root" TMPDIR="$run_tmp/$((i + 1))" \
+        setsid bash -c 'trap : TERM HUP; bash "$1" 2>&1; exit $?' run-test "$t" \
+        > "${logs[i]}" 2> /dev/null < /dev/null &
+    sessions[i]=$!
+    active[$!]=$i
+}
+
+# finish_test <index> <exit status>: stop what the test left, print its output and record it.
+finish_test() {
+    local i="$1" status="$2" t="${tests[$1]}" left tenths
+    left=$(stop_test "${sessions[i]}" "$run_tmp/$((i + 1))")
+    unset "active[${sessions[i]}]"
+    rm -rf "${run_tmp:?}/$((i + 1))"
+    case "${stopping[i]:-}" in
+        timeout)
+            status=124
+            printf '\nrun-tests: stopped after %s seconds (--timeout)\n' "$timeout_s" >> "${logs[i]}"
+            ;;
+        cancel)
+            # Interrupted is never a pass or a skip.
+            if [ "$status" -eq 0 ] || [ "$status" -eq 77 ]; then status=130; fi
+            printf '\nrun-tests: stopped, the run was interrupted\n' >> "${logs[i]}"
+            ;;
         *)
-            failed+=("$t")
-            if [ "${GITHUB_ACTIONS:-}" = true ]; then
-                if [ "${#failed[@]}" -le 9 ]; then
-                    annotate "$t" "$log" "$status"
-                elif [ "${#failed[@]}" -eq 10 ]; then
-                    # Reserve the last annotation for the full overflow list.
-                    :
-                fi
+            # A test stops what it starts; what it leaves running makes it fail.
+            if [ "$left" -gt 0 ]; then
+                if [ "$status" -eq 0 ] || [ "$status" -eq 77 ]; then status=1; fi
+                printf '\nrun-tests: stopped %s process(es) the test left running\n' "$left" >> "${logs[i]}"
             fi
             ;;
     esac
+    statuses[i]=$status
+    tenths=$(((${EPOCHREALTIME/[.,]/} - starts[i]) / 100000))
+    echo "$((tenths / 10)).$((tenths % 10)) $status $t" >> "$run_dir/durations.txt"
+    echo "=== $(one_line "$t")"
+    replay "$(basename "$t" .sh)" "${logs[i]}"
+    case "$status" in
+        0) ;;
+        77) ;;
+        *)
+            nfailed=$((nfailed + 1))
+            failed_order+=("$t")
+            # Up to 9 annotations; the last one is kept for the full overflow list.
+            if [ "${GITHUB_ACTIONS:-}" = true ] && [ "$nfailed" -le 9 ]; then
+                annotate "$t" "${logs[i]}" "$status"
+            fi
+            ;;
+    esac
+}
+
+nfailed=0
+while :; do
+    while [ -z "$cancel" ] && [ "${#active[@]}" -lt "$jobs" ] && [ "$next" -lt "${#tests[@]}" ]; do
+        start_test "$next"
+        next=$((next + 1))
+    done
+    [ "${#active[@]}" -gt 0 ] || break
+    # Out of time or interrupted: TERM to the test's whole session, KILL $grace seconds later.
+    for sid in "${!active[@]}"; do
+        i=${active[$sid]}
+        if [ -z "${stopping[i]:-}" ] && { [ -n "$cancel" ] || [ "$SECONDS" -ge "${deadlines[i]}" ]; }; then
+            if [ -n "$cancel" ]; then stopping[i]=cancel; else stopping[i]=timeout; fi
+            pkill -TERM -s "$sid" 2> /dev/null
+            deadlines[i]=$((SECONDS + grace))
+        elif [ -n "${stopping[i]:-}" ] && [ "$SECONDS" -ge "${deadlines[i]}" ]; then
+            pkill -KILL -s "$sid" 2> /dev/null
+        fi
+    done
+    # Wake up at least once a second for the time limits; a signal ends the wait at once.
+    [ -n "$ticker" ] || { sleep 1 & ticker=$!; }
+    done_pid=
+    wait -n -p done_pid "$ticker" "${!active[@]}" 2> /dev/null
+    status=$?
+    if [ -z "${done_pid:-}" ]; then
+        :
+    elif [ "$done_pid" = "$ticker" ]; then
+        ticker=
+    elif [ -n "${active[$done_pid]:-}" ]; then
+        finish_test "${active[$done_pid]}" "$status"
+    fi
+    # bash drops a job from its job list once it has reported it (e.g. as killed); wait <pid> still
+    # knows its status.
+    for sid in "${!active[@]}"; do
+        ours "$sid" && continue
+        wait "$sid" 2> /dev/null
+        finish_test "${active[$sid]}" "$?"
+    done
 done
 
-if [ "${GITHUB_ACTIONS:-}" = true ] && [ "${#failed[@]}" -ge 10 ]; then
-    printf '%s more failing tests:\n' "$((${#failed[@]} - 9))" > "$test_logs/overflow"
-    printf '%s\n' "${failed[@]:9}" >> "$test_logs/overflow"
-    annotate 'Remaining failed tests' "$test_logs/overflow" 1 overflow
+for ((i = 0; i < ${#tests[@]}; i++)); do
+    case "${statuses[i]:-}" in
+        '') ;;
+        0) passed+=("${tests[i]}") ;;
+        77) skipped+=("${tests[i]}") ;;
+        *) failed+=("${tests[i]}") ;;
+    esac
+done
+
+if [ "${GITHUB_ACTIONS:-}" = true ] && [ "$nfailed" -ge 10 ]; then
+    printf '%s more failing tests:\n' "$((nfailed - 9))" > "$run_tmp/overflow"
+    printf '%s\n' "${failed_order[@]:9}" >> "$run_tmp/overflow"
+    annotate 'Remaining failed tests' "$run_tmp/overflow" 1 overflow
 fi
 
+[ -z "$cancel" ] || echo "=== interrupted by SIG$cancel: $((${#tests[@]} - next)) test(s) not started"
 echo "=== ${#passed[@]} passed, ${#failed[@]} failed, ${#skipped[@]} skipped"
 echo "=== output in $run_dir"
-for t in "${failed[@]}"; do echo "FAILED: $t"; done
-for t in "${skipped[@]}"; do echo "SKIPPED: $t"; done
-[ ${#failed[@]} -eq 0 ]
+for t in "${failed[@]}"; do echo "FAILED: $(one_line "$t")"; done
+for t in "${skipped[@]}"; do echo "SKIPPED: $(one_line "$t")"; done
+[ ${#failed[@]} -eq 0 ] && [ -z "$cancel" ]

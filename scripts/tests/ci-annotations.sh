@@ -4,6 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+# The runners below are not the CI job's: keep them away from its summary.
+export GITHUB_STEP_SUMMARY="$tmp/summary.md"
 runner="$PWD/scripts/run-tests.sh"
 printf '#!/usr/bin/env bash\necho pass\n' > "$tmp/pass.sh"
 printf '#!/usr/bin/env bash\necho skip\nexit 77\n' > "$tmp/skip.sh"
@@ -51,11 +53,11 @@ grep -Fx -- "::error title=$tmp/no-newline.sh::crash-no-newline%0Aexit status 5"
 grep -Fx -- "::error title=$tmp/okfail.sh::  ok   no FAIL line%0Agave-up%0Aexit status 2" "$tmp/ci.log" > /dev/null || {
     echo 'FAIL: passing line masked failure'; exit 1;
 }
-# Test output must stream in CI, not just survive in the temporary annotation log.
+# Test output must show in the CI log (each line after its test's name), not just in the annotations.
 grep -Fx -- '=== '$tmp'/pass.sh' "$tmp/ci.log" > /dev/null &&
-grep -Fx -- 'pass' "$tmp/ci.log" > /dev/null &&
-grep -Fx -- 'end' "$tmp/ci.log" > /dev/null &&
-grep -Fx -- '  FAIL extra' "$tmp/ci.log" > /dev/null || {
+grep -Fx -- '[pass] pass' "$tmp/ci.log" > /dev/null &&
+grep -Fx -- '[fail:a,b] end' "$tmp/ci.log" > /dev/null &&
+grep -Fx -- '[extra3]   FAIL extra' "$tmp/ci.log" > /dev/null || {
     echo 'FAIL: live output missing'; exit 1;
 }
 grep -E '^::error .*more lines' "$tmp/ci.log" | grep -q '5 more lines' || {
@@ -98,8 +100,9 @@ for last in tail-pass tail-fail tail-nul; do
         status=$?
     fi
     [ "$status" -eq 1 ] || { echo "FAIL: overflow exit ($last): $status"; exit 1; }
-    awk '/^::error title=Remaining failed tests::/ { if (previous != "tail-no-nl" && previous != "tail-no-nl" sprintf("%c", 0)) exit 1; count++ } { previous=$0 } END { if (count != 1) exit 1 }' "$tmp/$last.log" || {
+    awk -v p="[$last] tail-no-nl" '/^::error title=Remaining failed tests::/ { if (previous != p) exit 1; count++ } { previous=$0 } END { if (count != 1) exit 1 }' "$tmp/$last.log" || {
         echo "FAIL: overflow glued to last output ($last)"; exit 1;
     }
 done
+[ ! -e "$tmp/summary.md" ] || { echo 'FAIL: a nested runner wrote the job summary'; exit 1; }
 echo 'ci-annotations: all checks passed'
