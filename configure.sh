@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Builds the i686-elf cross toolchain (binutils + GCC, C only) that RorthOX needs,
+# Builds an i686-elf or x86_64-elf cross toolchain (binutils + GCC, C only),
 # following https://wiki.osdev.org/GCC_Cross-Compiler.
 #
 # Install the system packages first (this is the only step that needs sudo):
@@ -14,12 +14,17 @@
 # Then run (no sudo):   ./configure.sh
 # And add the toolchain to your PATH:   export PATH="$HOME/opt/cross/bin:$PATH"
 #
-# Environment overrides: PREFIX (install dir), SRC_DIR (download/build dir),
-# JOBS (parallel make jobs), GNU_MIRROR, FORCE=1 (rebuild even if installed).
+# Environment overrides: TARGET (i686-elf or x86_64-elf), PREFIX (install dir),
+# SRC_DIR (download/build parent), JOBS (parallel make jobs), GNU_MIRROR,
+# FORCE=1 (rebuild even if installed).
 
 set -euo pipefail
 
-TARGET=i686-elf
+TARGET="${TARGET:-i686-elf}"
+case "$TARGET" in
+    i686-elf|x86_64-elf) ;;
+    *) printf 'error: unsupported target: %s\n' "$TARGET" >&2; exit 1 ;;
+esac
 BINUTILS_VERSION=2.42
 GCC_VERSION=13.2.0
 # sha256 of the official tarballs (GPG signatures verified against gnu-keyring.gpg).
@@ -27,7 +32,7 @@ BINUTILS_SHA256=f6e4d41fd5fc778b06b7891457b3620da5ecea1006c6a4a41ae998109f85a800
 GCC_SHA256=e275e76442a6067341a27f04c5c6b83d8613144004c0413528863dc6b5c743da
 
 PREFIX="${PREFIX:-$HOME/opt/cross}"
-SRC_DIR="${SRC_DIR:-$HOME/src/rorthox-toolchain}"
+SRC_DIR="${SRC_DIR:-$HOME/src/rorthox-toolchain}/$TARGET"
 JOBS="${JOBS:-$(nproc)}"
 GNU_MIRROR="${GNU_MIRROR:-https://ftp.gnu.org/gnu}"
 
@@ -98,13 +103,15 @@ main() {
     mkdir -p "$SRC_DIR" "$PREFIX"
     cd "$SRC_DIR"
 
-    if [ "${FORCE:-0}" != 1 ] && "$TARGET-ld" --version 2>/dev/null | grep -q " $BINUTILS_VERSION\$"; then
+    if [ "${FORCE:-0}" != 1 ] && [ -x "$PREFIX/bin/$TARGET-ld" ] &&
+       "$PREFIX/bin/$TARGET-ld" --version 2>/dev/null | head -n1 | grep -q " $BINUTILS_VERSION\$"; then
         log "binutils $BINUTILS_VERSION already installed in $PREFIX (FORCE=1 to rebuild)"
     else
         build_binutils
     fi
 
-    if [ "${FORCE:-0}" != 1 ] && [ "$("$TARGET-gcc" -dumpversion 2>/dev/null)" = "$GCC_VERSION" ]; then
+    if [ "${FORCE:-0}" != 1 ] && [ -x "$PREFIX/bin/$TARGET-gcc" ] &&
+       [ "$("$PREFIX/bin/$TARGET-gcc" -dumpfullversion -dumpversion 2>/dev/null)" = "$GCC_VERSION" ]; then
         log "GCC $GCC_VERSION already installed in $PREFIX (FORCE=1 to rebuild)"
     else
         build_gcc
