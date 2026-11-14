@@ -145,6 +145,10 @@ def main():
         raw_first = r.log[i - 1:i + 1] == ["c", "p8"]
         del r.log[i]
         after = r.reg("eip")
+        try:                         # the reply is little-endian hex, as in Rsp.reg
+            before = "%#x" % int.from_bytes(bytes.fromhex(before[:8]), "little")
+        except ValueError:
+            before = repr(before)
         print("  sync: p eip before g %s, after g %#x" % (before, after))
         res.add("sync_stop", after == task_return, "stopped at %#x" % after)
         res.add("sync_raw_p_first", raw_first, "packets around it: %s" % r.log[max(0, i - 3):i + 1])
