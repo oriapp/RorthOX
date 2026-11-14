@@ -161,6 +161,14 @@ for i in "${!cpuset_args[@]}"; do
     if [ "${cpuset_args[i]}" = --cpuset-cpus ] && [ "${cpuset_args[i+1]:-}" = "$cpu" ]; then cpuset=1; fi
 done
 [ "$cpuset" = 1 ] || fail 'Docker container cpuset missing'
+# The format is valid but a second CPU must be rejected under a one-CPU mask.
+other=$(getconf _NPROCESSORS_CONF)
+if ( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/cpuset-outside" \
+     RORTHOX_IMAGE_REF="$digest" RORTHOX_CPUSET="$other"
+     bash ci/run.sh true ) >"$tmp/cpuset-error" 2>&1; then
+    fail 'outside-affinity CPU accepted'
+fi
+grep -q 'outside allowed affinity' "$tmp/cpuset-error" || fail 'outside-affinity error missing'
 if ( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/cpuset-bad" RORTHOX_IMAGE_REF="$digest" RORTHOX_CPUSET=invalid
      bash ci/run.sh true ) >/dev/null 2>&1; then fail 'invalid cpuset accepted'; fi
 # Changing an image input must warn for the locally pinned digest, without blocking it.

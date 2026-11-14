@@ -2,6 +2,7 @@
 """Summarize the nightly accelerator matrix and three serial TCG repetitions."""
 import importlib.util
 import pathlib
+import shutil
 import subprocess
 import sys
 
@@ -20,6 +21,8 @@ def main(args):
     expected_file.parent.mkdir(parents=True, exist_ok=True)
     expected_file.write_text('\n'.join(expected) + '\n')
     prepared = pathlib.Path('build/ci/nightly/parity')
+    if prepared.exists():
+        shutil.rmtree(prepared)
     for accel in ('tcg', 'kvm'):
         for number in range(1, 5):
             target = prepared / accel / f'results-{number}'

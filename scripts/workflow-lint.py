@@ -15,6 +15,21 @@ def require(ok, message):
         raise Invalid(message)
 
 
+# Apply the same decoded YAML credential policy to both workflows.
+CREDENTIAL = re.compile(r'\bsecrets\b|(?<![./])\bgithub\b'
+                        r'(?!-output\b|\s*\.\s*(?:event_name|event\.before|event\.pull_request\.base\.sha|repository|ref|sha|workflow)\b)', re.I)
+
+
+def contains_credential(value):
+    if isinstance(value, str):
+        return bool(CREDENTIAL.search(value))
+    if isinstance(value, dict):
+        return any(contains_credential(k) or contains_credential(v) for k, v in value.items())
+    if isinstance(value, list):
+        return any(contains_credential(item) for item in value)
+    return False
+
+
 def lint(text):
     require(re.search(r'^permissions: \{\}$', text, re.M), 'top-level permissions must be empty')
     require(not re.search(r'^\s*(workflow_run|pull_request_target):', text, re.M),
@@ -172,12 +187,18 @@ def lint(text):
     choose_run = '''if [ "$EVENT" = pull_request ]; then before=$BASE; else before=$BEFORE; fi
 python3 -B scripts/select-tests.py --event "$EVENT" --ref "$REF" --base "$before" --head "$HEAD" --repository "$REPOSITORY" --branch "${REF#refs/heads/}" --github-output "$GITHUB_OUTPUT"
 '''
-    choose_env = {'EVENT', 'REF', 'BEFORE', 'BASE', 'HEAD', 'REPOSITORY', 'GH_TOKEN'}
+    choose_env = {'EVENT': '${{ github.event_name }}',
+                  'REF': '${{ github.ref }}',
+                  'BEFORE': '${{ github.event.before }}',
+                  'BASE': '${{ github.event.pull_request.base.sha }}',
+                  'HEAD': '${{ github.sha }}',
+                  'REPOSITORY': '${{ github.repository }}',
+                  'GH_TOKEN': "${{ github.event_name == 'push' && github.token || '' }}"}
     if yaml is not None:
         steps = parsed['select']['steps']
         require(len(steps) == 2 and steps[1].get('name') == 'Choose tests' and
                 steps[1].get('run') == choose_run and
-                set(steps[1].get('env', {})) == choose_env,
+                steps[1].get('env') == choose_env,
                 'selector command and environment must be pinned')
     else:
         pinned_step = re.search(r'^      - name: Choose tests\n(.*?)(?=^      - |\Z)', select, re.M | re.S)
@@ -357,19 +378,7 @@ bash ci/kvm-diagnostics.sh host "$before" "$after" || { echo '::warning title=KV
     # github.ref and other non-secret fields are allowed; whole-context exports are not.
     scope = re.split(r'^jobs:[ \t]*$', text, maxsplit=1, flags=re.M)[0]
     outside = scope + ''.join(body for name, body in jobs.items() if name != 'image')
-    credential = re.compile(r'\bsecrets\b|\bgithub\b'
-                            r'(?!-output\b|\s*\.\s*(?:event_name|event\.before|event\.pull_request\.base\.sha|repository|ref|sha|workflow)\b)', re.I)
-    # YAML double-quoted scalars may decode escapes into credential expressions.
-    # Check parsed keys as well as values (including sequences and nested mappings).
-    def contains_credential(value):
-        if isinstance(value, str):
-            return bool(credential.search(value))
-        if isinstance(value, dict):
-            return any(contains_credential(k) or contains_credential(v) for k, v in value.items())
-        if isinstance(value, list):
-            return any(contains_credential(item) for item in value)
-        return False
-
+    # Check decoded YAML keys as well as values (including nested mappings).
     if yaml is None:
         # No parser means decoded YAML escapes cannot be inspected safely.
         require(not re.search(r'\$\{\{[^}]*\\', outside),
@@ -377,7 +386,7 @@ bash ci/kvm-diagnostics.sh host "$before" "$after" || { echo '::warning title=KV
     token_env = "GH_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}"
     outside = outside.replace(token_env, '')
     require(select.count(token_env) == 1 and
-            not credential.search(outside) and
+            not CREDENTIAL.search(outside) and
             (yaml is None or not contains_credential({**{k: v for k, v in document.items() if k != 'jobs'},
                                                       'jobs': {k: ({**v, 'steps': [{**step, 'env': {k2: v2 for k2, v2 in step.get('env', {}).items()
                             if not (k == 'select' and step.get('name') == 'Choose tests' and k2 == 'GH_TOKEN')} }
@@ -419,6 +428,8 @@ def lint_nightly(text):
         raise Invalid(f'invalid nightly YAML: {error}') from error
     require(isinstance(doc, dict) and doc.get('name') == 'nightly' and doc.get('permissions') == {},
             'nightly requires empty top-level permissions')
+    require('env' not in doc and 'defaults' not in doc and not contains_credential(doc),
+            'nightly workflow must not set environment, defaults or credentials')
     trigger = doc.get('on', doc.get(True))  # PyYAML YAML 1.1 treats "on" as a boolean key.
     require(isinstance(trigger, dict) and set(trigger) == {'schedule', 'workflow_dispatch', 'push'} and
             len(trigger['schedule']) == 1 and re.fullmatch(r'[0-9*/ ,\-]+', trigger['schedule'][0]['cron']) and
@@ -437,9 +448,11 @@ def lint_nightly(text):
             'nightly must have exactly the read-only producer, axes and aggregate')
     require(all(job.get('permissions') == {'contents': 'read'} and
                 'continue-on-error' not in job and 'container' not in job and 'services' not in job and
+                'env' not in job and 'defaults' not in job and
                 isinstance(job.get('steps'), list) and job.get('timeout-minutes') for job in jobs.values()),
             'nightly jobs must be required with read-only permissions')
-    require(jobs['build'].get('needs') == 'image-prep' and
+    require(all('if' not in jobs[name] for name in ('image-prep', 'build', 'axis', 'flake')) and
+            jobs['build'].get('needs') == 'image-prep' and
             jobs['axis'].get('needs') == ['image-prep', 'build'] and
             jobs['flake'].get('needs') == ['image-prep', 'build'] and
             jobs['aggregate'].get('needs') == ['image-prep', 'build', 'axis', 'flake'] and
@@ -451,6 +464,13 @@ def lint_nightly(text):
             '--fixture-base' not in text and not re.search(r'(?i)\b(?:retry|retries)\b', text),
             'nightly forbids untrusted triggers, fixture bases and retries')
     uses = []
+    allowed_sudo = [
+        'echo \'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"\' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null',
+        'sudo udevadm control --reload-rules',
+        'sudo udevadm trigger --name-match=kvm',
+        'sudo udevadm settle --timeout=30',
+    ]
+    sudo_lines = []
     for name, job in jobs.items():
         for step in job['steps']:
             require(isinstance(step, dict) and 'continue-on-error' not in step,
@@ -460,15 +480,42 @@ def lint_nightly(text):
                 if step['uses'].startswith('actions/checkout@'):
                     require(step.get('with', {}).get('persist-credentials') is False,
                             'nightly checkout must not persist credentials')
+            allowed_accel = {'Build once': 'tcg', 'Test full shard': '${{ matrix.accel }}',
+                             'Three serial TCG runs on one CPU': 'tcg'}
+            env = step.get('env', {})
+            require(isinstance(env, dict) and
+                    'RORTHOX_KVM_SETUP_FAILED' not in env and
+                    ('RORTHOX_ACCEL' not in env or
+                     env['RORTHOX_ACCEL'] == allowed_accel.get(step.get('name'))),
+                    'nightly accelerator and setup marker must stay in their steps')
+            require(not any(re.search(r'\b(?:RORTHOX_ACCEL|RORTHOX_KVM_SETUP_FAILED)\b',
+                                      str(step.get(field, '')))
+                            for field in ('shell', 'with')),
+                    'nightly shell or action must not override accelerator or KVM setup')
+            if step.get('name') != 'Enable KVM device':
+                require('RORTHOX_KVM_SETUP_FAILED' not in str(step.get('run', '')),
+                        'nightly KVM setup marker belongs only in device setup')
+            require(not re.search(r'\b(?:export\s+)?RORTHOX_ACCEL\s*=|\bunset\s+RORTHOX_ACCEL\b',
+                                  str(step.get('run', ''))),
+                    'nightly accelerator must not be overridden')
+            require(not contains_credential(step.get('with', {})) and
+                    not any(key in step.get('with', {}) for key in ('run-id', 'github-token')),
+                    'nightly artifact downloads must be same-run')
             for field in ('run', 'shell', 'env', 'with'):
                 value = str(step.get(field, ''))
-                require('secrets.' not in value and 'github.token' not in value and
-                        'packages: write' not in value and 'contents: write' not in value,
-                        'nightly must not receive credentials or publication grants')
+                require(not re.search(r'\bdocker\b', value, re.I) if field in ('run', 'shell') else True,
+                        'nightly Docker must be invoked through the container wrapper')
+                require('packages: write' not in value and 'contents: write' not in value,
+                        'nightly must not receive publication grants')
+                if field in ('run', 'shell'):
+                    sudo_lines.extend((name, line.strip()) for line in value.splitlines()
+                                      if re.search(r'\bsudo\b', line))
                 if field == 'run':
                     require('${{' not in value, 'nightly dispatch expressions belong in env')
             if 'run' in step:
                 require(step.get('shell', 'bash') == 'bash', 'nightly steps require bash with pipefail')
+    require(sudo_lines == [('axis', line) for line in allowed_sudo],
+            'nightly sudo must be confined to KVM setup')
     require(uses and all(re.fullmatch(r'actions/(checkout|download-artifact|upload-artifact)@[a-f0-9]{40}', str(action))
                          for action in uses) and
             all(text.count(f'uses: {action}') == uses.count(action) for action in set(uses)),
@@ -477,6 +524,22 @@ def lint_nightly(text):
         found = [s for s in jobs[job]['steps'] if s.get('name') == title]
         require(len(found) == 1, f'nightly missing {title}')
         return found[0]
+    kvm_run = '''if [ ! -c /dev/kvm ]; then
+  echo '::error title=KVM unavailable::No KVM character device on this runner'
+  exit 1
+fi
+echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+sudo udevadm control --reload-rules
+sudo udevadm trigger --name-match=kvm
+sudo udevadm settle --timeout=30
+if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+  echo '::error title=KVM unavailable::KVM device is not accessible'
+  exit 1
+fi
+'''
+    require(step('axis', 'Enable KVM device').get('run') == kvm_run and
+            step('axis', 'Enable KVM device').get('if') == "matrix.accel == 'kvm'",
+            'nightly KVM device setup must be pinned')
     require('ci/image-job.sh prepare' in step('image-prep', 'Fetch or build read-only image')['run'] and
             'ci/image-job.sh publish' not in text and
             './ci/run.sh make all iso' in step('build', 'Build once')['run'] and
@@ -507,7 +570,8 @@ def lint_nightly(text):
             'timing-refresh.py --current scripts/test-timings.json --out' in
             step('flake', 'Candidate timing weights')['run'],
             'nightly flake hunt must keep all three single-CPU serial results')
-    require('scripts/ci-nightly.py' in step('aggregate', 'Check parity and flake hunt')['run'] and
+    require(step('aggregate', 'Check parity and flake hunt').get('if') == '${{ !cancelled() }}' and
+            'scripts/ci-nightly.py' in step('aggregate', 'Check parity and flake hunt')['run'] and
             all(step('aggregate', 'Check parity and flake hunt')['env'][f'{name}_RESULT'] ==
                 '${{ needs.' + name.lower().replace('_', '-') + '.result }}'
                 for name in ('BUILD', 'AXIS', 'FLAKE')) and

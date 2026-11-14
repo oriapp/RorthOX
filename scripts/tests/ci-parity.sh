@@ -36,6 +36,9 @@ with tempfile.TemporaryDirectory(dir=sys.argv[2]) as work:
         assert (p.returncode == 0) == ok and needle in p.stdout and 'Traceback' not in p.stderr, (p.returncode, p.stdout, p.stderr)
         return p.stdout, out.read_text() if out.exists() else ''
     check(True, 'parity OK')
+    save(report(kvm, 2), 'tcg', [test('test-2')])
+    check(False, 'parity error')
+    save(report(kvm, 2), 'kvm', [test('test-2')])
     only = 'scripts/tests/boot-segments.sh'
     expected.write_text(expected.read_text() + only + '\n')
     save(report(tcg, 1), 'tcg', [test('test-1'), test(only)])

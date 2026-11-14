@@ -54,6 +54,8 @@ with tempfile.TemporaryDirectory() as temp:
         ('fallback', '          RORTHOX_ACCEL: ${{ matrix.accel }}', '          RORTHOX_ACCEL: auto'),
         ('no-kvm-fail', "        if: matrix.accel == 'kvm'", "        if: matrix.accel == 'tcg'"),
         ('not-single-cpu', '          export RORTHOX_CPUSET=$cpu', '          export CPU=$cpu'),
+        ('flake-accel-override', '          export RORTHOX_CPUSET=$cpu',
+         '          export RORTHOX_CPUSET=$cpu\n          export RORTHOX_ACCEL=auto'),
         ('not-serial', '-j 1 --results', '-j 2 --results'),
         ('not-three', '          for i in 1 2 3; do', '          for i in 1 2; do'),
         ('retry', '  flake:\n', '  flake:\n    # retries hide failures\n'),
@@ -64,6 +66,32 @@ with tempfile.TemporaryDirectory() as temp:
     for tag, old, new in nightly_cases:
         assert old in nightly, tag
         print('checking nightly', tag, flush=True)
+        run_nightly(nightly.replace(old, new, 1), False)
+    # Decoded YAML, inherited settings and host commands must obey the build lint policy.
+    extra_nightly = (
+        ('workflow-token', 'permissions: {}', 'permissions: {}\nenv:\n  T: ${{ github.token }}'),
+        ('job-token', '  flake:\n', '  flake:\n    env:\n      T: ${{ secrets.GITHUB_TOKEN }}\n'),
+        ('indexed-token', '          MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}',
+         '          T: ${{ github["token"] }}\n          MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}'),
+        ('whole-context', '          MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}',
+         '          T: ${{ toJSON(github) }}\n          MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}'),
+        ('decoded-token', '          MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}',
+         '          T: "${{ \\x67ithub.token }}"\n          MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}'),
+        ('workflow-shell', 'permissions: {}', 'permissions: {}\ndefaults:\n  run:\n    shell: env RORTHOX_ACCEL=auto bash -e {0}'),
+        ('job-shell', '  flake:\n', '  flake:\n    defaults:\n      run:\n        shell: env RORTHOX_KVM_SETUP_FAILED=1 bash -e {0}\n'),
+        ('job-marker', '  flake:\n', '  flake:\n    env:\n      RORTHOX_KVM_SETUP_FAILED: 1\n'),
+        ('download-run-id', '          name: nightly-production', '          name: nightly-production\n          run-id: 12'),
+        ('sudo-elsewhere', '          mkdir -p build/ci/nightly/flake',
+         '          sudo chmod 666 /var/run/docker.sock\n          mkdir -p build/ci/nightly/flake'),
+        ('docker-elsewhere', '          mkdir -p build/ci/nightly/flake',
+         '          docker run --privileged image true\n          mkdir -p build/ci/nightly/flake'),
+        ('flake-on-cancel', '  flake:\n    needs: [image-prep, build]',
+         '  flake:\n    if: always()\n    needs: [image-prep, build]'),
+        ('missing-aggregate-check', '      - name: Check parity and flake hunt\n        if: ${{ !cancelled() }}',
+         '      - name: Check parity and flake hunt'),
+    )
+    for tag, old, new in extra_nightly:
+        assert old in nightly, tag
         run_nightly(nightly.replace(old, new, 1), False)
     print('PASS nightly workflow and security fixtures', flush=True)
     # The required path must consume the image selected by the read-only producer.
@@ -97,6 +125,11 @@ with tempfile.TemporaryDirectory() as temp:
         mutated = text.replace(old, new, 1)
         print('checking', tag, flush=True)
         run(mutated, False)
+    # A YAML comment cannot pin the decoded selector token environment.
+    token = "          GH_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}"
+    assert token in text
+    run(text.replace(token, token.replace('          ', '          # ', 1) +
+                     '\n          GH_TOKEN: "${{ \\x67ithub.token }}"', 1), False)
     # Every security rule must reject a realistic change in both parser modes.
     expr = '${{ github.event.inputs.arg }}'
     build_run = 'run: |\n          ./ci/run.sh make all iso'

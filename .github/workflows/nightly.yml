@@ -240,6 +240,7 @@ jobs:
           [[ "$cpu" =~ ^[0-9]+$ ]] && taskset -c "$cpu" true
           export RORTHOX_CPUSET=$cpu
           printf 'revision=%s image=%s cpuset=%s allowed=%s\n' "$GITHUB_SHA" "$RORTHOX_IMAGE_ID" "$cpu" "$allowed" > build/ci/nightly/flake/metadata.txt
+          printf 'container_cpuset=%s\n' "$(./ci/run.sh cat /sys/fs/cgroup/cpuset.cpus.effective)" >> build/ci/nightly/flake/metadata.txt
           for i in 1 2 3; do
             result="build/tests/runs/flake-$i"
             if taskset -c "$cpu" ./ci/run.sh ./scripts/run-tests.sh -j 1 --results "$result"; then status=0; else status=$?; fi
@@ -287,6 +288,7 @@ jobs:
           name: nightly-flake
           path: ${{ runner.temp }}/flake
       - name: Check parity and flake hunt
+        if: ${{ !cancelled() }}
         env:
           IMAGE_RESULT: ${{ needs.image-prep.result }}
           BUILD_RESULT: ${{ needs.build.result }}
