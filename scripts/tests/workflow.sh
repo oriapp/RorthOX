@@ -44,7 +44,7 @@ with tempfile.TemporaryDirectory() as temp:
         run(mutated, False)
     edits = (
         ('missing-image-dependency', '    needs: image-prep', '    needs: build'),
-        ('missing-shard-image-dependency', '    needs: [image-prep, build]', '    needs: build'),
+        ('missing-shard-image-dependency', '    needs: [image-prep, build, select]', '    needs: build'),
         ('host-build', './ci/run.sh make all iso', 'make all iso'),
         ('host-test', './ci/run.sh ./scripts/run-tests.sh --shard', './scripts/run-tests.sh --shard'),
         ('missing-receive', 'bash ci/image-job.sh receive', 'echo ignored'),
@@ -136,7 +136,7 @@ with tempfile.TemporaryDirectory() as temp:
         print('checking', tag, flush=True)
         run(text.replace(old, new, 1), False)
     # Each payload targets one rule, not a second unrelated prohibition.
-    shard_run = '          ./ci/run.sh ./scripts/run-tests.sh --shard'
+    shard_run = '            ./ci/run.sh ./scripts/run-tests.sh --shard "$SHARD/4" -j 2 --results "build/tests/runs/shard-$SHARD"\n'
     cases = (
         ('host-unhandled-udev',
          'if [ -z "$failed" ]; then sudo udevadm settle --timeout=30 || failed=settle; fi',
@@ -152,8 +152,8 @@ with tempfile.TemporaryDirectory() as temp:
         ('shard-override', shard_run, '          export RORTHOX_ACCEL=tcg\n' + shard_run, 'must not override'),
         ('shard-inline-override', shard_run, '          RORTHOX_ACCEL=tcg ' + shard_run.strip() + '\n' + shard_run, 'must not override'),
         ('tcg-missing', '      - name: Test TCG-only boot cases', '      - name: Test TCG cases', 'TCG-only'),
-        ('tcg-accel', '      - name: Test TCG-only boot cases\n        if: ${{ !cancelled() && matrix.shard == 1 && steps.image-id.outcome == \'success\' }}\n        env:\n          RORTHOX_REQUIRE_ISO: \'1\'\n          RORTHOX_ACCEL: tcg',
-         '      - name: Test TCG-only boot cases\n        if: ${{ !cancelled() && matrix.shard == 1 && steps.image-id.outcome == \'success\' }}\n        env:\n          RORTHOX_REQUIRE_ISO: \'1\'\n          RORTHOX_ACCEL: auto', 'TCG-only'),
+        ('tcg-accel', "          RORTHOX_REQUIRE_ISO: '1'\n          RORTHOX_ACCEL: tcg",
+         "          RORTHOX_REQUIRE_ISO: '1'\n          RORTHOX_ACCEL: kvm", 'TCG-only'),
         ('host-duplicated', '      - name: Verify and test',
          '      - name: Enable the host KVM device if present\n        run: echo extra\n      - name: Verify and test', 'KVM device'),
         ('host-diagnostics', '          bash ci/kvm-diagnostics.sh host "$before" "$after"',
@@ -162,7 +162,7 @@ with tempfile.TemporaryDirectory() as temp:
         ('sudo-moved-step', '      - name: Verify and test',
          '      - name: Extra\n        run: sudo id\n      - name: Verify and test', 'KVM sudo'),
         ('tcg-missing-image-guard', " && steps.image-id.outcome == 'success'",
-         '', 'TCG-only'),
+         '', 'selection must gate'),
         ('tcg-results-location', 'build/tests/runs/shard-1/tcg-only',
          'build/tests/runs/tcg-only', 'TCG-only'),
         ('binary-tag', '          SHARD: ${{ matrix.shard }}', '          SHARD: ${{ matrix.shard }}\n          T: !!binary YWJj', 'YAML tags'),
@@ -204,6 +204,14 @@ with tempfile.TemporaryDirectory() as temp:
          '          RORTHOX_ACCEL: auto\n          T: "RORTHOX\\x5fKVM_SETUP_FAILED=x"\n', 'setup marker'),
         ('upload-root', '            build/tests/runs/shard-${{ matrix.shard }}/results.json',
          '            build/tests/runs/shard-${{ matrix.shard }}/results.json\n            build/tests/runs/sibling/results.json', 'upload paths'),
+        ('selector-permission', '  select:\n    runs-on:', '  select:\n    permissions:\n      contents: write\n    runs-on:', 'unexpected permissions'),
+        ('selector-credentials', '          fetch-depth: 0', '          fetch-depth: 0\n          token: ${{ secrets.GITHUB_TOKEN }}', 'credentials'),
+        ('selector-no-history', '          fetch-depth: 0', '          fetch-depth: 1', 'selector must compare'),
+        ('selector-unpinned', '      - name: Choose tests',
+         '      - uses: actions/checkout@v6\n      - name: Choose tests', 'actions must be'),
+        ('selector-no-output', '--github-output "$GITHUB_OUTPUT"', '--github-output /tmp/out', 'selector must compare'),
+        ('selector-no-gate', "    if: always() && needs.image-prep.result == 'success' && needs.build.result == 'success' && needs.select.outputs.mode != 'none'", '    if: always()', 'selection must gate'),
+        ('selector-no-result', 'SELECT_RESULT: ${{ needs.select.result }}', 'SELECT_RESULT: success', 'selection must gate'),
     )
     for tag, old, new, why in cases:
         assert text.count(old) == 1 or tag in ('shard-timeout',), tag
@@ -218,6 +226,11 @@ with tempfile.TemporaryDirectory() as temp:
                                text=True, capture_output=True)
             assert p.returncode and (why in p.stderr or (why == 'KVM host setup' and 'KVM sudo' in p.stderr)
                                      or path is not None and 'requires YAML parser' in p.stderr), (tag, p.stderr)
+    moved = '            if [ -z "$failed" ]; then sudo udevadm settle --timeout=30 || failed=settle; fi\n'
+    variant = text.replace(moved, '', 1).replace('      - name: Verify and test',
+        '      - name: Extra\n        run: |\n' + moved + '      - name: Verify and test', 1)
+    print('checking moved-allowed-sudo', flush=True)
+    run(variant, False)
     env = os.environ.copy()
     env['GITHUB_ACTIONS'] = 'true'
     env['PYTHONPATH'] = str(no_yaml)
@@ -269,6 +282,41 @@ with tempfile.TemporaryDirectory() as temp:
     assert '::notice title=Test shard 1 accelerator::tcg:' in summary
     print('PASS aggregate: four shards and TCG-only reported; Overall: success')
     check('failure', 'skipped', False)
+    def selected(mode, reason, tests, shard_status, expected, select_status='success'):
+        env = os.environ.copy()
+        env.update(SELECT_RESULT=select_status, SELECT_MODE=mode, SELECT_REASON=reason, SELECT_TESTS=tests)
+        p = subprocess.run(['python3', '-B', str(aggregate), str(results), 'success', shard_status],
+                           capture_output=True, text=True, env=env)
+        assert (p.returncode == 0) == expected, p.stdout + p.stderr
+        return p.stdout
+    text = selected('none', 'documentation-only change', '', 'skipped', True)
+    assert 'no tests selected: documentation-only change' in text
+    selected('none', 'documentation-only change', '', 'failure', False)
+    selected('none', 'forged reason', '', 'skipped', False)
+    selected('unexpected', 'unknown', '', 'skipped', False)
+    selected('none', 'documentation-only change', '', 'skipped', False, 'failure')
+    report = results / 'results-3/results.json'
+    empty = {'accelerator': 'tcg', 'accelerator_reason': 'no KVM', 'tests': []}
+    for i in range(1, 5):
+        (results / f'results-{i}/results.json').write_text(json.dumps(empty))
+    report1 = results / 'results-1/results.json'
+    report1.write_text(json.dumps({'accelerator': 'tcg', 'accelerator_reason': 'no KVM',
+                                   'tests': [{'name': 'scripts/smoke.sh', 'result': 'passed'},
+                                             {'name': 'scripts/tests/pic.sh', 'result': 'passed'}]}))
+    extra.unlink()
+    subset = 'scripts/smoke.sh scripts/tests/pic.sh'
+    selected('subset', 'one test plus smoke', subset, 'success', True)
+    selected('subset', 'one test plus smoke', subset + ' scripts/tests/heap.sh', 'success', False)
+    selected('subset', 'one test plus smoke', subset, 'skipped', False)
+    extra.write_text(json.dumps({'accelerator': 'tcg', 'accelerator_reason': 'forced',
+                                  'tests': [{'name': 'scripts/tests/boot-segments.sh', 'result': 'passed'}]}))
+    selected('subset', 'one test plus smoke', subset, 'success', False)
+    # Resume full-mode legacy fixtures.
+    extra.write_text(json.dumps({'accelerator': 'tcg', 'accelerator_reason': 'RORTHOX_ACCEL=tcg',
+                                  'tests': [{'name': 'scripts/tests/boot-segments.sh', 'result': 'passed'}]}))
+    for i in range(1, 5):
+        (results / f'results-{i}/results.json').write_text(json.dumps({'accelerator': 'tcg',
+            'accelerator_reason': 'no KVM', 'tests': [{'result': 'passed'}]}))
     report = results / 'results-3/results.json'
     report.write_text(json.dumps({'accelerator': 'kvm', 'accelerator_reason': 'RORTHOX_ACCEL=auto: KVM works', 'tests': [{'result': 'failed'}]}))
     check('success', 'success', False)

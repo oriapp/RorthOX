@@ -35,10 +35,10 @@ def lint(text):
             'checkout must not persist credentials')
     require(not re.search(r'^\s*(run-id|github-token):', text, re.M),
             'artifact downloads must be same-run')
-    parts = re.split(r'^  (build|test|image-prep|image|result):\s*$', text, flags=re.M)
-    require(len(parts) == 11 and parts[1::2] ==
-            ['build', 'test', 'image-prep', 'image', 'result'],
-            'expected five jobs')
+    parts = re.split(r'^  (select|build|test|image-prep|image|result):\s*$', text, flags=re.M)
+    require(len(parts) == 13 and parts[1::2] ==
+            ['select', 'build', 'test', 'image-prep', 'image', 'result'],
+            'expected six jobs')
     jobs = dict(zip(parts[1::2], parts[2::2]))
     gate = "github.event_name == 'push' && github.repository == 'oriapp/RorthOX' && (github.ref == 'refs/heads/features' || github.ref == 'refs/heads/main')"
     require(re.findall(r'^    if: (.+)$', jobs['image'], re.M) == [gate],
@@ -80,7 +80,7 @@ def lint(text):
         require(isinstance(document, dict) and isinstance(document.get('jobs'), dict),
                 'invalid workflow jobs')
         parsed = document['jobs']
-        require(set(parsed) == {'build', 'test', 'image-prep', 'image', 'result'},
+        require(set(parsed) == {'select', 'build', 'test', 'image-prep', 'image', 'result'},
                 'unexpected workflow job')
         for name, job in parsed.items():
             require(isinstance(job, dict) and isinstance(job.get('steps'), list),
@@ -90,7 +90,7 @@ def lint(text):
                         all('continue-on-error' not in step for step in job['steps']
                             if isinstance(step, dict) and step.get('name') == 'Check every job'),
                         'aggregate must not mask failure')
-            if name in ('build', 'test', 'image-prep'):
+            if name in ('select', 'build', 'test', 'image-prep'):
                 require('continue-on-error' not in job, 'required job must not mask failure')
                 require(all('continue-on-error' not in step for step in job['steps'] if isinstance(step, dict)),
                         'required step must not mask failure')
@@ -98,9 +98,9 @@ def lint(text):
                 require(isinstance(step, dict), 'invalid workflow step')
                 require('${{' not in str(step.get('run', '')), 'expression inside run')
         require(parsed['build'].get('needs') == 'image-prep' and
-                parsed['test'].get('needs') == ['image-prep', 'build'] and
+                parsed['test'].get('needs') == ['image-prep', 'build', 'select'] and
                 parsed['image'].get('needs') == ['image-prep', 'build', 'test'] and
-                parsed['result'].get('needs') == ['build', 'test'] and
+                parsed['result'].get('needs') == ['select', 'build', 'test'] and
                 parsed['test'].get('strategy', {}).get('fail-fast') is False,
                 'invalid job dependencies or shard strategy')
     # Only block-style, unaliased YAML keys are supported by the fallback lint.
@@ -149,22 +149,49 @@ def lint(text):
             if yaml is None:
                 require('\\' not in command, 'escaped run requires YAML parser')
     require(not any(re.search(r'^    continue-on-error:', jobs[name], re.M)
-                    for name in ('build', 'test', 'image-prep', 'result')),
+                    for name in ('select', 'build', 'test', 'image-prep', 'result')),
             'only publication may mask a job failure')
     require('    continue-on-error:' not in jobs['build'] and
             '    continue-on-error:' not in jobs['test'], 'required job must not mask failure')
     require('./ci/run.sh make all iso' in jobs['build'], 'production build must run in image')
     require('needs: image-prep' in jobs['build'] and
-            'needs: [image-prep, build]' in jobs['test'] and
+            'needs: [image-prep, build, select]' in jobs['test'] and
             re.search(r'^      fail-fast: false[ \t]*$', jobs['test'], re.M) and 'shard: [1, 2, 3, 4]' in jobs['test'],
             'required jobs must consume the image and four independent shards')
     require(not re.search(r'^    continue-on-error:', jobs['result'], re.M) and
             not re.search(r'^        continue-on-error:', jobs['result'].split('      - name: Check every job', 1)[-1], re.M),
             'aggregate must not mask failure')
-    require(re.search(r'^    needs: \[build, test\]$', jobs['result'], re.M) and re.search(r'^    if: always\(\)$', jobs['result'], re.M)
+    require(re.search(r'^    needs: \[select, build, test\]$', jobs['result'], re.M) and re.search(r'^    if: always\(\)$', jobs['result'], re.M)
             and 'scripts/ci-result.py' in jobs['result'], 'aggregate must run after failure')
     require('shell: bash # Fail the step when prepare fails' in jobs['image-prep'],
             'piped steps must use bash pipefail')
+    select = jobs['select']
+    require('persist-credentials: false' in select and 'fetch-depth: 0' in select and
+            'scripts/select-tests.py' in select and '--github-output "$GITHUB_OUTPUT"' in select and
+            '          BASE: ${{ github.event.pull_request.base.sha }}' in select and
+            '          BEFORE: ${{ github.event.before }}' in select and
+            all(f'{key}: ${{{{ steps.choose.outputs.{key} }}}}' in select for key in ('mode', 'reason', 'tests')) and
+            not re.search(r'\b(?:sudo|docker)\b', select) and 'secrets.' not in select,
+            'selector must compare revisions without credentials or host privileges')
+    require("    if: always() && needs.image-prep.result == 'success' && needs.build.result == 'success' && needs.select.outputs.mode != 'none'" in jobs['test'] and
+            'TEST_MODE: ${{ needs.select.outputs.mode }}' in jobs['test'] and
+            'SELECTED_TESTS: ${{ needs.select.outputs.tests }}' in jobs['test'] and
+            '"${selected[@]}"' in jobs['test'] and
+            "needs.select.outputs.mode != 'subset'" in jobs['test'] and
+            "steps.image-id.outcome == 'success'" in jobs['test'] and
+            "if: needs.build.result == 'success' && needs.select.outputs.mode != 'none'" in jobs['result'] and
+            all(f'SELECT_{key}: ${{{{ needs.select.outputs.{value} }}}}' in jobs['result']
+                for key, value in (('MODE', 'mode'), ('REASON', 'reason'), ('TESTS', 'tests'))) and
+            'SELECT_RESULT: ${{ needs.select.result }}' in jobs['result'],
+            'selection must gate shards and aggregate')
+    if yaml is not None:
+        require(parsed['test'].get('if') == "always() && needs.image-prep.result == 'success' && needs.build.result == 'success' && needs.select.outputs.mode != 'none'" and
+                parsed['select']['permissions'] == {'contents': 'read'} and
+                parsed['select'].get('needs') is None and
+                parsed['select']['steps'][0].get('with', {}).get('persist-credentials') is False and
+                parsed['select']['steps'][0].get('with', {}).get('fetch-depth') == 0 and
+                parsed['result']['steps'][-1].get('env', {}).get('SELECT_RESULT') == '${{ needs.select.result }}',
+                'invalid selection job or aggregate outputs')
     for name in ('build', 'test'):
         body = jobs[name]
         require('ci/image-job.sh receive' in body and 'ci/image-job.sh fetch' in body and
@@ -231,7 +258,7 @@ bash ci/kvm-diagnostics.sh host "$before" "$after" || { echo '::warning title=KV
     # Only the named TCG-only step may force an accelerator; parsed run strings
     # catch both inline assignments and exports hidden in a quoted YAML scalar.
     tcg_step = re.search(r'^      - name: Test TCG-only boot cases\n(.*?)(?=^      - |\Z)', test, re.M | re.S)
-    require(tcg_step is not None and "if: ${{ !cancelled() && matrix.shard == 1 && steps.image-id.outcome == 'success' }}" in tcg_step.group(1) and
+    require(tcg_step is not None and "if: ${{ !cancelled() && matrix.shard == 1 && steps.image-id.outcome == 'success' && (needs.select.outputs.mode != 'subset' || contains(format(' {0} ', needs.select.outputs.tests), ' scripts/tests/boot-segments.sh ')) }}" in tcg_step.group(1) and
             '          RORTHOX_ACCEL: tcg' in tcg_step.group(1) and
             'grep -lE ' in tcg_step.group(1) and
             'steps.image-id.outcome == \'success\'' in tcg_step.group(1) and
@@ -294,7 +321,7 @@ bash ci/kvm-diagnostics.sh host "$before" "$after" || { echo '::warning title=KV
     scope = re.split(r'^jobs:[ \t]*$', text, maxsplit=1, flags=re.M)[0]
     outside = scope + ''.join(body for name, body in jobs.items() if name != 'image')
     credential = re.compile(r'\bsecrets\b|\bgithub\b'
-                            r'(?!\s*\.\s*(?:event_name|repository|ref|sha|workflow)\b)', re.I)
+                            r'(?!-output\b|\s*\.\s*(?:event_name|event\.before|event\.pull_request\.base\.sha|repository|ref|sha|workflow)\b)', re.I)
     # YAML double-quoted scalars may decode escapes into credential expressions.
     # Check parsed keys as well as values (including sequences and nested mappings).
     def contains_credential(value):
@@ -333,7 +360,8 @@ bash ci/kvm-diagnostics.sh host "$before" "$after" || { echo '::warning title=KV
             'ci/image-job.sh fetch' in jobs['test'], 'missing verified image handoff')
     require('./ci/run.sh python3 -B scripts/ci-artifact.py extract' in jobs['test']
             and './ci/run.sh python3 -B scripts/ci-artifact.py create' in jobs['build'], 'build handoff must be verified')
-    require('RORTHOX_REQUIRE_ISO:' in jobs['test'] and './ci/run.sh ./scripts/run-tests.sh --shard' in jobs['test'],
+    require('RORTHOX_REQUIRE_ISO:' in jobs['test'] and
+            jobs['test'].count('./ci/run.sh ./scripts/run-tests.sh --shard') == 2,
             'required sharded test invocation missing')
 
 

@@ -13,6 +13,33 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'workflow_dispatch' }}
 
 jobs:
+  select:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.choose.outputs.mode }}
+      reason: ${{ steps.choose.outputs.reason }}
+      tests: ${{ steps.choose.outputs.tests }}
+    steps:
+      # actions/checkout v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Choose tests
+        id: choose
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BEFORE: ${{ github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.sha }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then before=$BASE; else before=$BEFORE; fi
+          python3 -B scripts/select-tests.py --event "$EVENT" --ref "$REF" --base "$before" --head "$HEAD" --github-output "$GITHUB_OUTPUT"
+
   build:
     runs-on: ubuntu-24.04
     needs: image-prep
@@ -80,7 +107,8 @@ jobs:
           if-no-files-found: ignore
 
   test:
-    needs: [image-prep, build]
+    needs: [image-prep, build, select]
+    if: always() && needs.image-prep.result == 'success' && needs.build.result == 'success' && needs.select.outputs.mode != 'none'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -146,19 +174,36 @@ jobs:
           RORTHOX_REQUIRE_ISO: '1'
           RORTHOX_ACCEL: auto
           RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}
+          TEST_MODE: ${{ needs.select.outputs.mode }}
+          SELECTED_TESTS: ${{ needs.select.outputs.tests }}
         run: |
           mkdir -p build/ci
           cp "$RUNNER_TEMP/production/production.tar.gz" build/ci/production.tar.gz
           ./ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$MANIFEST_SHA256"
-          ./ci/run.sh ./scripts/run-tests.sh --shard "$SHARD/4" -j 2 --results "build/tests/runs/shard-$SHARD"
+          if [ "$TEST_MODE" = subset ]; then
+            read -r -a selected <<< "$SELECTED_TESTS"
+            ./ci/run.sh ./scripts/run-tests.sh --shard "$SHARD/4" -j 2 --results "build/tests/runs/shard-$SHARD" "${selected[@]}"
+          else
+            # A missing or malformed selection never suppresses a test.
+            ./ci/run.sh ./scripts/run-tests.sh --shard "$SHARD/4" -j 2 --results "build/tests/runs/shard-$SHARD"
+          fi
       - name: Test TCG-only boot cases
-        if: ${{ !cancelled() && matrix.shard == 1 && steps.image-id.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.shard == 1 && steps.image-id.outcome == 'success' && (needs.select.outputs.mode != 'subset' || contains(format(' {0} ', needs.select.outputs.tests), ' scripts/tests/boot-segments.sh ')) }}
         env:
           RORTHOX_REQUIRE_ISO: '1'
           RORTHOX_ACCEL: tcg
           RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}
+          TEST_MODE: ${{ needs.select.outputs.mode }}
+          SELECTED_TESTS: ${{ needs.select.outputs.tests }}
         run: |
           mapfile -t tcg_only < <(grep -lE '^[[:space:]]*qemu_require_tcg([[:space:]]|$)' scripts/tests/*.sh | grep -v '^scripts/tests/accelerator.sh$')
+          if [ "$TEST_MODE" = subset ]; then
+            filtered=()
+            for t in "${tcg_only[@]}"; do
+              [[ " $SELECTED_TESTS " != *" $t "* ]] || filtered+=("$t")
+            done
+            tcg_only=("${filtered[@]}")
+          fi
           test "${#tcg_only[@]}" -gt 0
           ./ci/run.sh ./scripts/run-tests.sh --results build/tests/runs/shard-1/tcg-only "${tcg_only[@]}"
       # Upload the reports and bounded failed-only evidence, even on a red shard.
@@ -287,7 +332,7 @@ jobs:
           fi
 
   result:
-    needs: [build, test]
+    needs: [select, build, test]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -300,7 +345,7 @@ jobs:
           persist-credentials: false
       # actions/download-artifact v6; missing artifacts are checked by ci-result.py.
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
-        if: needs.build.result == 'success'
+        if: needs.build.result == 'success' && needs.select.outputs.mode != 'none'
         continue-on-error: true # Missing shard artifacts are marked red by the result step.
         with:
           pattern: results-*
@@ -309,4 +354,8 @@ jobs:
         env:
           BUILD_RESULT: ${{ needs.build.result }}
           TEST_RESULT: ${{ needs.test.result }}
+          SELECT_RESULT: ${{ needs.select.result }}
+          SELECT_MODE: ${{ needs.select.outputs.mode }}
+          SELECT_REASON: ${{ needs.select.outputs.reason }}
+          SELECT_TESTS: ${{ needs.select.outputs.tests }}
         run: python3 -B scripts/ci-result.py "$RUNNER_TEMP/ci-results" "$BUILD_RESULT" "$TEST_RESULT"
