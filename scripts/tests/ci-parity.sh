@@ -28,11 +28,18 @@ with tempfile.TemporaryDirectory(dir=sys.argv[2]) as work:
     for i in range(1, 5):
         save(report(tcg, i), 'tcg', [test(f'test-{i}')])
         save(report(kvm, i), 'kvm', [test(f'test-{i}')])
+    tests_dir = work / 'tests'
+    tests_dir.mkdir()
+    (tests_dir / 'boot-segments.sh').write_bytes((root / 'scripts/tests/boot-segments.sh').read_bytes())
+    listed = subprocess.run(['python3', '-B', str(root / 'scripts/tcg_only.py'), str(tests_dir)],
+                            cwd=root, capture_output=True, text=True, check=True)
+    assert listed.stdout.splitlines() == ['scripts/tests/boot-segments.sh'], listed.stdout
     def check(ok, needle, summary=False):
         out = work / 'summary.md'
         out.unlink(missing_ok=True)
         p = subprocess.run(['python3', '-B', str(root / 'scripts/ci-parity.py'), str(tcg), str(kvm), str(expected)] +
-                           ([str(out)] if summary else []), cwd=root, capture_output=True, text=True)
+                           ([str(out)] if summary else []) + ['--tests-dir', str(tests_dir)],
+                           cwd=root, capture_output=True, text=True)
         assert (p.returncode == 0) == ok and needle in p.stdout and 'Traceback' not in p.stderr, (p.returncode, p.stdout, p.stderr)
         return p.stdout, out.read_text() if out.exists() else ''
     check(True, 'parity OK')
@@ -45,12 +52,10 @@ with tempfile.TemporaryDirectory(dir=sys.argv[2]) as work:
     save(report(kvm, 1), 'kvm', [test('test-1'), test(only, 'skipped')])
     output, _ = check(True, 'TCG-only 1')
     assert 'TCG 4.0s; KVM 4.0s; top 5:' in output, output
-    caller = root / 'scripts/tests/ci-parity-caller.sh'
-    try:
-        caller.write_text('qemu_require_tcg\n')
-        check(False, 'TCG-only test list stale')
-    finally:
-        caller.unlink()
+    caller = tests_dir / 'ci-parity-caller.sh'
+    caller.write_text('qemu_require_tcg\n')
+    check(False, 'TCG-only test list stale')
+    caller.unlink()
     save(report(kvm, 1), 'kvm', [test('test-1'), test(only, 'failed')])
     check(False, f'{only}: TCG passed, KVM failed')
     save(report(kvm, 1), 'kvm', [test('test-1', 'skipped'), test(only, 'skipped')])

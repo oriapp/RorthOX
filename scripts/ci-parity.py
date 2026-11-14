@@ -4,6 +4,7 @@ import json
 import math
 import pathlib
 import re
+import runpy
 import sys
 
 
@@ -80,12 +81,17 @@ def union(directory, accelerator):
 
 
 def main(args):
-    if len(args) not in (3, 4):
-        raise Invalid('usage: ci-parity.py TCG_ARTIFACTS KVM_ARTIFACTS EXPECTED_TESTS [SUMMARY]')
-    callers = {str(path) for path in pathlib.Path("scripts/tests").glob("*.sh")
-               if path.name != "accelerator.sh" and re.search(r"^\s*qemu_require_tcg\b", path.read_text(), re.M)}
-    if callers != TCG_ONLY:
-        raise Invalid(f"TCG-only test list stale: {sorted(callers ^ TCG_ONLY)}")
+    if '--tests-dir' in args[3:]:
+        valid = len(args) in (5, 6) and args[-2] == '--tests-dir'
+    else:
+        valid = len(args) in (3, 4)
+    if not valid:
+        raise Invalid('usage: ci-parity.py TCG_ARTIFACTS KVM_ARTIFACTS EXPECTED_TESTS [SUMMARY] [--tests-dir DIR]')
+    tests_dir = args[-1] if args[-2] == '--tests-dir' else 'scripts/tests'
+    callers = runpy.run_path(str(pathlib.Path(__file__).with_name('tcg_only.py')))['callers']
+    found = set(callers(tests_dir))
+    if found != TCG_ONLY:
+        raise Invalid(f"TCG-only test list stale: {sorted(found ^ TCG_ONLY)}")
     tcg = union(args[0], 'tcg')
     kvm = union(args[1], 'kvm')
     expected = pathlib.Path(args[2]).read_text(encoding='utf-8').splitlines()
@@ -136,7 +142,7 @@ def main(args):
         lines += ['', 'Differing tests (first 12):']
         lines += ['- ' + markdown(item) for item in differences[:12]]
     summary = '\n'.join(lines) + '\n'
-    if len(args) == 4:
+    if len(args) >= 4 and args[3] != '--tests-dir':
         with open(args[3], 'w', encoding='utf-8') as out:
             out.write(summary[:6000])
     print(summary)
