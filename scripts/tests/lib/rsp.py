@@ -220,6 +220,10 @@ class Rsp:
     # --- execution -------------------------------------------------------------------------
 
     def add_breakpoint(self, addr):
+        # TCG would keep a second breakpoint at the same address (one z1 then leaves one behind);
+        # KVM refuses it.
+        if addr in self.breakpoints:
+            raise RspError("hardware breakpoint at %#x: already installed" % addr)
         if len(self.breakpoints) >= MAX_BREAKPOINTS:
             raise RspError("hardware breakpoint at %#x: %d are installed already (%s), KVM has %d" %
                            (addr, len(self.breakpoints), " ".join("%#x" % a for a in sorted(self.breakpoints)),
@@ -260,11 +264,12 @@ class Rsp:
                        (eip, eip, now, self.STEP_OFF_TRIES))
 
     def _opcode(self, eip):
-        """(opcode, the byte after it) at eip, after the prefixes."""
+        """(opcode, its modrm byte or None) at eip, after the prefixes. Only 0x8E (mov sreg) needs
+        the modrm byte; for a one-byte instruction the next byte may not be mapped."""
         for i in range(14):
             op = self.read(eip + i, 1)[0]
             if op not in PREFIXES:
-                return op, self.read(eip + i + 1, 1)[0]
+                return op, self.read(eip + i + 1, 1)[0] if op == 0x8E else None
         raise RspError("only prefixes at %#x" % eip)
 
     def _step_off_masked(self, eip):
@@ -281,7 +286,20 @@ class Rsp:
                            "delays interrupts" % (eip, op))
         cs = self.reg("cs")
         self.set_reg("eflags", flags & ~EFLAGS_IF)
-        self._step_off(eip)
+        try:
+            self._step_off(eip)
+        except RspError:
+            # The test fails anyway, but the guest may run on after it detaches: give IF back,
+            # unless the step went into a handler (then the flags are the handler's).
+            try:
+                if self.reg("cs") == cs:
+                    self.set_reg("eflags", self.reg("eflags") | EFLAGS_IF)
+            except (RspError, OSError):
+                pass
+            raise
+        # TCG stops a step that raised an exception at the handler's first instruction, so CS
+        # shows it. KVM steps with the guest's TF, which the gate clears: the guest runs on and
+        # this check doesn't see it there.
         if self.reg("cs") != cs:
             raise RspError("stepping off the breakpoint at %#x went into an exception handler with IF masked" % eip)
         self.set_reg("eflags", self.reg("eflags") | EFLAGS_IF)
@@ -319,6 +337,8 @@ class Rsp:
                 # "info registers" makes QEMU read the CPU state, like "g".
                 if command.split() == ["info", "registers"]:
                     self.synced = True
+                    if self.stop_eip is None:
+                        self.stop_eip = self.reg("eip")
                 return "".join(out)
             if reply.startswith("O") and reply != "OK":
                 out.append(bytes.fromhex(reply[1:]).decode("latin-1"))

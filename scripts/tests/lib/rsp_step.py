@@ -31,14 +31,24 @@ eip runs freely to the next breakpoint.
   kvm_raw_stop     a test's own "c" + stop reply, and "c" + "\\x03" (guest_state.run_for), are
                    followed by a sync before the registers are read.
   kvm_monitor      a monitor command after a stop is no sync, except "info registers".
+  kvm_monitor_first_step
+                   "info registers" as the first access after a stop, then eip set to the same
+                   value: a step is still allowed (the sync records the stop's eip).
   bp_limit         (fake as TCG: no limit) the fifth breakpoint raises without reaching the stub;
                    after removing one another fits, and cont() steps off a breakpoint with 4 set.
+  bp_duplicate     a second breakpoint at an installed address raises without a Z1 (TCG would
+                   keep two, KVM refuses it).
   kvm_bp_limit     the KVM fake refuses a fifth Z1 itself (what bp_limit protects against).
   moved_eip        a step after the debugger moved eip raises and sends no step; cont() from a
                    moved eip that is not a breakpoint runs; moving eip back allows a step again.
   if_step          stopped at a breakpoint with IF set: the step off runs with IF clear and IF is
-                   set again before the guest continues; on sti, pushf, int 0x80 and mov ss with
-                   IF set cont() raises without stepping; with IF clear a pushf steps as usual.
+                   set again before the guest continues; on every instruction that uses IF or
+                   delays interrupts (pushf popf iretd sti cli int3 int n into icebp hlt pop ss,
+                   also behind a prefix, and mov ss) cont() raises without stepping; mov ds steps
+                   as usual; with IF clear a pushf steps as usual. A step that ends in another CS
+                   (an exception handler, as TCG reports it) raises; a step off that fails puts IF
+                   back. A one-byte instruction on the last mapped byte steps off (only mov sreg
+                   needs the byte after the opcode).
 """
 
 import os
@@ -52,7 +62,7 @@ from rsp import EFLAGS_IF, REGS, Results, Rsp, RspError
 
 MAX_STEPS = 50      # the fake closes the connection then, so an endless retry can't hang the test
 STALE = 0xDEAD0000  # what the KVM fake's register copy holds before the first "g"
-EIP, EFLAGS = REGS.index("eip"), REGS.index("eflags")
+EIP, EFLAGS, CS = REGS.index("eip"), REGS.index("eflags"), REGS.index("cs")
 
 
 class FakeStub:
@@ -73,6 +83,7 @@ class FakeStub:
         self.breakpoints = set()
         self.max_breakpoints = 4 if kvm else None
         self.stalls = stalls        # how many of the coming steps don't move
+        self.step_cs = None         # a step sets cs to this (an exception handler, as TCG shows it)
         self.steps = 0
         self.step_flags = []        # eflags at every step
         self.z1 = 0                 # Z1 packets seen
@@ -201,7 +212,8 @@ class FakeStub:
             addr = int(p.split(",")[1], 16)
             if p[0] == "Z":
                 self.z1 += 1
-                if self.max_breakpoints is not None and len(self.breakpoints) >= self.max_breakpoints:
+                if self.max_breakpoints is not None and (len(self.breakpoints) >= self.max_breakpoints or
+                                                         addr in self.breakpoints):
                     return "E22"
                 self.breakpoints.add(addr)
             else:
@@ -219,6 +231,8 @@ class FakeStub:
                 self.stalls -= 1
             elif self.live[EIP] not in self.breakpoints:
                 self.live[EIP] += 1
+            if self.step_cs is not None:
+                self.live[CS] = self.step_cs
             self.stopped()
             return "S05"
         if p == "c":
@@ -387,6 +401,21 @@ def kvm_cases(res):
     report(res, "kvm_monitor", error is None and eips == [0x1000, 0x2000],
            "eip read after xp, after info registers %s (want 0x1000, 0x2000), error %r" % (hexes(eips), error))
 
+    # "info registers" as the first access after a stop, then eip set to what it is: no move.
+    def first_step(r, fake):
+        raw_stop(r)
+        r.monitor("info registers")
+        r.set_reg("eip", r.reg("eip"))
+        r.remove_breakpoint(0x1000)
+        try:
+            r.step()
+        except Exception as e:
+            return "%s: %s" % (type(e).__name__, e)
+        return r.reg("eip")
+    got, error, _ = session(first_step, kvm=True)
+    report(res, "kvm_monitor_first_step", error is None and got == 0x1001,
+           "after the step %s (want eip 0x1001), error %r" % (hex(got) if isinstance(got, int) else got, error))
+
 
 def breakpoint_cases(res):
     def limit(r, fake):
@@ -412,6 +441,15 @@ def breakpoint_cases(res):
         return attempt(lambda: r.add_breakpoint(0x5000))
     refused, error, _ = session(stub_limit, kvm=True)
     report(res, "kvm_bp_limit", refused is not None and "refused" in refused, "error %r %r" % (refused, error))
+
+    def duplicate(r, fake):
+        return attempt(lambda: r.add_breakpoint(0x1000)), fake.z1, two_conts(r, fake)
+    out, error, fake = session(duplicate)
+    dup, z1, stops = out or (None, None, None)
+    report(res, "bp_duplicate_refused", dup is not None and "already" in dup and z1 == 2 and
+           stops == [0x1000, 0x2000],
+           "second add at 0x1000: error %r, %s Z1 packets sent (want 2), stops %s, error %r" %
+           (dup, z1, hexes(stops), error))
 
 
 def moved_eip_case(res):
@@ -449,13 +487,58 @@ def if_cases(res):
             "eflags when the guest continued %s, want 0x246" % hexes(flags_c))
 
     bad = []
-    for name, code in (("sti", b"\xfb"), ("pushf", b"\x9c"), ("int 0x80", b"\xcd\x80"),
-                       ("mov ss, ax", b"\x8e\xd0"), ("o16 popf", b"\x66\x9d")):
+    for name, code in (("pushf", b"\x9c"), ("popf", b"\x9d"), ("iretd", b"\xcf"), ("sti", b"\xfb"),
+                       ("cli", b"\xfa"), ("int3", b"\xcc"), ("int 0x80", b"\xcd\x80"), ("into", b"\xce"),
+                       ("icebp", b"\xf1"), ("hlt", b"\xf4"), ("pop ss", b"\x17"), ("mov ss, ax", b"\x8e\xd0"),
+                       ("o16 popf", b"\x66\x9d")):
         refused, error, fake = session(lambda r, f: (r.cont(5), attempt(lambda: r.cont(5)))[1],
                                        eflags=0x202, code=code)
         if refused is None or "IF set" not in refused or fake.steps or len(fake.stops) != 1:
             bad.append("%s: %r %r, %d steps, %d continues" % (name, refused, error, fake.steps, len(fake.stops)))
-    report(res, "if_opcodes_refused", not bad, "; ".join(bad) or "sti, pushf, int, mov ss, o16 popf refused")
+    report(res, "if_opcodes_refused", not bad,
+           "; ".join(bad) or "pushf popf iretd sti cli int3 int into icebp hlt pop ss, mov ss, o16 popf refused")
+
+    stops, error, fake = session(two_conts, eflags=0x202, code=b"\x8e\xd8")    # mov ds, ax
+    report(res, "if_mov_ds_steps", error is None and stops == [0x1000, 0x2000] and fake.steps == 1 and
+           all(not f & EFLAGS_IF for f in fake.step_flags),
+           "stops %s, %d steps, eflags at the steps %s, error %r" %
+           (hexes(stops), fake.steps, hexes(fake.step_flags), error))
+
+    # The step lands in another CS (TCG: an exception handler's first instruction).
+    def cs_change(r, fake):
+        r.cont(5)
+        fake.step_cs = 0x08
+        return attempt(lambda: r.cont(5))
+    refused, error, fake = session(cs_change, eflags=0x202)
+    report(res, "if_cs_change_refused", refused is not None and "exception handler" in refused and
+           len(fake.stops) == 1 and not fake.live[EFLAGS] & EFLAGS_IF,
+           "error %r, %d continues, eflags %#x (the handler's, IF clear), error %r" %
+           (refused, len(fake.stops), fake.live[EFLAGS], error))
+
+    # A step off that never moves fails; the guest gets IF back, unless the step ended in another
+    # CS (then the flags are a handler's).
+    def stuck(r, fake, cs=None):
+        r.cont(5)
+        fake.stalls = MAX_STEPS
+        fake.step_cs = cs
+        return attempt(lambda: r.cont(5))
+    refused, error, fake = session(stuck, eflags=0x246)
+    refused2, error2, fake2 = session(lambda r, f: stuck(r, f, 0x08), eflags=0x246)
+    report(res, "if_restored_after_failure", refused is not None and "stepping off" in refused and
+           fake.live[EFLAGS] == 0x246 and refused2 is not None and fake2.live[EFLAGS] == 0x46,
+           "error %r, eflags after it %#x (want 0x246); in another CS: error %r, eflags %#x (want 0x46), "
+           "errors %r %r" % (refused, fake.live[EFLAGS], refused2, fake2.live[EFLAGS], error, error2))
+
+    # A nop on the last mapped byte (0xffff): nothing is mapped after it.
+    def last_byte(r, fake):
+        r.remove_breakpoint(0x1000)
+        r.remove_breakpoint(0x2000)
+        r.add_breakpoint(0xFFFF)
+        r.add_breakpoint(0x20000)
+        return [r.cont(5), r.cont(5)]
+    stops, error, fake = session(last_byte, eflags=0x246)
+    report(res, "if_last_byte_steps", error is None and stops == [0xFFFF, 0x20000] and fake.steps == 1,
+           "stops %s, %d steps, error %r" % (hexes(stops), fake.steps, error))
 
     stops, error, fake = session(two_conts, code=b"\x9c")      # pushf with IF clear: an ordinary step
     report(res, "if_clear_steps", error is None and stops == [0x1000, 0x2000] and fake.steps == 1,

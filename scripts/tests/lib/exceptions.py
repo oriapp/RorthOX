@@ -533,7 +533,7 @@ def early_mode(sock, map_path, result_path, nested=None):
             r.remove_breakpoint(SYMBOLS["interrupt_handler"])
             eip = run_to(r, None, 10)
             RES.add("nested_straight_to_pause", eip == pause,
-                    "stopped at %s" % ("PANIC again" if eip == panic else "int6 again" if eip == stub(6) else where(eip)))
+                    "stopped at %s" % ("int6 again" if eip == stub(6) else where(eip)))
         else:
             eip = run_to(r, None, 10)
             RES.add("halted_in_pause", eip == pause, "stopped at %s" % where(eip))
