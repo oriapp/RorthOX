@@ -26,6 +26,11 @@
 #    it doesn't know as the median, the same whatever the order given; a shard runs just its
 #    tests, a shard with none runs nothing and passes; a bad shard or timings file exits 2 and
 #    runs nothing. The real timings file splits the whole suite into 4 shards.
+# 8. An empty or hostile --shard or timings key exits 2 and can't start a CI annotation.
+# 9. A wall clock that steps back an hour and then ahead two hours during the tests (bash's
+#    EPOCHREALTIME, EPOCHSECONDS, SECONDS and date, faked for the runner) changes no run time, stops
+#    no test early and leaves the run's total time as it was. A test stopped at the time limit still
+#    gets its 5 s to end before KILL.
 #
 # The runs of the runner under test go to a temporary directory (CI uploads build/tests); what
 # each one printed stays in $OUT/<case>.log.
@@ -49,6 +54,12 @@ nl=$'\n'
 ok() { echo "  ok   $1"; }
 fail() { echo "  FAIL $1"; failures=$((failures + 1)); }
 expect() { if eval "$2"; then ok "$1"; else fail "$1"; fi; }
+# in_range <test> <low> <high>: its one run time in $durations is from low to below high seconds.
+in_range() {
+    printf '%s\n' "$durations" | awk -v t="$fx/$1.sh" -v lo="$2" -v hi="$3" '
+        $3 == t { n++; ok = ($1 ~ /^[0-9]+\.[0-9]$/ && $1 + 0 >= lo && $1 + 0 < hi) }
+        END { exit !(n == 1 && ok) }'
+}
 
 # run <case> <runner arguments>...: run the runner; its output goes to $OUT/<case>.log, its runs to $roots/<case>/.
 roots="$tmp/roots"
@@ -477,6 +488,48 @@ printf '{"tests": {"a\\n::error::not-from-test": 0}}\n' > "$fx/t-hostile.json"
 run newline-key --list --timings "$fx/t-hostile.json" "$fx/pass.sh"
 expect "timings error cannot start an annotation" \
     '[ "$status" -eq 2 ] && ! grep -q "^::" "$OUT/newline-key.log"'
+
+echo "runner: 9. a wall clock that steps"
+# Every bash the runner starts sources wallclock.bash (BASH_ENV): its EPOCHREALTIME, EPOCHSECONDS
+# and SECONDS then read the real wall clock plus the seconds in $WALL_OFFSET, and so does date.
+# back steps that clock back an hour, ahead two hours forward; a real clock step does the same.
+real_date=$(command -v date)
+mkdir -p "$fx/wallbin"
+printf '#!/bin/sh\nexec %q -d "@$(( $(%q +%%s) + $(cat "$WALL_OFFSET") ))" "$@"\n' "$real_date" "$real_date" \
+    > "$fx/wallbin/date"
+chmod +x "$fx/wallbin/date"
+cat > "$fx/wallclock.bash" <<'EOF'
+unset EPOCHREALTIME EPOCHSECONDS
+set -T
+read -r wall_off < "$WALL_OFFSET"
+printf -v wall_start '%(%s)T' -1
+wall_start=$((wall_start + wall_off))
+trap 'read -r wall_off < "$WALL_OFFSET"; printf -v EPOCHSECONDS "%(%s)T" -1;
+      EPOCHSECONDS=$((EPOCHSECONDS + wall_off)); EPOCHREALTIME=$EPOCHSECONDS.000000;
+      SECONDS=$((EPOCHSECONDS - wall_start))' DEBUG
+EOF
+printf 'echo -3600 > "$WALL_OFFSET"\nsleep 1.5\necho back\n' > "$fx/back.sh"
+printf 'echo 3600 > "$WALL_OFFSET"\nsleep 2.5\necho ahead\n' > "$fx/ahead.sh"
+echo 0 > "$tmp/wall"
+BASH_ENV="$fx/wallclock.bash" WALL_OFFSET="$tmp/wall" PATH="$fx/wallbin:$PATH" \
+    run wall -j 1 --timeout 6 "$fx/back.sh" "$fx/ahead.sh"
+expect "the fake wall clock stepped" '[ "$(cat "$tmp/wall")" = 3600 ] &&
+    [ "$(WALL_OFFSET="$tmp/wall" "$fx/wallbin/date" +%s)" -gt "$(($(date +%s) + 3000))" ]'
+expect "both pass, none stopped at the time limit" \
+    '[ "$status" -eq 0 ] && grep -Fxq "=== 2 passed, 0 failed, 0 skipped" "$OUT/wall.log" &&
+     ! grep -q "stopped after" "$OUT/wall.log"'
+expect "run times as long as the tests ran: back 1.5 s, ahead 2.5 s (each under 30 s)" \
+    'in_range back 1.5 30 && in_range ahead 2.5 30'
+expect "total time under a minute" \
+    'grep -Eq " of 2 in 0 min ([4-9]|[1-5][0-9]) s " "$roots"/wall/runs/run.*/summary.md'
+[ "$failures" -eq 0 ] || printf '  durations:\n%s\n  summary: %s\n' "$durations" \
+    "$(grep -h " of 2 in " "$roots"/wall/runs/run.*/summary.md 2> /dev/null)"
+# slowstop: on TERM takes 2 s to clean up, within the 5 s the runner gives before KILL.
+printf 'trap "sleep 2; echo cleaned up; exit 0" TERM\necho waiting\nwhile :; do sleep 0.1; done\n' > "$fx/slowstop.sh"
+run grace --timeout 1 "$fx/slowstop.sh"
+expect "a test stopped at the time limit gets 5 s to end before KILL" \
+    '[ "$status" -eq 1 ] && grep -Fxq "[slowstop] cleaned up" "$OUT/grace.log" &&
+     grep -Fxq "[slowstop] run-tests: stopped after 1 seconds (--timeout)" "$OUT/grace.log" && in_range slowstop 1 120'
 
 if [ "$failures" -ne 0 ]; then
     echo "runner: $failures check(s) failed" >&2

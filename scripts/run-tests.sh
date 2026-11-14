@@ -120,6 +120,15 @@ if [ "$list" = yes ]; then
     exit 0
 fi
 
+# monotonic: sets now to the time since boot in hundredths of a second (/proc/uptime). Run times
+# and time limits use it, not SECONDS or EPOCHREALTIME: those follow the wall clock, which NTP or a
+# VM that resumes can step back or ahead in the middle of a test.
+monotonic() {
+    local up
+    read -r up _ < /proc/uptime 2> /dev/null && [[ $up =~ ^[0-9]+\.[0-9][0-9]$ ]] && now=$((10#${up/./}))
+}
+monotonic || { echo "run-tests.sh needs /proc/uptime for its clock" >&2; exit 2; }
+
 # The accelerator for every test, decided here once before any test starts (scripts/qemu-accel.sh):
 # the tests get RORTHOX_ACCEL=tcg|kvm and RORTHOX_ACCEL_REASON. With KVM, a test fails when one of its
 # QEMUs didn't report "kvm support: enabled" in its monitor.log (not below a directory named runs: a
@@ -147,7 +156,7 @@ fi
 [ ${#tests[@]} -eq 0 ] || printf '%s\0' "${tests[@]}" > "$run_dir/plan"
 : >> "$run_dir/plan"
 : >> "$run_dir/instances"
-run_start=$SECONDS
+run_start=$now
 # Unix socket paths are short (108 bytes), so the temporary directories stay on a short absolute
 # path. The runner finds a test's processes by that path (pgrep -f takes a regular expression), so
 # a TMPDIR with other characters than these isn't used.
@@ -301,8 +310,9 @@ start_test() {
     roots[i]=$root
     printf '%s\0%s\0' "$((i + 1))" "${root##*/}" >> "$run_dir/instances"
     logs[i]="$root/output.log"
-    starts[i]=${EPOCHREALTIME/[.,]/}   # microseconds
-    deadlines[i]=$((SECONDS + timeout_s))
+    monotonic
+    starts[i]=$now
+    deadlines[i]=$((now + timeout_s * 100))
     # A background job of a script is never a process group leader, so setsid runs bash in place:
     # $! is the session id. That shell runs the test and exits with its status (it only dies of a
     # signal itself on KILL); its own messages, such as "Killed" for the test, go nowhere.
@@ -348,7 +358,8 @@ finish_test() {
             ;;
     esac
     statuses[i]=$status
-    tenths=$(((${EPOCHREALTIME/[.,]/} - starts[i]) / 100000))
+    monotonic
+    tenths=$(((now - starts[i]) / 10))
     echo "$((tenths / 10)).$((tenths % 10)) $status $t" >> "$run_dir/durations.txt"
     if [ -d "${roots[i]}" ] && [ ! -L "${roots[i]}" ]; then
         rm -f -- "${roots[i]}/result"
@@ -378,13 +389,14 @@ while :; do
     done
     [ "${#active[@]}" -gt 0 ] || break
     # Out of time or interrupted: TERM to the test's whole session, KILL $grace seconds later.
+    monotonic
     for sid in "${!active[@]}"; do
         i=${active[$sid]}
-        if [ -z "${stopping[i]:-}" ] && { [ -n "$cancel" ] || [ "$SECONDS" -ge "${deadlines[i]}" ]; }; then
+        if [ -z "${stopping[i]:-}" ] && { [ -n "$cancel" ] || [ "$now" -ge "${deadlines[i]}" ]; }; then
             if [ -n "$cancel" ]; then stopping[i]=cancel; else stopping[i]=timeout; fi
             pkill -TERM -s "$sid" 2> /dev/null
-            deadlines[i]=$((SECONDS + grace))
-        elif [ -n "${stopping[i]:-}" ] && [ "$SECONDS" -ge "${deadlines[i]}" ]; then
+            deadlines[i]=$((now + grace * 100))
+        elif [ -n "${stopping[i]:-}" ] && [ "$now" -ge "${deadlines[i]}" ]; then
             pkill -KILL -s "$sid" 2> /dev/null
         fi
     done
@@ -429,9 +441,10 @@ echo "=== ${#passed[@]} passed, ${#failed[@]} failed, ${#skipped[@]} skipped"
 echo "=== accelerator $RORTHOX_ACCEL ($RORTHOX_ACCEL_REASON), $qemu_version, CPU $cpu_model"
 echo "=== output in $run_dir"
 reports=ok
+monotonic
 if python3 -B scripts/run-tests.py report --run-dir "$run_dir" --jobs "$jobs" --shard "$shard" \
     --accelerator "$RORTHOX_ACCEL" --accelerator-reason "$RORTHOX_ACCEL_REASON" --qemu "$qemu_version" \
-    --cpu "$cpu_model" --elapsed "$((SECONDS - run_start))"; then
+    --cpu "$cpu_model" --elapsed "$(((now - run_start) / 100))"; then
     [ ! -d "$run_dir/failed" ] || echo "=== output of the failed tests in $run_dir/failed"
     # Only the top-level runner writes the CI job summary (summary.md stays below 1 MiB).
     if [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ -z "${RORTHOX_TEST_ROOT:-}" ]; then
