@@ -140,9 +140,9 @@ with tempfile.TemporaryDirectory() as temp:
     cases = (
         ('host-unhandled-udev',
          'if [ -z "$failed" ]; then sudo udevadm settle --timeout=30 || failed=settle; fi',
-         'if [ -z "$failed" ]; then sudo udevadm settle --timeout=30; fi', 'KVM sudo'),
+         'if [ -z "$failed" ]; then sudo udevadm settle --timeout=30; fi', 'KVM host setup'),
         ('host-no-settle-timeout', 'sudo udevadm settle --timeout=30',
-         'sudo udevadm settle', 'KVM sudo'),
+         'sudo udevadm settle', 'KVM host setup'),
         ('sudo-other-job', '      - name: Build and package', '      - run: sudo id\n      - name: Build and package', 'KVM sudo'),
         ('sudo-decoded', '      - name: Verify and test', '      - run: "su\\x64o id"\n      - name: Verify and test', 'KVM sudo'),
         ('shard-docker', shard_run, '          docker create something\n' + shard_run, 'without host Docker'),
@@ -152,12 +152,19 @@ with tempfile.TemporaryDirectory() as temp:
         ('shard-override', shard_run, '          export RORTHOX_ACCEL=tcg\n' + shard_run, 'must not override'),
         ('shard-inline-override', shard_run, '          RORTHOX_ACCEL=tcg ' + shard_run.strip() + '\n' + shard_run, 'must not override'),
         ('tcg-missing', '      - name: Test TCG-only boot cases', '      - name: Test TCG cases', 'TCG-only'),
-        ('tcg-accel', '      - name: Test TCG-only boot cases\n        if: ${{ !cancelled() && matrix.shard == 1 }}\n        env:\n          RORTHOX_REQUIRE_ISO: \'1\'\n          RORTHOX_ACCEL: tcg',
-         '      - name: Test TCG-only boot cases\n        if: ${{ !cancelled() && matrix.shard == 1 }}\n        env:\n          RORTHOX_REQUIRE_ISO: \'1\'\n          RORTHOX_ACCEL: auto', 'TCG-only'),
+        ('tcg-accel', '      - name: Test TCG-only boot cases\n        if: ${{ !cancelled() && matrix.shard == 1 && steps.image-id.outcome == \'success\' }}\n        env:\n          RORTHOX_REQUIRE_ISO: \'1\'\n          RORTHOX_ACCEL: tcg',
+         '      - name: Test TCG-only boot cases\n        if: ${{ !cancelled() && matrix.shard == 1 && steps.image-id.outcome == \'success\' }}\n        env:\n          RORTHOX_REQUIRE_ISO: \'1\'\n          RORTHOX_ACCEL: auto', 'TCG-only'),
         ('host-duplicated', '      - name: Verify and test',
          '      - name: Enable the host KVM device if present\n        run: echo extra\n      - name: Verify and test', 'KVM device'),
         ('host-diagnostics', '          bash ci/kvm-diagnostics.sh host "$before" "$after"',
-         '          echo no-diagnostics', 'KVM sudo'),
+         '          echo no-diagnostics', 'KVM host setup'),
+        ('host-marker-forced', '            failed=\n', '            failed=forced\n', 'KVM host setup'),
+        ('sudo-moved-step', '      - name: Verify and test',
+         '      - name: Extra\n        run: sudo id\n      - name: Verify and test', 'KVM sudo'),
+        ('tcg-missing-image-guard', " && steps.image-id.outcome == 'success'",
+         '', 'TCG-only'),
+        ('tcg-results-location', 'build/tests/runs/shard-1/tcg-only',
+         'build/tests/runs/tcg-only', 'TCG-only'),
         ('binary-tag', '          SHARD: ${{ matrix.shard }}', '          SHARD: ${{ matrix.shard }}\n          T: !!binary YWJj', 'YAML tags'),
         ('value-jobs-env', 'permissions: {}', 'permissions: {}\n# jobs:\nenv:\n  T: ${{ github.token }}', 'credentials'),
         ('escaped-secret-hex', '          SHARD: ${{ matrix.shard }}',
@@ -180,9 +187,21 @@ with tempfile.TemporaryDirectory() as temp:
          '  test:\n    env:\n      RORTHOX_KVM_SETUP_FAILED: fake\n', 'setup marker'),
         ('marker-run', shard_run, '          export RORTHOX_KVM_SETUP_FAILED=fake\n' + shard_run, 'setup marker'),
         ('marker-host-unconditional', '            if [ -n "$failed" ]; then\n',
-         '            echo "RORTHOX_KVM_SETUP_FAILED=fake" >> "$GITHUB_ENV"\n            if [ -n "$failed" ]; then\n', 'setup marker'),
+         '            echo "RORTHOX_KVM_SETUP_FAILED=fake" >> "$GITHUB_ENV"\n            if [ -n "$failed" ]; then\n', 'KVM host setup'),
         ('shard-unset', shard_run, '          unset RORTHOX_ACCEL\n' + shard_run, 'must not override'),
         ('shard-env-unset', shard_run, '          env -u RORTHOX_ACCEL ' + shard_run.strip() + '\n' + shard_run, 'must not override'),
+        ('shard-escaped-shell-override', '      - name: Verify and test',
+         '      - name: Extra\n        shell: "env RORTHOX\\x5fACCEL=tcg bash -e {0}"\n        run: echo ok\n      - name: Verify and test', 'must not override'),
+        ('marker-escaped-shell', '      - name: Verify and test',
+         '      - name: Extra\n        shell: "env RORTHOX\\x5fKVM_SETUP_FAILED=x bash -e {0}"\n        run: echo ok\n      - name: Verify and test', 'setup marker'),
+        ('override-decoded-run', '      - name: Verify and test',
+         '      - run: "echo RORTHOX\\x5fACCEL=tcg"\n      - name: Verify and test', 'must not override'),
+        ('marker-decoded-run', '      - name: Verify and test',
+         '      - run: "echo RORTHOX\\x5fKVM_SETUP_FAILED=x"\n      - name: Verify and test', 'setup marker'),
+        ('override-decoded-env', '          RORTHOX_ACCEL: auto\n',
+         '          RORTHOX_ACCEL: auto\n          T: "RORTHOX\\x5fACCEL=tcg"\n', 'must not override'),
+        ('marker-decoded-env', '          RORTHOX_ACCEL: auto\n',
+         '          RORTHOX_ACCEL: auto\n          T: "RORTHOX\\x5fKVM_SETUP_FAILED=x"\n', 'setup marker'),
         ('upload-root', '            build/tests/runs/shard-${{ matrix.shard }}/results.json',
          '            build/tests/runs/shard-${{ matrix.shard }}/results.json\n            build/tests/runs/sibling/results.json', 'upload paths'),
     )
@@ -197,7 +216,8 @@ with tempfile.TemporaryDirectory() as temp:
             if path is not None: env['PYTHONPATH'] = str(path)
             p = subprocess.run(['python3', '-B', str(lint), str(workflow)], cwd=root, env=env,
                                text=True, capture_output=True)
-            assert p.returncode and (why in p.stderr or path is not None and 'requires YAML parser' in p.stderr), (tag, p.stderr)
+            assert p.returncode and (why in p.stderr or (why == 'KVM host setup' and 'KVM sudo' in p.stderr)
+                                     or path is not None and 'requires YAML parser' in p.stderr), (tag, p.stderr)
     env = os.environ.copy()
     env['GITHUB_ACTIONS'] = 'true'
     env['PYTHONPATH'] = str(no_yaml)

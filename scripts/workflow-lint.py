@@ -3,6 +3,7 @@
 import pathlib
 import re
 import sys
+import textwrap
 
 
 class Invalid(Exception):
@@ -177,6 +178,27 @@ def lint(text):
     host = re.search(r'^      - name: Enable the host KVM device if present\n(.*?)(?=^      - |\Z)', test, re.M | re.S)
     require(host is not None and test.count('      - name: Enable the host KVM device if present\n') == 1,
             'required shard must prepare KVM device')
+    # The marker is safe only while guarded by this exact error-handled setup.
+    host_run = '''before=$(stat -c "%a %U %G" /dev/kvm 2>/dev/null || echo absent)
+# A failed device setup must not fail the shard or silently use KVM.
+if [ -c /dev/kvm ]; then
+  failed=
+  echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null || failed=udev-rule
+  if [ -z "$failed" ]; then sudo udevadm control --reload-rules || failed=reload-rules; fi
+  if [ -z "$failed" ]; then sudo udevadm trigger --name-match=kvm || failed=trigger; fi
+  if [ -z "$failed" ]; then sudo udevadm settle --timeout=30 || failed=settle; fi
+  if [ -n "$failed" ]; then
+    echo "::warning title=KVM device setup::$failed failed; shard will use TCG"
+    echo "RORTHOX_KVM_SETUP_FAILED=$failed failed" >> "$GITHUB_ENV"
+  fi
+fi
+after=$(stat -c "%a %U %G" /dev/kvm 2>/dev/null || echo absent)
+bash ci/kvm-diagnostics.sh host "$before" "$after" || { echo '::warning title=KVM diagnostics::host diagnostics failed'; echo 'RORTHOX_KVM_SETUP_FAILED=host diagnostics failed' >> "$GITHUB_ENV"; }
+'''
+    require('        run: |\n' in host.group(1) and
+            textwrap.dedent(re.split(r'^      # ', host.group(1).split('        run: |\n', 1)[1],
+                                    maxsplit=1, flags=re.M)[0]) == host_run,
+            'KVM host setup must remain error-handled')
     allowed_sudo = [
         "echo 'KERNEL==\"kvm\", GROUP=\"kvm\", MODE=\"0666\", OPTIONS+=\"static_node=kvm\"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null || failed=udev-rule",
         'if [ -z "$failed" ]; then sudo udevadm control --reload-rules || failed=reload-rules; fi',
@@ -209,9 +231,10 @@ def lint(text):
     # Only the named TCG-only step may force an accelerator; parsed run strings
     # catch both inline assignments and exports hidden in a quoted YAML scalar.
     tcg_step = re.search(r'^      - name: Test TCG-only boot cases\n(.*?)(?=^      - |\Z)', test, re.M | re.S)
-    require(tcg_step is not None and 'if: ${{ !cancelled() && matrix.shard == 1 }}' in tcg_step.group(1) and
+    require(tcg_step is not None and "if: ${{ !cancelled() && matrix.shard == 1 && steps.image-id.outcome == 'success' }}" in tcg_step.group(1) and
             '          RORTHOX_ACCEL: tcg' in tcg_step.group(1) and
             'grep -lE ' in tcg_step.group(1) and
+            'steps.image-id.outcome == \'success\'' in tcg_step.group(1) and
             'qemu_require_tcg' in tcg_step.group(1) and
             './ci/run.sh ./scripts/run-tests.sh --results build/tests/runs/shard-1/tcg-only' in tcg_step.group(1) and
             'build/tests/runs/shard-${{ matrix.shard }}/tcg-only/results.json' in test and
@@ -232,8 +255,8 @@ def lint(text):
     require(not run_override.search(other_test) and
             not run_override.search(tcg_step.group(1).split('        run: |', 1)[-1]), 'shard must not override its accelerator')
     if yaml is not None:
-        require(all(not run_override.search(str(step.get('run', '')))
-                    for step in parsed['test']['steps']) and
+        require(all(not run_override.search(str(step.get(field, '')))
+                    for step in parsed['test']['steps'] for field in ('run', 'shell', 'env')) and
                 all('RORTHOX_ACCEL' not in step.get('env', {})
                     for step in parsed['test']['steps']
                     if step.get('name') not in ('Verify and test', 'Test TCG-only boot cases')),
@@ -260,8 +283,9 @@ def lint(text):
     if yaml is not None:
         require(all(marker not in str(scope.get('env', {})) for scope in (document, *parsed.values())) and
                 all(marker not in str(step.get('env', {})) for job in parsed.values() for step in job['steps']) and
-                all(marker not in str(step.get('run', '')) for job in parsed.values()
-                    for step in job['steps'] if step.get('name') != 'Enable the host KVM device if present'),
+                all(marker not in str(step.get(field, '')) for job in parsed.values()
+                    for step in job['steps'] if step.get('name') != 'Enable the host KVM device if present'
+                    for field in ('run', 'shell')),
                 'KVM setup marker must be confined to host setup failures')
     require('    continue-on-error:' not in jobs['image-prep'],
             'image preparation must be required')

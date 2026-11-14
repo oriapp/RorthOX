@@ -152,7 +152,7 @@ jobs:
           ./ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$MANIFEST_SHA256"
           ./ci/run.sh ./scripts/run-tests.sh --shard "$SHARD/4" -j 2 --results "build/tests/runs/shard-$SHARD"
       - name: Test TCG-only boot cases
-        if: ${{ !cancelled() && matrix.shard == 1 }}
+        if: ${{ !cancelled() && matrix.shard == 1 && steps.image-id.outcome == 'success' }}
         env:
           RORTHOX_REQUIRE_ISO: '1'
           RORTHOX_ACCEL: tcg
