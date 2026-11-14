@@ -6,6 +6,8 @@ import pathlib
 import re
 import sys
 
+from tcg_only import callers
+
 
 def main(root, build, shards):
     # The selector cannot turn an invalid result into a docs-only success.
@@ -23,7 +25,11 @@ def main(root, build, shards):
                                                    for n in names[1:]))))
     safe_reason = reason[:1000].replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
     safe_names = chosen[:1500].replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
-    print(f'::notice title=Test selection::{mode}: {safe_reason}; tests={safe_names}')
+    base = os.environ.get('SELECT_BASE', '')
+    source = os.environ.get('SELECT_BASE_SOURCE', '')
+    safe_base = base[:40] if re.fullmatch(r'[a-fA-F0-9]{40}', base) else 'none'
+    safe_source = source[:100].replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+    print(f'::notice title=Test selection::{mode}: {safe_reason}; base={safe_base} ({safe_source}); tests={safe_names}')
     lines = ['## CI results', '', f'Selection: {mode} — {safe_reason}; tests: {safe_names}', '',
              '| Job | Conclusion | Accelerator | Passed | Failed | Skipped |',
              '| --- | --- | --- | ---: | ---: | ---: |']
@@ -39,10 +45,8 @@ def main(root, build, shards):
             with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
                 f.write(summary)
         return 0 if ok else 1
-    callers = {str(test) for test in pathlib.Path('scripts/tests').glob('*.sh')
-               if test.name != 'accelerator.sh' and
-               re.search(r'^\s*qemu_require_tcg\b', test.read_text(), re.M)}
-    tcg_selected = callers if mode == 'full' else callers.intersection(names)
+    tcg_callers = set(callers())
+    tcg_selected = tcg_callers if mode == 'full' else tcg_callers.intersection(names)
     observed = []
     for i in range(1, 6):
         if i == 5 and not tcg_selected:

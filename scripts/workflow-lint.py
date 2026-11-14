@@ -45,7 +45,8 @@ def lint(text):
             'publication must have the exact trusted-push job gate')
     for name, body in jobs.items():
         grants = re.findall(r'^    permissions:\n((?:      [^\n]+\n?)+)', body, re.M)
-        expected = ['      contents: read'] + (['      packages: write'] if name == 'image' else [])
+        expected = ['      contents: read'] + (['      packages: write'] if name == 'image' else
+                                                ['      actions: read'] if name == 'select' else [])
         require(len(grants) == 1 and grants[0].splitlines() == expected,
                 f'{name}: unexpected permissions')
         if name == 'image':
@@ -170,10 +171,12 @@ def lint(text):
             'scripts/select-tests.py' in select and '--github-output "$GITHUB_OUTPUT"' in select and
             '          BASE: ${{ github.event.pull_request.base.sha }}' in select and
             '          BEFORE: ${{ github.event.before }}' in select and
-            all(f'{key}: ${{{{ steps.choose.outputs.{key} }}}}' in select for key in ('mode', 'reason', 'tests')) and
+            all(f'{key}: ${{{{ steps.choose.outputs.{key} }}}}' in select for key in ('mode', 'reason', 'tests', 'base', 'base_source')) and
+            'GH_TOKEN: ${{ github.token }}' in select and '--repository "$REPOSITORY"' in select and
+            '--branch "${REF#refs/heads/}"' in select and
             not re.search(r'\b(?:sudo|docker)\b', select) and 'secrets.' not in select,
             'selector must compare revisions without credentials or host privileges')
-    require("    if: always() && needs.image-prep.result == 'success' && needs.build.result == 'success' && needs.select.outputs.mode != 'none'" in jobs['test'] and
+    require("    if: ${{ !cancelled() && needs.image-prep.result == 'success' && needs.build.result == 'success' && needs.select.outputs.mode != 'none' }}" in jobs['test'] and
             'TEST_MODE: ${{ needs.select.outputs.mode }}' in jobs['test'] and
             'SELECTED_TESTS: ${{ needs.select.outputs.tests }}' in jobs['test'] and
             '"${selected[@]}"' in jobs['test'] and
@@ -185,8 +188,8 @@ def lint(text):
             'SELECT_RESULT: ${{ needs.select.result }}' in jobs['result'],
             'selection must gate shards and aggregate')
     if yaml is not None:
-        require(parsed['test'].get('if') == "always() && needs.image-prep.result == 'success' && needs.build.result == 'success' && needs.select.outputs.mode != 'none'" and
-                parsed['select']['permissions'] == {'contents': 'read'} and
+        require(parsed['test'].get('if') == "${{ !cancelled() && needs.image-prep.result == 'success' && needs.build.result == 'success' && needs.select.outputs.mode != 'none' }}" and
+                parsed['select']['permissions'] == {'contents': 'read', 'actions': 'read'} and
                 parsed['select'].get('needs') is None and
                 parsed['select']['steps'][0].get('with', {}).get('persist-credentials') is False and
                 parsed['select']['steps'][0].get('with', {}).get('fetch-depth') == 0 and
@@ -260,9 +263,9 @@ bash ci/kvm-diagnostics.sh host "$before" "$after" || { echo '::warning title=KV
     tcg_step = re.search(r'^      - name: Test TCG-only boot cases\n(.*?)(?=^      - |\Z)', test, re.M | re.S)
     require(tcg_step is not None and "if: ${{ !cancelled() && matrix.shard == 1 && steps.image-id.outcome == 'success' }}" in tcg_step.group(1) and
             '          RORTHOX_ACCEL: tcg' in tcg_step.group(1) and
-            'grep -lE ' in tcg_step.group(1) and
+            'python3 -B scripts/tcg_only.py' in tcg_step.group(1) and
             'steps.image-id.outcome == \'success\'' in tcg_step.group(1) and
-            'qemu_require_tcg' in tcg_step.group(1) and
+            'scripts/tcg_only.py' in tcg_step.group(1) and
             'if [ "${#tcg_only[@]}" -eq 0 ]; then exit 0; fi' in tcg_step.group(1) and
             './ci/run.sh ./scripts/run-tests.sh --results build/tests/runs/shard-1/tcg-only' in tcg_step.group(1) and
             'build/tests/runs/shard-${{ matrix.shard }}/tcg-only/results.json' in test and
@@ -280,10 +283,15 @@ bash ci/kvm-diagnostics.sh host "$before" "$after" || { echo '::warning title=KV
             'shard results upload paths must share their shard root')
     run_override = re.compile(r'\b(?:export\s+)?RORTHOX_ACCEL\s*=|\bunset\s+RORTHOX_ACCEL\b|\benv\s+-u\s+RORTHOX_ACCEL\b')
     other_test = test.replace(tcg_step.group(0), '')
+    require(not run_override.search(text.split('jobs:', 1)[0]) and
+            all(not run_override.search(body.split('    steps:', 1)[0]) for body in jobs.values()),
+            'defaults must not override its accelerator')
     require(not run_override.search(other_test) and
             not run_override.search(tcg_step.group(1).split('        run: |', 1)[-1]), 'shard must not override its accelerator')
     if yaml is not None:
-        require(all(not run_override.search(str(step.get(field, '')))
+        require(not run_override.search(str(document.get('defaults', {}))) and
+                all(not run_override.search(str(job.get('defaults', {}))) for job in parsed.values()) and
+                all(not run_override.search(str(step.get(field, '')))
                     for step in parsed['test']['steps'] for field in ('run', 'shell', 'env')) and
                 all('RORTHOX_ACCEL' not in step.get('env', {})
                     for step in parsed['test']['steps']
@@ -309,7 +317,8 @@ bash ci/kvm-diagnostics.sh host "$before" "$after" || { echo '::warning title=KV
             all(line in host.group(1) for line in allowed_marker),
             'KVM setup marker must be confined to host setup failures')
     if yaml is not None:
-        require(all(marker not in str(scope.get('env', {})) for scope in (document, *parsed.values())) and
+        require(all(marker not in str(scope.get('env', {})) and marker not in str(scope.get('defaults', {}))
+                    for scope in (document, *parsed.values())) and
                 all(marker not in str(step.get('env', {})) for job in parsed.values() for step in job['steps']) and
                 all(marker not in str(step.get(field, '')) for job in parsed.values()
                     for step in job['steps'] if step.get('name') != 'Enable the host KVM device if present'
@@ -338,12 +347,17 @@ bash ci/kvm-diagnostics.sh host "$before" "$after" || { echo '::warning title=KV
         # No parser means decoded YAML escapes cannot be inspected safely.
         require(not re.search(r'\$\{\{[^}]*\\', outside),
                 'escaped expression requires YAML parser')
-    require(not credential.search(outside) and
+    outside = outside.replace('GH_TOKEN: ${{ github.token }}', '')
+    require(select.count('GH_TOKEN: ${{ github.token }}') == 1 and
+            not credential.search(outside) and
             (yaml is None or not contains_credential({**{k: v for k, v in document.items() if k != 'jobs'},
-                                                      'jobs': {k: v for k, v in parsed.items() if k != 'image'}})),
+                                                      'jobs': {k: ({**v, 'steps': [{**step, 'env': {k2: v2 for k2, v2 in step.get('env', {}).items()
+                            if not (k == 'select' and step.get('name') == 'Choose tests' and k2 == 'GH_TOKEN')} }
+                            for step in v['steps']]} if k == 'select' else v)
+                             for k, v in parsed.items() if k != 'image'}})),
             'credentials outside publication')
     require('retention-days: 1' in jobs['image-prep'], 'candidate archive retention too long')
-    require(text.count('secrets.') == 1 and 'GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}' in jobs['image'] and
+    require(text.count('GH_TOKEN: ${{ github.token }}') == 1 and text.count('secrets.') == 1 and 'GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}' in jobs['image'] and
             not any('secrets.' in body for name, body in jobs.items() if name != 'image'),
             'credentials must be confined to publication')
     require('      - name: Log out of registry\n        timeout-minutes: 2\n        if: always()' in jobs['image'] and

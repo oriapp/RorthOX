@@ -589,11 +589,11 @@ required build and four test shards use that image: when inputs change they
 verify and load the candidate archive by SHA-256 and image ID, rather than
 running the old published digest. The build job runs `make all iso` once and
 uploads a production archive with file checksums. A read-only selector compares
-the push's before and after commits, or the pull request's merge base and head.
+the head of the most recent successful push run on the same non-main branch with the new head, or the pull request's merge base and head. If that successful run cannot be found or is not an ancestor, the full suite runs. The selection notice shows the base commit and how it was chosen.
 A change limited to README.md or docs/ still builds the disk and ISO, but runs
 no tests. Changes limited to top-level scripts/tests/*.sh (plus documentation)
 run the touched tests and smoke; heap-oom also runs argument-oom, elf-unwind and
-open-oom, and exceptions also runs tss-io. A deleted test, change to a shared
+open-oom; exceptions also runs tss-io; kernel-exceptions, screen-waits and task-list also run test-isolation. Every subset also runs select-tests, ci-parity and workflow, which check the other tests. A deleted test, change to a shared
 host/ or lib/ helper, unknown path, missing history or non-ancestor push runs
 the full suite. Every push to main, manual run and scheduled run also runs the
 full suite. The selector publishes its mode, reason and chosen test list; an
@@ -601,7 +601,7 @@ invalid or failed selection makes the aggregate fail rather than skip tests.
 Four fresh jobs verify that same-run archive and run one shard each without rebuilding production files;
 `results-1` through `results-4` carry JUnit, JSON, summaries and bounded failed
 logs. The extra TCG-only results are in `results-1/tcg-only`; the aggregate runs
-even if a required job fails and requires all four shards and the TCG-only run. Only trusted branch pushes may publish a tag; publication waits for the required
+even if a required job fails. It requires all four shards when tests are selected; the TCG-only run is required only for a full run or when a selected test needs TCG. Only trusted branch pushes may publish a tag; publication waits for the required
 build and all four test shards to pass, then checks tool versions before publishing.
 The digest recorded in `ci/image.ref` is a local quick-start/devcontainer pin;
 CI chooses by the input hash instead. A changed image that fails the suite is

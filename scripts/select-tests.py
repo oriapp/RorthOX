@@ -1,11 +1,47 @@
 #!/usr/bin/env python3
 """Conservatively select CI tests from a verified Git revision comparison."""
 import argparse
+import json
+import urllib.parse
+import urllib.request
 import pathlib
 import re
 import secrets
 import subprocess
 import sys
+
+# These checks read every top-level test and must run on every test-only change.
+META_TESTS = {'scripts/tests/select-tests.sh', 'scripts/tests/ci-parity.sh',
+              'scripts/tests/workflow.sh'}
+
+
+def successful_push_base(repo, repository, branch, head, token, opener=urllib.request.urlopen):
+    """Find the newest green push of this workflow on the same branch, or fail closed."""
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository or '') or not token:
+        return '', 'successful push lookup unavailable'
+    try:
+        query = urllib.parse.urlencode({'event': 'push', 'branch': branch,
+                                        'status': 'success', 'per_page': '1'})
+        url = f'https://api.github.com/repos/{repository}/actions/workflows/build.yml/runs?{query}'
+        request = urllib.request.Request(url, headers={'Authorization': f'Bearer {token}',
+                         'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'})
+        with opener(request, timeout=10) as response:
+            data = json.load(response)
+        runs = data['workflow_runs']
+        if not isinstance(runs, list) or not runs:
+            return '', 'no successful push run on this branch'
+        run = runs[0]
+        sha = run['head_sha']
+        if (run['event'] != 'push' or run['conclusion'] != 'success' or
+                run['status'] != 'completed' or run['head_branch'] != branch or
+                not isinstance(sha, str) or not re.fullmatch(r'[0-9a-fA-F]{40}', sha)):
+            return '', 'invalid successful push run'
+        if git(repo, 'merge-base', sha, head).strip() != git(repo, 'rev-parse', sha).strip():
+            return '', 'successful push is not an ancestor'
+        return sha, 'latest successful push run on this branch'
+    except (OSError, ValueError, KeyError, TypeError, UnicodeError, subprocess.SubprocessError):
+        return '', 'successful push lookup or history unavailable'
+
 
 TEST = re.compile(r'scripts/tests/[A-Za-z0-9._-]+\.sh\Z')
 DELEGATES = {
@@ -49,7 +85,7 @@ def select(repo, event, ref, base, head):
         if event == 'push':
             ancestor = git(repo, 'merge-base', base, head).strip()
             if ancestor != git(repo, 'rev-parse', base).strip():
-                return full('push before is not an ancestor')
+                return full('push base is not an ancestor')
             start = base
         else:
             start = git(repo, 'merge-base', base, head).strip().decode('ascii')
@@ -91,6 +127,7 @@ def select(repo, event, ref, base, head):
                 if new_modes.get(target.encode('utf-8')) not in (b'100644', b'100755'):
                     return full('missing delegated test')
                 tests.add(target)
+        tests.update(META_TESTS)
         listed = ['scripts/smoke.sh', *sorted(tests)]
         return 'subset', f'{len(tests)} changed/dependent tests plus smoke', listed
     except (OSError, ValueError, UnicodeError, subprocess.SubprocessError):
@@ -103,10 +140,30 @@ def main():
         parser.add_argument('--' + key, required=True)
     parser.add_argument('--repo', default='.')
     parser.add_argument('--github-output')
+    parser.add_argument('--repository', default='')
+    parser.add_argument('--branch', default='')
+    parser.add_argument('--fixture-base', action='store_true')
     options = parser.parse_args()
+    base, source = options.base, 'pull request merge base' if options.event == 'pull_request' else 'event revision'
+    if options.event == 'push' and options.ref not in ('main', 'refs/heads/main') and not options.fixture_base:
+        base, source = successful_push_base(pathlib.Path(options.repo), options.repository,
+                                             options.branch, options.head,
+                                             __import__('os').environ.get('GH_TOKEN', ''))
     mode, reason, tests = select(pathlib.Path(options.repo), options.event, options.ref,
-                                 options.base, options.head)
-    fields = {'mode': mode, 'reason': reason, 'tests': ' '.join(tests)}
+                                 base, options.head)
+    if not base and options.event == 'push' and options.ref not in ('main', 'refs/heads/main') and not options.fixture_base:
+        reason = source + '; full suite'
+    if options.event == 'pull_request' and base:
+        try:
+            base = git(pathlib.Path(options.repo), 'merge-base', base, options.head).strip().decode('ascii')
+        except (OSError, UnicodeError, subprocess.SubprocessError):
+            base = ''
+    if options.event == 'push' and options.ref in ('main', 'refs/heads/main'):
+        base, source = '', 'main push: full suite'
+    fields = {'mode': mode, 'reason': reason, 'tests': ' '.join(tests),
+              'base': base if base and mode != 'full' or source == 'latest successful push run on this branch' else '',
+              'base_source': source}
+
     for key, value in fields.items():
         print(f'{key}={value}')
     if options.github_output:

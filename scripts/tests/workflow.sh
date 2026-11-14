@@ -214,8 +214,13 @@ with tempfile.TemporaryDirectory() as temp:
         ('selector-unpinned', '      - name: Choose tests',
          '      - uses: actions/checkout@v6\n      - name: Choose tests', 'actions must be'),
         ('selector-no-output', '--github-output "$GITHUB_OUTPUT"', '--github-output /tmp/out', 'selector must compare'),
-        ('selector-no-gate', "    if: always() && needs.image-prep.result == 'success' && needs.build.result == 'success' && needs.select.outputs.mode != 'none'", '    if: always()', 'selection must gate'),
+        ('selector-no-gate', "    if: ${{ !cancelled() && needs.image-prep.result == 'success' && needs.build.result == 'success' && needs.select.outputs.mode != 'none' }}", '    if: always()', 'selection must gate'),
         ('selector-no-result', 'SELECT_RESULT: ${{ needs.select.result }}', 'SELECT_RESULT: success', 'selection must gate'),
+        ('defaults-accel-workflow', 'permissions: {}', 'permissions: {}\ndefaults:\n  run:\n    shell: env RORTHOX_ACCEL=tcg bash -e {0}', 'defaults must not override'),
+        ('defaults-accel-test-escaped', '  test:\n', '  test:\n    defaults:\n      run:\n        shell: "env RORTHOX\\x5fACCEL=tcg bash -e {0}"\n', 'override its accelerator'),
+        ('defaults-marker', '  test:\n', '  test:\n    defaults:\n      run:\n        shell: env RORTHOX_KVM_SETUP_FAILED=x bash -e {0}\n', 'setup marker'),
+        ('selector-no-actions', '      actions: read', '      actions: write', 'unexpected permissions'),
+        ('selector-no-token', 'GH_TOKEN: ${{ github.token }}', 'GH_TOKEN: none', 'selector must compare'),
     )
     for tag, old, new, why in cases:
         assert text.count(old) == 1 or tag in ('shard-timeout',), tag
@@ -242,6 +247,14 @@ with tempfile.TemporaryDirectory() as temp:
     missing = subprocess.run(['python3', '-B', str(lint), str(workflow)], cwd=root,
                              capture_output=True, env=env)
     assert missing.returncode != 0 and b'PyYAML is required' in missing.stderr
+    # The TCG discovery used by the step and aggregate treats a trailing semicolon as a call.
+    tcg_tree = temp / 'tcg-fixture'
+    (tcg_tree / 'scripts/tests').mkdir(parents=True)
+    (tcg_tree / 'scripts/tests/pic.sh').write_text('qemu_require_tcg; echo ok\n')
+    found = subprocess.run(['python3', '-B', str(root / 'scripts/tcg_only.py')],
+                           cwd=tcg_tree, capture_output=True, text=True, check=True)
+    assert found.stdout.splitlines() == ['scripts/tests/pic.sh'], found.stdout
+    print('PASS TCG-only discovery: semicolon caller')
     # Multi-path upload-artifact roots files at the common parent of every
     # search path, including paths for files that are absent on this shard.
     upload = text.split('      - name: Upload shard results\n', 1)[1].split('  image-prep:', 1)[0]

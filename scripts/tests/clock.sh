@@ -105,10 +105,11 @@ S="$OUT/screen.txt"
 sed 's/^> //' "$S" > "$OUT/lines.txt" 2> /dev/null || : > "$OUT/lines.txt"
 L="$OUT/lines.txt"
 # How close the loops came to their limits on this accelerator: the garbage esp loop's rounds for
-# 30 ticks against its limit, and the busy loop's calls for 5 ticks against 2000000.
+# 30 ticks against its limit, and the calls the busy loop needed against 2000000 (it reports only
+# its call count; its 5 ticks are checked by the "advanced 5 times" line below).
 awk '$1 == "lt-t:" && $2 == "garbage" && $4 == "rounds" && $6 == "limit" && $8 == "ticks" &&
      $10 == "busy" && $11 == "calls" && NF == 12 {
-         printf "clock: garbage esp loop: %s ticks in %s rounds (limit %s), busy loop: 5 ticks in %s calls (limit 2000000)\n",
+         printf "clock: garbage esp loop: %s ticks in %s rounds (limit %s), busy loop: %s calls (limit 2000000)\n",
              $9, $5, $7, $12; found = 1; exit }
      END { if (!found) print "clock: no garbage esp rounds line on the screen" }' "$L"
 check "no kernel panic (debugcon)"                        "$OUT/debugcon.log" "PANIC" absent

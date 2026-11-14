@@ -18,7 +18,10 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+      actions: read
     outputs:
+      base: ${{ steps.choose.outputs.base }}
+      base_source: ${{ steps.choose.outputs.base_source }}
       mode: ${{ steps.choose.outputs.mode }}
       reason: ${{ steps.choose.outputs.reason }}
       tests: ${{ steps.choose.outputs.tests }}
@@ -36,9 +39,11 @@ jobs:
           BEFORE: ${{ github.event.before }}
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [ "$EVENT" = pull_request ]; then before=$BASE; else before=$BEFORE; fi
-          python3 -B scripts/select-tests.py --event "$EVENT" --ref "$REF" --base "$before" --head "$HEAD" --github-output "$GITHUB_OUTPUT"
+          python3 -B scripts/select-tests.py --event "$EVENT" --ref "$REF" --base "$before" --head "$HEAD" --repository "$REPOSITORY" --branch "${REF#refs/heads/}" --github-output "$GITHUB_OUTPUT"
 
   build:
     runs-on: ubuntu-24.04
@@ -108,7 +113,7 @@ jobs:
 
   test:
     needs: [image-prep, build, select]
-    if: always() && needs.image-prep.result == 'success' && needs.build.result == 'success' && needs.select.outputs.mode != 'none'
+    if: ${{ !cancelled() && needs.image-prep.result == 'success' && needs.build.result == 'success' && needs.select.outputs.mode != 'none' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -196,7 +201,7 @@ jobs:
           TEST_MODE: ${{ needs.select.outputs.mode }}
           SELECTED_TESTS: ${{ needs.select.outputs.tests }}
         run: |
-          mapfile -t tcg_only < <(grep -lE '^[[:space:]]*qemu_require_tcg([[:space:]]|$)' scripts/tests/*.sh | grep -v '^scripts/tests/accelerator.sh$')
+          mapfile -t tcg_only < <(python3 -B scripts/tcg_only.py)
           if [ "$TEST_MODE" = subset ]; then
             filtered=()
             for t in "${tcg_only[@]}"; do
@@ -358,5 +363,7 @@ jobs:
           SELECT_RESULT: ${{ needs.select.result }}
           SELECT_MODE: ${{ needs.select.outputs.mode }}
           SELECT_REASON: ${{ needs.select.outputs.reason }}
+          SELECT_BASE: ${{ needs.select.outputs.base }}
+          SELECT_BASE_SOURCE: ${{ needs.select.outputs.base_source }}
           SELECT_TESTS: ${{ needs.select.outputs.tests }}
         run: python3 -B scripts/ci-result.py "$RUNNER_TEMP/ci-results" "$BUILD_RESULT" "$TEST_RESULT"

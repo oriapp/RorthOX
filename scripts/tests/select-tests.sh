@@ -68,7 +68,7 @@ def report(ok, name, detail=''):
 def run_selector(repo, event, ref, base, head, output=None):
     """Runs the selector from a directory outside every repository; returns rc, stdout, fields."""
     args = ['python3', '-B', str(selector), '--event', event, '--ref', ref, '--base', base, '--head', head,
-            '--repo', str(repo)]
+            '--repo', str(repo), '--fixture-base']
     if output:
         args += ['--github-output', str(output)]
     p = subprocess.run(args, cwd=work, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -77,12 +77,12 @@ def run_selector(repo, event, ref, base, head, output=None):
 
 
 def parse(text):
-    """The three stdout lines, or None when the output is not exactly mode=, reason=, tests=."""
+    """The five stdout lines, or None when any output is malformed."""
     lines = text.split('\n')
-    if len(lines) != 4 or lines[3] != '':
+    if len(lines) != 6 or lines[5] != '':
         return None
     fields = {}
-    for key, line in zip(('mode', 'reason', 'tests'), lines[:3]):
+    for key, line in zip(('mode', 'reason', 'tests', 'base', 'base_source'), lines[:5]):
         if not line.startswith(key + '='):
             return None
         fields[key] = line[len(key) + 1:]
@@ -94,7 +94,8 @@ repo = work / 'repo'
 repo.mkdir()
 git(repo, 'init', '-q', '-b', 'main')
 git(repo, 'config', 'core.symlinks', 'true')
-TESTS = ('pic', 'heap', 'heap-oom', 'argument-oom', 'elf-unwind', 'open-oom', 'exceptions', 'tss-io')
+TESTS = ('pic', 'heap', 'heap-oom', 'argument-oom', 'elf-unwind', 'open-oom', 'exceptions', 'tss-io',
+         'select-tests', 'ci-parity', 'workflow')
 baseline = {
     'README.md': 'readme\n', 'docs/a.md': 'a\n', 'docs/sub/b.md': 'b\n', 'kernel/kernel.c': 'int x;\n',
     'kernel/boot/boot.asm': 'nop\n', 'programs/blank/blank.c': 'int y;\n', 'programs/stdlib/src/stdio.c': '\n',
@@ -171,6 +172,8 @@ ANY = r'.'
 
 
 def T(*names):
+    if 'smoke' in names:
+        names = (*names, 'select-tests', 'ci-parity', 'workflow')
     return ['scripts/smoke.sh' if n == 'smoke' else f'scripts/tests/{n}.sh' for n in names]
 
 
@@ -192,6 +195,10 @@ rows = [
      T('smoke', 'pic')),
     ('new test', PUSH, F, 'base', [], [('w', 'scripts/tests/new-one.sh', 'echo\n')], 'subset', SUBSET,
      T('smoke', 'new-one')),
+    ('new test calls another', PUSH, F, 'base', [],
+     [('w', 'scripts/tests/new-one.sh', 'bash scripts/tests/pic.sh\n')], 'subset', SUBSET, T('smoke', 'new-one')),
+    ('changed TCG requirement', PUSH, F, 'base', [],
+     [('w', 'scripts/tests/pic.sh', 'qemu_require_tcg; echo pic\n')], 'subset', SUBSET, T('smoke', 'pic')),
     ('test mode change', PUSH, F, 'base', [('nx', 'scripts/tests/heap.sh')],
      [('x', 'scripts/tests/heap.sh')], 'subset', SUBSET, T('smoke', 'heap')),
     ('two tests', PUSH, F, 'base', [], [('w', 'scripts/tests/pic.sh', '2\n'), ('w', 'scripts/tests/heap.sh', '2\n')],
@@ -350,7 +357,7 @@ for name, event, ref, spec, pre, ops, mode, reason, tests in rows:
     if rc != 0:
         problems.append(f'exit status {rc}')
     if fields is None:
-        problems.append('stdout is not exactly mode=, reason=, tests=')
+        problems.append('stdout is not exactly the five selection fields')
         fields = {'mode': '?', 'reason': '?', 'tests': '?'}
     modes = mode if isinstance(mode, tuple) else (mode,)
     if fields['mode'] not in modes:
@@ -375,12 +382,43 @@ for name, event, ref, spec, pre, ops, mode, reason, tests in rows:
         d = m.group(1)
         delimiters.add(d)
         want = ['earlier=kept']
-        for key in ('mode', 'reason', 'tests'):
+        for key in ('mode', 'reason', 'tests', 'base', 'base_source'):
             want += [f'{key}<<{d}', fields[key], d]
         if lines != want + [''] or any(d in v for v in fields.values()):
             problems.append(f'github output {lines!r}')
     report(not problems, name, '; '.join(problems))
 
+# A stand-in API proves the latest green push is the comparison base.
+import importlib.util
+import io
+import json
+spec = importlib.util.spec_from_file_location('selector', selector)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+reset(base_sha)
+a = commit([('w', 'kernel/kernel.c', 'A\n')], 'A')
+b = commit([('w', 'README.md', 'B\n')], 'B')
+class Reply(io.BytesIO):
+    def __enter__(self): return self
+    def __exit__(self, *args): self.close()
+def fake(sha, event='push'):
+    def open_run(request, timeout):
+        assert timeout == 10 and 'status=success' in request.full_url
+        return Reply(json.dumps({'workflow_runs': [{'head_sha': sha, 'head_branch': 'features',
+             'status': 'completed', 'event': event, 'conclusion': 'success'}]}).encode())
+    return open_run
+for label, opener, expected, why in (
+        ('green ancestor', fake(base_sha), 'full', FULL_PATH),
+        ('green at A', fake(a), 'none', NONE_DOCS),
+        ('failed lookup', lambda *args, **kw: (_ for _ in ()).throw(OSError('offline')), 'full', 'unavailable'),
+        ('empty lookup', lambda *args, **kw: Reply(b'{"workflow_runs": []}'), 'full', 'no successful'),
+        ('not an ancestor', fake(resolve('orphan', base_sha, b)[0]), 'full', 'unavailable|ancestor')):
+    got, source = module.successful_push_base(repo, 'oriapp/RorthOX', 'features', b, 'fixture', opener)
+    mode, reason, tests = module.select(repo, PUSH, F, got, b)
+    report(mode == expected and re.search(why, reason + ' ' + source, re.I), 'API: ' + label,
+           f'{mode} {reason} {source}')
+report('select-tests' in {p.stem for p in (tests_dir if False else root / 'scripts/tests').glob('*.sh')},
+       'meta test exists')
 # A delimiter that repeats is not random.
 report(len(delimiters) == len(rows), f'{len(rows)} different output delimiters', f'{len(delimiters)} distinct')
 
