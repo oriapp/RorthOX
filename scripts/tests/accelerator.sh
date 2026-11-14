@@ -67,7 +67,7 @@ if [ $kvm = yes ]; then
             echo "fake-qemu: failed to initialize kvm: Permission denied" >&2
             exit 1 ;;
         long)
-            printf 'fake-qemu: failed to initialize kvm: %s\n' "$(head -c 5000 /dev/zero | tr '\0' x)" >&2
+            printf 'fake-qemu: failed to initialize kvm: %%0A%s\n' "$(head -c 5000 /dev/zero | tr '\0' x)" >&2
             exit 1 ;;
         hang) exec sleep 60 ;;
     esac
@@ -177,13 +177,13 @@ annotate() {
     status=$?
 }
 prefix="::error title=KVM unavailable::"
-qline="fake-qemu: failed to initialize kvm: "   # the start of the stand-in's long line
+qline="fake-qemu: failed to initialize kvm: %0A"   # the start of the stand-in's long line
 annotate long
 expect "a 5000-byte reason: QEMU's line cut to 1000 bytes, one annotation of at most 1500" \
     '[ $status -eq 1 ] && [ $(wc -l < "$OUT/ann-long.out") -eq 1 ] && [ "$(head -c ${#prefix} "$OUT/ann-long.out")" = "$prefix" ] &&
      [ $(wc -c < "$OUT/ann-long.out") -le $((${#prefix} + 1501)) ] && [ $(wc -l < "$OUT/ann-long.err") -eq 1 ] &&
      [ "$(grep -o "x\{100,\}" "$OUT/ann-long.err" | tr -d "\n" | wc -c)" -eq $((1000 - ${#qline})) ] &&
-     grep -q "failed to initialize kvm: xxxxxxxxxx" "$OUT/ann-long.out"'
+     grep -q "failed to initialize kvm: %250Axxxxxxxxxx" "$OUT/ann-long.out"'
 annotate many
 expect "400 in-kernel PITs: one annotation of at most 1500 bytes" \
     '[ $status -eq 1 ] && [ $(wc -l < "$OUT/ann-many.out") -eq 1 ] && [ "$(head -c ${#prefix} "$OUT/ann-many.out")" = "$prefix" ] &&

@@ -218,6 +218,16 @@ with tempfile.TemporaryDirectory() as temp:
         ('commented-kvm-step-name', kvm_change('      - name: Test with KVM\n        timeout-minutes: 31',
             '      - name: Test with KVM # comment\n        timeout-minutes: 1\n        run: echo duplicate\n'
             '      - name: Test with KVM\n        timeout-minutes: 30'), 'duplicate or unexpected KVM step name'),
+        ('unnamed-kvm-run', kvm_change('      - name: Add KVM test summary',
+            '      - run: ./ci/run.sh ./scripts/run-tests.sh -j 2 --results build/tests/runs/kvm\n'
+            '        timeout-minutes: 1\n'
+            '      - name: Add KVM test summary'), 'duplicate or unexpected KVM step name'),
+        ('kvm-if-first', kvm_change('      - name: Add KVM test summary',
+            '      - if: always()\n'
+            '        name: Retry\n'
+            '        timeout-minutes: 1\n'
+            '        run: ./ci/run.sh ./scripts/run-tests.sh -j 2 --results build/tests/runs/kvm\n'
+            '      - name: Add KVM test summary'), 'duplicate or unexpected KVM step name'),
         ('spaced-kvm-step-name', kvm_change('      - name: Test with KVM\n        timeout-minutes: 31',
             '      - name: Test with KVM \n        timeout-minutes: 1\n        run: echo duplicate\n'
             '      - name: Test with KVM\n        timeout-minutes: 30'), 'duplicate or unexpected KVM step name'),

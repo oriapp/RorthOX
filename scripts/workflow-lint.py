@@ -183,19 +183,29 @@ def lint(text):
     kvm = jobs['kvm']
     kvm_steps = {name: body for name, body in
                  re.findall(r'^      - name: ([^\n]+)\n(.*?)(?=^      - |\Z)', kvm, re.M | re.S)}
-    names = re.findall(r'^      - name: ([^\n]+)$', kvm, re.M)
-    expected_names = [
-        'Enable the host KVM device if present',
-        'Verify the image for this revision',
-        'Extract KVM production build',
-        'Diagnose KVM in the image',
-        'Test with KVM',
-        'Add KVM test summary',
-        'Upload KVM results',
+    # Compare every step, including steps whose first key is not name. The fallback
+    # accepts only the exact block-style spelling so quoted YAML cannot hide a step.
+    expected_steps = [
+        (None, 'actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803'),
+        ('Enable the host KVM device if present', None),
+        (None, 'actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53'),
+        ('Verify the image for this revision', None),
+        (None, 'actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53'),
+        ('Extract KVM production build', None),
+        ('Diagnose KVM in the image', None),
+        ('Test with KVM', None),
+        ('Add KVM test summary', None),
+        ('Upload KVM results', 'actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f'),
     ]
-    # The fallback must reject differently spelled scalars with the same YAML name.
-    # Also disallow extra steps that could replace the tested build or its results.
-    require(names == expected_names, 'duplicate or unexpected KVM step name')
+    blocks = re.split(r'^      - ', kvm, flags=re.M)[1:]
+    first_keys = [('name: ' + name if name is not None else 'uses: ' + action)
+                  for name, action in expected_steps]
+    require([block.splitlines()[0] for block in blocks] == first_keys and
+            not re.search(r'^        name:', kvm, re.M),
+            'duplicate or unexpected KVM step name')
+    if yaml is not None:
+        require([(step.get('name'), step.get('uses')) for step in parsed['kvm']['steps']] == expected_steps,
+                'duplicate or unexpected KVM step name')
     image_step = kvm_steps.get('Verify the image for this revision', '')
     extract_step = kvm_steps.get('Extract KVM production build', '')
     diagnostic_step = kvm_steps.get('Diagnose KVM in the image', '')
