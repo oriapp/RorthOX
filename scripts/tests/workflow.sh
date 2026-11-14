@@ -155,17 +155,45 @@ with tempfile.TemporaryDirectory() as temp:
             '          # RORTHOX_ACCEL: kvm\n          RORTHOX_ACCEL: tcg\n'),
             'KVM job must use the same verified image'),
         ('kvm-no-udev', kvm_change('            echo \'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"\' | sudo tee /etc/udev/rules.d/99-kvm4all.rules\n', ''),
-            'KVM job must use the same verified image'),
+            'KVM sudo is confined to device setup'),
         ('kvm-privileged', kvm_change('      - name: Add KVM test summary\n        timeout-minutes: 2\n',
             '      - name: Extra\n        timeout-minutes: 1\n        run: docker run --privileged --rm alpine true\n      - name: Add KVM test summary\n        timeout-minutes: 1\n'),
-            'KVM job must not run privileged'),
+            'KVM job must not run host Docker'),
         ('kvm-test-timeout', kvm_change("          RORTHOX_TEST_TIMEOUT: '300'\n", ''),
             'KVM job must use the same verified image'),
         ('kvm-upload', kvm_change('      - name: Upload KVM results\n        timeout-minutes: 2\n        if: always()',
             '      - name: Upload KVM results\n        timeout-minutes: 2\n        if: success()'),
             'KVM job must use the same verified image'),
-        ('kvm-step-timeout', kvm_change('      - name: Test with KVM\n        timeout-minutes: 45',
+        ('kvm-step-timeout', kvm_change('      - name: Test with KVM\n        timeout-minutes: 35',
             '      - name: Test with KVM'), 'kvm: step'),
+        ('kvm-override-accel', kvm_change('          ./ci/run.sh ./scripts/run-tests.sh -j 2',
+            '          export RORTHOX_ACCEL=tcg\n          ./ci/run.sh ./scripts/run-tests.sh -j 2'), 'KVM run must not override its accelerator'),
+        ('github-nested', kvm_change(credential_step, credential_step +
+            '          T: ${{ toJSON((github)) }}\n'), 'credentials outside publication'),
+        ('github-or', kvm_change(credential_step, credential_step +
+            '          T: ${{ toJSON(null || github) }}\n'), 'credentials outside publication'),
+        ('github-and', kvm_change(credential_step, credential_step +
+            '          T: ${{ toJSON(true && github) }}\n'), 'credentials outside publication'),
+        ('escaped-expression-start', kvm_change(credential_step, credential_step +
+            r'          T: "\x24\x7b\x7b \x73ecrets.GITHUB_TOKEN }}"' + '\n'), 'escaped scalar requires YAML parser'),
+        ('binary-tag', kvm_change(credential_step, credential_step +
+            '          T: !!binary JHt7IHNlY3JldHMuR0lUSFVCX1RPS0VOIH19\n'), 'YAML tags are not supported'),
+        ('inline-binary-tag', kvm_change(credential_step, credential_step +
+            '          T: [!!binary JHt7IHNlY3JldHMuR0lUSFVCX1RPS0VOIH19]\n'), 'YAML tags are not supported'),
+        ('docker-create', kvm_change("            echo '/dev/kvm absent; forced KVM will fail rather than fall back to TCG'",
+            '            docker create alpine true'), 'KVM job must not run host Docker'),
+        ('sudo-extra', kvm_change('            sudo udevadm settle',
+            '            sudo chmod 0666 /var/run/docker.sock\n            sudo udevadm settle'), 'KVM sudo is confined to device setup'),
+        ('host-script', kvm_change('          ./ci/run.sh ./scripts/run-tests.sh -j 2 --results build/tests/runs/kvm',
+            '          ./ci/run.sh ./scripts/run-tests.sh -j 2 --results build/tests/runs/kvm\n          ./scripts/accelerator.sh'), 'KVM scripts must run inside the image'),
+        ('kvm-job-container', kvm_change('    runs-on: ubuntu-24.04\n',
+            '    runs-on: ubuntu-24.04\n    container: alpine:latest\n'), 'KVM job must not run host Docker'),
+        ('commented-image-id', kvm_change(credential_step, '          # RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}\n'), 'KVM job must use the same verified image'),
+        ('commented-manifest', kvm_change('          MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}',
+            '          # MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}\n          MANIFEST_SHA256: deadbeef'), 'KVM job must use the same verified image'),
+        ('commented-extract', kvm_change('          ./ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$MANIFEST_SHA256"',
+            '          # ./ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$MANIFEST_SHA256"\n          ./ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$(sha256sum build/ci/production.tar.gz)"'), 'KVM job must use the same verified image'),
+        ('commented-test-limit', kvm_change("          RORTHOX_TEST_TIMEOUT: '300'", "          # RORTHOX_TEST_TIMEOUT: '300'"), 'KVM job must use the same verified image'),
     )
     for tag, mutated, reason in cases:
         print('checking', tag, flush=True)
@@ -178,8 +206,10 @@ with tempfile.TemporaryDirectory() as temp:
                 env['PYTHONPATH'] = str(path)
             result = subprocess.run(['python3', '-B', str(lint), str(workflow)], cwd=root,
                                     capture_output=True, text=True, env=env)
-            expected = ('escaped expression requires YAML parser' if path is not None and
-                        tag.startswith('escaped-') else reason)
+            expected = ('escaped scalar requires YAML parser' if path is not None and
+                        tag in ('escaped-secret-hex', 'escaped-secret-unicode', 'escaped-token', 'escaped-index', 'escaped-expression-start')
+                        else 'credentials outside publication' if path is None and tag == 'escaped-expression-start'
+                        else reason)
             assert result.returncode != 0 and expected in result.stderr, (tag, mode, result.stderr)
     env = os.environ.copy()
     env['GITHUB_ACTIONS'] = 'true'

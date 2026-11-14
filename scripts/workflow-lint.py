@@ -122,6 +122,21 @@ def lint(text):
             'YAML anchors and aliases are not supported')
     # Expressions in shell commands are interpreted before shell quoting; use env: instead.
     lines = text.splitlines()
+    block_indent = None
+    for line in lines:
+        indent = len(line) - len(line.lstrip())
+        if line.strip() and block_indent is not None and indent <= block_indent:
+            block_indent = None
+        if block_indent is None:
+            # Tags change scalar types, including !!binary values hidden in flow mappings.
+            require(not re.search(r'(?:^|[\s\[{,:])!(?:!|<|[A-Za-z_])', line),
+                    'YAML tags are not supported')
+            if yaml is None:
+                # Refuse escapes in any double-quoted YAML scalar, not just expressions.
+                require(not re.search(r'"(?:[^"\\]|\\.)*\\', line),
+                        'escaped scalar requires YAML parser')
+            if re.match(r'^\s*(?:-\s+)?run:\s*[|>][+\-0-9]*\s*$', line):
+                block_indent = indent
     for i, line in enumerate(lines):
         match = re.match(r'^(\s*(?:-\s+)?)run:\s*(.*)$', line)
         if match is None:
@@ -165,37 +180,72 @@ def lint(text):
                 f'{name}: unverified image or host workload')
         require('sudo apt-' not in body and 'actions/cache@' not in body and
                 './configure.sh' not in body, f'{name}: legacy toolchain path')
-    require(re.search(r'^    needs: \[image-prep, build\]$', jobs['kvm'], re.M) and
-            re.search(r"^    if: github.event_name == 'push' && github.repository == 'oriapp/RorthOX'$", jobs['kvm'], re.M) and
-            'RORTHOX_ACCEL: kvm' in jobs['kvm'] and 'RORTHOX_ACCEL_PROBE_TIMEOUT:' in jobs['kvm'] and
-            './ci/run.sh ./scripts/run-tests.sh -j 2' in jobs['kvm'] and
-            'ci/image-job.sh receive' in jobs['kvm'] and 'ci/image-job.sh fetch' in jobs['kvm'] and
-            'ci-artifact.py extract' in jobs['kvm'] and
-            'name: kvm-results' in jobs['kvm'] and
-            'sudo udevadm settle' in jobs['kvm'] and
-            'sudo udevadm trigger --name-match=kvm' in jobs['kvm'] and
-            'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' in jobs['kvm'] and
-            'IMAGE_MODE: ${{ needs.image-prep.outputs.mode }}' in jobs['kvm'] and
-            'RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}' in jobs['kvm'] and
-            'MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}' in jobs['kvm'] and
-            re.search(r'ci-artifact\.py extract [^\n]* "\$MANIFEST_SHA256"', jobs['kvm']) and
-            re.search(r'^          RORTHOX_ACCEL: kvm$', jobs['kvm'], re.M) and
-            not re.search(r'^          RORTHOX_ACCEL: tcg$', jobs['kvm'], re.M) and
-            'RORTHOX_TEST_TIMEOUT: \'300\'' in jobs['kvm'] and
-            re.search(r'^      - name: Upload KVM results\n        timeout-minutes: \d+\n        if: always\(\)$', jobs['kvm'], re.M),
+    kvm = jobs['kvm']
+    kvm_steps = {name: body for name, body in
+                 re.findall(r'^      - name: ([^\n]+)\n(.*?)(?=^      - |\Z)', kvm, re.M | re.S)}
+    image_step = kvm_steps.get('Verify the image for this revision', '')
+    test_step = kvm_steps.get('Test with KVM', '')
+    host_step = kvm_steps.get('Enable the host KVM device if present', '')
+    def step_field(step, field, value):
+        return bool(re.search(r'^          ' + re.escape(field) + r': ' + re.escape(value) + r'$', step, re.M))
+
+    require(re.search(r'^    needs: \[image-prep, build\]$', kvm, re.M) and
+            re.search(r"^    if: github.event_name == 'push' && github.repository == 'oriapp/RorthOX'$", kvm, re.M) and
+            'ci/image-job.sh receive' in image_step and 'ci/image-job.sh fetch' in image_step and
+            step_field(image_step, 'IMAGE_MODE', '${{ needs.image-prep.outputs.mode }}') and
+            step_field(test_step, 'RORTHOX_IMAGE_ID', '${{ steps.image-id.outputs.id }}') and
+            step_field(test_step, 'MANIFEST_SHA256', '${{ needs.build.outputs.manifest }}') and
+            step_field(test_step, 'RORTHOX_ACCEL', 'kvm') and
+            step_field(test_step, 'RORTHOX_TEST_TIMEOUT', "'300'") and
+            step_field(test_step, 'RORTHOX_ACCEL_PROBE_TIMEOUT', "'30'") and
+            bool(re.search(r'^          ./ci/run\.sh python3 -B scripts/ci-artifact\.py extract build/ci/production\.tar\.gz "\$MANIFEST_SHA256"$', test_step, re.M)) and
+            bool(re.search(r'^          ./ci/run\.sh ./scripts/run-tests\.sh -j 2 --results build/tests/runs/kvm$', test_step, re.M)) and
+            'name: kvm-results' in kvm and
+            re.search(r'^      - name: Upload KVM results\n        timeout-minutes: \d+\n        if: always\(\)$', kvm, re.M),
             'KVM job must use the same verified image and build artifact')
-    # Keep host-level Docker execution confined to the audited wrapper.
-    require(not re.search(r'\bdocker\s+run\b|--privileged\b', jobs['kvm'], re.I),
-            'KVM job must not run privileged or host Docker commands')
+    sudo_lines = [line.strip() for line in kvm.splitlines() if re.search(r'\bsudo\b', line)]
+    allowed_sudo = [
+        "echo 'KERNEL==\"kvm\", GROUP=\"kvm\", MODE=\"0666\", OPTIONS+=\"static_node=kvm\"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules",
+        'sudo udevadm control --reload-rules',
+        'sudo udevadm trigger --name-match=kvm',
+        'sudo udevadm settle',
+    ]
+    require(sudo_lines == allowed_sudo and
+            all(('            ' + line) in host_step.splitlines() for line in allowed_sudo),
+            'KVM sudo is confined to device setup')
+    require(not re.search(r'\bdocker\b', kvm, re.I) and
+            not re.search(r'^    (?:container|services):', kvm, re.M),
+            'KVM job must not run host Docker or use job containers')
+    if yaml is not None:
+        require('container' not in parsed['kvm'] and 'services' not in parsed['kvm'],
+                'KVM job must not use a container or services')
+        parsed_steps = {step.get('name'): step for step in parsed['kvm']['steps']}
+        parsed_image = parsed_steps.get('Verify the image for this revision', {})
+        parsed_test = parsed_steps.get('Test with KVM', {})
+        require(isinstance(parsed_image, dict) and isinstance(parsed_test, dict) and
+                parsed_image.get('env', {}).get('IMAGE_MODE') == '${{ needs.image-prep.outputs.mode }}' and
+                parsed_test.get('env', {}).get('RORTHOX_IMAGE_ID') == '${{ steps.image-id.outputs.id }}' and
+                parsed_test.get('env', {}).get('MANIFEST_SHA256') == '${{ needs.build.outputs.manifest }}' and
+                parsed_test.get('env', {}).get('RORTHOX_TEST_TIMEOUT') == '300' and
+                parsed_test.get('env', {}).get('RORTHOX_ACCEL') == 'kvm' and
+                './ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$MANIFEST_SHA256"' in parsed_test.get('run', ''),
+                'KVM parsed step bindings differ')
+    for step in parsed['kvm']['steps'] if yaml is not None else kvm_steps.values():
+        run = step.get('run', '') if yaml is not None else (step.split('        run:', 1)[1] if '        run:' in step else '')
+        require(not re.search(r'\bRORTHOX_ACCEL\b', run),
+                'KVM run must not override its accelerator')
+        for line in run.splitlines():
+            if re.search(r'(?<![\w./])(?:\./)?scripts/', line):
+                require(bool(re.search(r'\./ci/run\.sh\s+[^\n]*scripts/', line)),
+                        'KVM scripts must run inside the image')
     require('    continue-on-error:' not in jobs['image-prep'],
             'image preparation must be required')
     # Context references must not put credentials in the workflow or read-only jobs.
     # github.ref and other non-secret fields are allowed; whole-context exports are not.
     scope = re.split(r'^jobs:[ \t]*$', text, maxsplit=1, flags=re.M)[0]
     outside = scope + ''.join(body for name, body in jobs.items() if name != 'image')
-    credential = re.compile(r'\bsecrets\b|\bgithub\s*\[|'
-                            r'\bgithub\s*\.\s*(?!event_name\b|repository\b|ref\b|sha\b|workflow\b)'
-                            r'|\btoJSON\s*\(\s*github\b', re.I)
+    credential = re.compile(r'\bsecrets\b|\bgithub\b'
+                            r'(?!\s*\.\s*(?:event_name|repository|ref|sha|workflow)\b)', re.I)
     # YAML double-quoted scalars may decode escapes into credential expressions.
     # Check parsed keys as well as values (including sequences and nested mappings).
     def contains_credential(value):

@@ -15,9 +15,9 @@
 #    a working probe gives KVM, and a test that fails under it fails, it doesn't run again.
 # 6. The reports name the accelerator, the reason, the QEMU version and the CPU model.
 # 7. Lint: only qemu-lib.sh starts a guest QEMU (no test can leave out or add an accelerator), no
-#    test sets QEMU_FLAGS with an accelerator or CPU, and a test that uses "-d int" or "cpu_reset"
-#    (output KVM never writes, so its absence proves nothing there) skips under KVM through
-#    qemu_require_tcg.
+#    test sets QEMU_FLAGS with an accelerator or CPU; tests relying on the TCG-only "Triple fault"
+#    line or "-d int" output skip under KVM through qemu_require_tcg ("CPU Reset" dumps appear
+#    under both accelerators).
 
 set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 1

@@ -314,13 +314,13 @@ jobs:
           fi
       # actions/download-artifact v6
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
-        timeout-minutes: 2
+        timeout-minutes: 5
         if: needs.image-prep.outputs.mode == 'archive'
         with:
           name: candidate-image
           path: ${{ runner.temp }}
       - name: Verify the image for this revision
-        timeout-minutes: 3
+        timeout-minutes: 10
         id: image-id
         env:
           IMAGE_MODE: ${{ needs.image-prep.outputs.mode }}
@@ -343,7 +343,7 @@ jobs:
           name: production
           path: ${{ runner.temp }}/production
       - name: Test with KVM
-        timeout-minutes: 45
+        timeout-minutes: 35
         env:
           MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}
           RORTHOX_REQUIRE_ISO: '1'
