@@ -3,7 +3,11 @@
 import json
 import math
 import pathlib
+import re
 import sys
+
+
+TCG_ONLY = frozenset({"scripts/tests/boot-segments.sh"})
 
 
 class Invalid(Exception):
@@ -49,7 +53,8 @@ def escape(text, property=False):
     value = str(text).replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
     if property:
         value = value.replace(':', '%3A').replace(',', '%2C')
-    return value[:3500]
+    value = value[:3500]
+    return re.sub(r"%(?:[0-9A-F]?)$", "", value)
 
 
 def markdown(text):
@@ -63,6 +68,10 @@ def emit(message, bad=False):
 def main(args):
     if len(args) not in (4, 5):
         raise Invalid('usage: ci-parity.py TCG_ARTIFACTS KVM_1 KVM_2 KVM_3 [SUMMARY]')
+    callers = {str(path) for path in pathlib.Path("scripts/tests").glob("*.sh")
+               if path.name != "accelerator.sh" and re.search(r"^\s*qemu_require_tcg\b", path.read_text(), re.M)}
+    if callers != TCG_ONLY:
+        raise Invalid(f"TCG-only test list stale: {sorted(callers ^ TCG_ONLY)}")
     shards = []
     tcg = {}
     for i in range(1, 5):
@@ -74,11 +83,16 @@ def main(args):
         shards.append(shard)
     runs = [load(pathlib.Path(path) / 'results.json', 'kvm') for path in args[1:4]]
     differences = []
+    tcg_only = set()
     for number, run in enumerate(runs, 1):
         for name in sorted(set(tcg) | set(run)):
             expected = tcg.get(name)
             actual = run.get(name)
-            if expected is None or actual is None or expected[0] != actual[0] or actual[0] not in ('passed', 'skipped'):
+            if (name in TCG_ONLY and expected is not None and actual is not None and
+                    expected[0] == "passed" and actual[0] == "skipped"):
+                tcg_only.add(name)
+                continue
+            if expected is None or actual is None or expected[0] != actual[0] or actual[0] != "passed":
                 differences.append(f'KVM {number} {name}: TCG {expected[0] if expected else "missing"}, '
                                    f'KVM {actual[0] if actual else "missing"}')
     # The runner has one result per test, not individual check IDs. Compare these
@@ -93,9 +107,14 @@ def main(args):
             if item and item[0] == 'passed' and item[1] is not None:
                 ratios.append((item[1] / base, name, number, item[1], base))
     ratios.sort(reverse=True)
+    tcg_total = sum(item[1] for item in tcg.values() if item[0] == "passed")
+    kvm_totals = [sum(item[1] for item in run.values() if item[0] == "passed") for run in runs]
+    totals = f"TCG {tcg_total:.1f}s; KVM " + ", ".join(f"{v:.1f}s" for v in kvm_totals)
+    top = "; ".join(f"{name} run {number}: {ratio:.2f}x ({kvm:.1f}s/{base:.1f}s)"
+                    for ratio, name, number, kvm, base in ratios[:5])
     lines = ['## KVM / TCG parity', '', f'{len(tcg)} tests; '
              + ('differences: ' + str(len(differences)) if differences else 'parity OK') + '.',
-             '', 'Slowest KVM/TCG ratios (per-test seconds):', '', '| Test | KVM run | KVM | TCG | Ratio |',
+             f'TCG-only: {len(tcg_only)}; {totals}.', '', 'Slowest KVM/TCG ratios (per-test seconds):', '', '| Test | KVM run | KVM | TCG | Ratio |',
              '| --- | ---: | ---: | ---: | ---: |']
     for ratio, name, number, kvm, base in ratios[:10]:
         safe = markdown(name)
@@ -109,10 +128,10 @@ def main(args):
             out.write(summary[:6000])
     print(summary)
     if differences:
-        emit(f'KVM/TCG parity differs in {len(differences)} test/run pairs: ' +
+        emit(f'KVM/TCG parity differs in {len(differences)} test/run pairs; TCG-only {len(tcg_only)}; {totals}; top 5: {top}; ' +
              '; '.join(differences[:12]) + ('; ...' if len(differences) > 12 else ''), True)
     else:
-        emit(f'KVM/TCG parity OK: {len(tcg)} test results, three full KVM runs vs four TCG shards')
+        emit(f'KVM/TCG parity OK: {len(tcg)} tests, TCG-only {len(tcg_only)}; {totals}; top 5: {top}')
     return int(bool(differences))
 
 

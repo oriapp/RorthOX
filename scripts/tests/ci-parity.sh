@@ -30,10 +30,29 @@ with tempfile.TemporaryDirectory(dir=sys.argv[2]) as work:
                             *(str(run) for run in runs)], cwd=root, capture_output=True, text=True)
         assert (p.returncode == 0) == ok and needle in p.stdout, (p.returncode, p.stdout, p.stderr)
     check(True, 'parity OK')
+    tcg_only = 'scripts/tests/boot-segments.sh'
+    save(tcg / 'results-1' / 'results.json', 'tcg', [test('test-1'), test(tcg_only)])
+    for run in runs:
+        save(run / 'results.json', 'kvm', [test(f'test-{i}') for i in (1, 2, 3, 4)] + [test(tcg_only, 'skipped')])
+    check(True, 'TCG-only 1')
+    p = subprocess.run(['python3', '-B', str(root / 'scripts/ci-parity.py'), str(tcg),
+                        *(str(run) for run in runs)], cwd=root, capture_output=True, text=True)
+    assert 'TCG 5.0s; KVM 4.0s, 4.0s, 4.0s; top 5:' in p.stdout, p.stdout
+    save(runs[0] / 'results.json', 'kvm', [test(f'test-{i}') for i in (1, 2, 3, 4)] + [test(tcg_only, 'failed')])
+    check(False, 'KVM 1 scripts/tests/boot-segments.sh: TCG passed, KVM failed')
+    save(runs[0] / 'results.json', 'kvm', [test(f'test-{i}') for i in (1, 2, 3, 4)] + [test(tcg_only, 'skipped')])
+    save(runs[0] / 'results.json', 'kvm', [test('test-1', 'skipped')] +
+         [test(f'test-{i}') for i in (2, 3, 4)] + [test(tcg_only, 'skipped')])
+    check(False, 'KVM 1 test-1: TCG passed, KVM skipped')
+    for run in runs:
+        save(run / 'results.json', 'kvm', [test(f'test-{i}') for i in (1, 2, 3, 4)])
+    save(tcg / 'results-1' / 'results.json', 'tcg', [test('test-1')])
     import runpy
     escape = runpy.run_path(str(root / 'scripts/ci-parity.py'))['escape']
     assert escape('a:b,c%\r\n') == 'a:b,c%25%0D%0A'
     assert escape('a:b,c%\r\n', property=True) == 'a%3Ab%2Cc%25%0D%0A'
+    assert escape('a' * 3499 + '%\n') == 'a' * 3499
+    assert escape('a' * 3498 + '%\n') == 'a' * 3498
     target = runs[1] / 'results.json'
     save(target, 'kvm', [test(f'test-{i}', 'failed' if i == 2 else 'passed') for i in (1, 2, 3, 4)])
     check(False, 'KVM 2 test-2: TCG passed, KVM failed')
