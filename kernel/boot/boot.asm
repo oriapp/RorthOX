@@ -17,6 +17,10 @@ BITS 16
 CODE_SEG equ gdt_code - gdt_start
 DATA_SEG equ gdt_data - gdt_start
 
+; A20 test: a dword in free conventional memory and its alias 1 MiB higher
+A20_PROBE equ 0x500
+A20_TRIES equ 0x10000
+
 
 jmp short start
 nop
@@ -130,8 +134,44 @@ gdt_descriptor:
     dd gdt_start
 
 [BITS 32]
-load32:                 ;   0 is the boot sector
-    mov eax, 1          ;   Starting sector
+load32:
+    ; The far jump reloaded only CS. DS, ES and SS still hold real-mode segments
+    ; with a 64 KiB limit, and rep insw below writes ES:EDI at 1 MiB. Real CPUs
+    ; and KVM check that limit (#GP, and with no IDT a triple fault); QEMU's TCG
+    ; doesn't, so load the flat data segment everywhere first.
+    mov ax, DATA_SEG
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+    mov esp, 0x7c00     ;   Same boot stack, now with all 32 bits set
+    cld                 ;   rep insw must count EDI up; the BIOS doesn't promise DF=0
+
+    ; With the A20 gate off, address bit 20 is forced to 0 and the copy to 1 MiB
+    ; would wrap onto this code. Most BIOSes (SeaBIOS too) leave A20 on, so only
+    ; write port 0x92 (System Control Port A: bit 1 = A20, bit 0 = fast reset,
+    ; keep it 0) while the memory test still sees the wrap. If A20 stays off,
+    ; halt here rather than load the kernel over this code.
+    mov esi, A20_PROBE
+    lea edi, [esi + 0x100000]
+    mov ecx, A20_TRIES
+.a20_check:
+    mov [esi], esi      ;   Each probe holds its own address. With A20 off
+    mov [edi], edi      ;   the second write lands on the first probe
+    cmp [esi], esi
+    je .a20_on
+    in al, 0x92
+    or al, 2
+    and al, 0xfe
+    out 0x92, al
+    loop .a20_check
+.a20_failed:
+    hlt
+    jmp .a20_failed
+
+.a20_on:
+    mov eax, 1          ;   Starting sector, 0 is the boot sector
     mov ecx, KERNEL_SECTORS ; Number of kernel sectors (ReservedSectors - 1)
     mov edi, KERNEL_LOAD_ADDRESS  ; Kernel load destination
     call ata_lba_read
