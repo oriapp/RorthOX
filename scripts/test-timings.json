@@ -57,6 +57,7 @@
     "scripts/tests/readline.sh": 3.2,
     "scripts/tests/runner.sh": 12.5,
     "scripts/tests/screen-waits.sh": 8.2,
+    "scripts/tests/shell-command.sh": 22.0,
     "scripts/tests/sleep-idle.sh": 14.3,
     "scripts/tests/sleep.sh": 9.5,
     "scripts/tests/strtok.sh": 3.8,

@@ -26,7 +26,7 @@
 #       pages (same PDE), while its probe reads it, writes it, and hands it to print, write, read
 #       and stat (each must return -2); the owner then finds its page unchanged.
 # After each boot's attacks blank.elf runs from the same shell, the shell is the only task left
-# and the kernel heap is back apart from the one block per typed word the shell keeps. A boot's
+# and the kernel heap is back where it was, the shell's command nodes included. A boot's
 # remaining attacks are skipped only when a probe never armed or its debugger session broke.
 #
 # Needs python3, cc and i686-elf-ld.  Env: HOST_ONLY=1 (host part only), BOOT_TIMEOUT=60,
@@ -184,7 +184,6 @@ attack() {
     shift 4
     local opts=("$@")
     echo "isolation: $tag ($mode, $op $target)"
-    WORDS=$((WORDS + 3))
     STOP=1
     type_line "fault.elf $mode $tag"
     if [ "$mode" = owner ]; then
@@ -247,7 +246,7 @@ run_boot() {
     D="$OUT/$name"
     mkdir -p "$D"
     STOP=1
-    WORDS=2   # "blank.elf <name>done" at the end; each attack adds its three words
+    KEPT=0   # blocks kept for good: none, the user library frees the shell's command nodes
     echo "isolation: boot $name"
     rm -f "$SOCK"
     QEMU_FLAGS="-gdb unix:$SOCK,server=on,wait=off" qemu_start "$IMAGE" "$D"
@@ -290,7 +289,7 @@ run_boot() {
         if ((STOP == 0)); then
             type_line "blank.elf ${name}done"
             if wait_line "${name}done" "$STEP_TIMEOUT"; then
-                want=$((before - WORDS))
+                want=$((before - KEPT))
                 after=$(wait_heap "$want")
                 debugger_list after shell="$D/shell.txt" owner=first
             fi
@@ -298,7 +297,7 @@ run_boot() {
     fi
     qemu_stop || true
     { [ -n "$before" ] && [ -n "$after" ] && echo "heap kept=$((before - after))"; } > "$D/state.txt" || true
-    echo "  free blocks before ${before:-?}, after ${after:-?} ($WORDS kept for typed words)"
+    echo "  free blocks before ${before:-?}, after ${after:-?} ($KEPT may be kept)"
     ((STOP == 0)) && echo "all attacks" > "$D/ran.txt" || echo "stopped" > "$D/ran.txt"
     check "$name: all attacks ran to the end"                    "$D/ran.txt" "all attacks" line
     check "$name: blank.elf ran from the shell afterwards"       "$D/screen.txt" "${name}done"
@@ -307,7 +306,7 @@ run_boot() {
     check "$name: after: only one task left"                     "$D/list-after.txt" "PASS after_task_count" line
     check "$name: after: it is the same shell task and process"  "$D/list-after.txt" "PASS after_same_shell" line
     check "$name: after: the shell owns the keyboard"            "$D/list-after.txt" "PASS after_keyboard_owner" line
-    check "$name: kernel heap back apart from $WORDS command nodes" "$D/state.txt" "heap kept=$WORDS" line
+    check "$name: kernel heap back where it was"                 "$D/state.txt" "heap kept=$KEPT" line
     check "$name: no kernel panic (debugcon)"                    "$D/debugcon.log" "PANIC" absent
 }
 

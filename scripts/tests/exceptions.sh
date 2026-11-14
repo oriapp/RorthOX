@@ -22,7 +22,7 @@
 # own the keyboard. So fault.elf is really gone, not just quiet on the screen, and the screen
 # saved at that stop (never halfway through a print or a scroll) must show its end once. The same
 # after "blank.elf recover" has printed "recover", and the kernel heap must be back where it was,
-# apart from the one block per typed word that the shell keeps.
+# the shell's command nodes included.
 # Last case, owner: "fault.elf parent" starts "fault.elf child", which owns the keyboard, and then
 # faults itself. When the child asks for its key, only the shell and the child may be left (the
 # parent gone while the child lives) and the child must own the keyboard; then the child must get
@@ -59,8 +59,8 @@ config_value() {
 }
 table_address=$(config_value RORTHOX_HEAP_TABLE_ADDRESS)
 table_bytes=$(( $(config_value RORTHOX_HEAP_SIZE_BYTES) / $(config_value RORTHOX_HEAP_BLOCK_SIZE) ))
-# Each typed word stays allocated in the shell (the user library never frees command nodes).
-WORDS=4   # "fault.elf <case>" and "blank.elf recover"
+# Blocks kept for good: none. The user library frees the shell's command nodes after each command.
+KEPT=0
 
 # free_blocks: number of free heap blocks, read twice with the guest stopped until two reads agree.
 free_blocks() {
@@ -164,7 +164,7 @@ run_fault() {
         echo "ended=$(ended fault after)"
         [ -n "$before" ] && [ -n "$after" ] && echo "heap kept=$((before - after))"
     } > "$D/state.txt"
-    echo "  free blocks before ${before:-?}, after ${after:-?} ($WORDS kept for typed words)"
+    echo "  free blocks before ${before:-?}, after ${after:-?} ($KEPT may be kept)"
 
     local r="$D/catch.txt" s="$D/state.txt"
     check "$c: debugger session finished without errors"     "$D/catch-status.txt" "exit=0" line
@@ -199,7 +199,7 @@ run_fault() {
     check "$c: after: only one task left"                           "$D/list-after.txt" "PASS after_task_count" line
     check "$c: after: it is the same shell task and process"        "$D/list-after.txt" "PASS after_same_shell" line
     check "$c: after: the shell owns the keyboard"                  "$D/list-after.txt" "PASS after_keyboard_owner" line
-    check "$c: kernel heap back apart from $WORDS command nodes"    "$s" "heap kept=$WORDS" line
+    check "$c: kernel heap back where it was"                       "$s" "heap kept=$KEPT" line
     check "$c: no kernel panic (debugcon)"                          "$D/debugcon.log" "PANIC" absent
 }
 
@@ -235,7 +235,7 @@ run_owner() {
         echo "parent gone done=$(grep -cF "faulttest child: done" "$D/screen-parent-gone.txt" 2> /dev/null || true)"
         [ -n "$before" ] && [ -n "$after" ] && echo "heap kept=$((before - after))"
     } > "$D/state.txt"
-    echo "  free blocks before ${before:-?}, after ${after:-?} ($WORDS kept for typed words)"
+    echo "  free blocks before ${before:-?}, after ${after:-?} ($KEPT may be kept)"
 
     local s="$D/state.txt"
     check "owner: idle: stopped at the shell's getkey"              "$D/list-idle.txt" "PASS idle_rendezvous" line
@@ -265,7 +265,7 @@ run_owner() {
     check "owner: after: only the same shell left"                  "$D/list-after.txt" "PASS after_same_shell" line
     check "owner: after: only one task left"                        "$D/list-after.txt" "PASS after_task_count" line
     check "owner: after: the shell owns the keyboard"               "$D/list-after.txt" "PASS after_keyboard_owner" line
-    check "owner: kernel heap back apart from $WORDS command nodes" "$s" "heap kept=$WORDS" line
+    check "owner: kernel heap back where it was"                    "$s" "heap kept=$KEPT" line
     check "owner: no kernel panic (debugcon)"                       "$D/debugcon.log" "PANIC" absent
 }
 

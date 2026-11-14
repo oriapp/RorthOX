@@ -7,8 +7,9 @@
 # bin/os.bin (with a directory "dir" holding a second blank.elf added): two files that open and
 # close, a missing file, a bad mode, a missing disk, a disk without a filesystem, the root alone,
 # a full descriptor table and a failed descriptor allocation. Nothing may stay allocated.
-# The QEMU side is in process-release.sh (a launch keeps only the shell's two command nodes) and
-# in the heap-oom.sh cases (open-oom.sh, argument-oom.sh): a failed launch keeps no kernel block.
+# The QEMU side is in process-release.sh (a launch keeps no block, the shell's command nodes
+# included) and in the heap-oom.sh cases (open-oom.sh, argument-oom.sh): a failed launch keeps no
+# kernel block.
 # bin/os.bin itself must not change.
 #
 # Env: HOST_CC=cc

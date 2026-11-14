@@ -2,8 +2,8 @@
 #
 # A program that ends must give back the kernel heap it used, its process object included.
 # Boot a copy of bin/os.bin, count the free kernel heap blocks while the shell is idle, run
-# "blank.elf tag1", count again, run "blank.elf tag2" and count once more. Each launch may keep
-# only the blocks listed at KEPT_PER_LAUNCH. The free blocks are counted in the kernel's heap
+# "blank.elf tag1", count again, run "blank.elf tag2" and count once more. No launch may keep a
+# block (KEPT_PER_LAUNCH), the shell's command nodes included. The free blocks are counted in the kernel's heap
 # table, read through the QEMU monitor while the guest is stopped. The shell is idle when
 # scripts/tests/lib/guest-state.sh has stopped the guest at its key request with the shell alone
 # in the task list (blank.elf has ended) and the same shell owning the keyboard.
@@ -23,9 +23,9 @@ OUT=${RORTHOX_TEST_ROOT:-build/tests}/process-release
 mkdir -p "$OUT"
 rm -f "$OUT"/state-*.txt "$OUT"/state-*.txt.log "$OUT"/shell.txt "$OUT"/screen-*.txt
 
-# Blocks each launch keeps for good: the shell's two command nodes for "blank.elf tagN" (the
-# user library never frees them).
-KEPT_PER_LAUNCH=2
+# Blocks each launch keeps for good: none. The user library frees the shell's two command nodes for
+# "blank.elf tagN" when the launch syscall returns.
+KEPT_PER_LAUNCH=0
 
 # The heap table: one byte per block, 0 = free.
 config_value() {

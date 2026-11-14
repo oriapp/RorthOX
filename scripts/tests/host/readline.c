@@ -158,6 +158,11 @@ void *user_rorthox_malloc(unsigned long size)
     return 0;
 }
 
+void *user_rorthox_free(void *ptr)
+{
+    return 0;
+}
+
 int user_rorthox_system(void *arguments)
 {
     return -1;

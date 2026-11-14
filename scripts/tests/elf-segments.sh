@@ -18,7 +18,7 @@
 # 3. QEMU: copy bin/os.bin, add elftest.elf to the copy only, boot, and run "elftest.elf one" and
 #    "elftest.elf two". Each run checks its initial data and zeroed .bss and writes every byte.
 #    The free kernel heap blocks are counted while the shell is idle before and after each run:
-#    each run may keep only the shell's two command nodes. blank.elf must start afterwards.
+#    no run may keep a block, the shell's command nodes included. blank.elf must start afterwards.
 #    The shell is idle when scripts/tests/lib/guest-state.sh has stopped the guest at its key
 #    request with the shell alone in the task list and the same shell owning the keyboard.
 # bin/os.bin itself must not change.
@@ -156,8 +156,8 @@ if [ -z "$table_address" ] || [ -z "$heap_bytes" ] || [ -z "$block_size" ]; then
     exit 1
 fi
 table_bytes=$((heap_bytes / block_size))
-# Blocks each run keeps for good: the shell's two command nodes (the user library never frees them).
-KEPT_PER_RUN=2
+# Blocks each run keeps for good: none (the user library frees the shell's command nodes).
+KEPT_PER_RUN=0
 
 # free_blocks: print the number of free heap blocks, read twice with the guest stopped until two
 # reads agree (print borrows a block for a moment).
