@@ -11,6 +11,7 @@ plan --timings FILE [--shard I/N] -- TEST...
     Exits 2 on a bad shard or a bad timings file.
 
 report --run-dir DIR --jobs N --shard I/N|'' --accelerator NAME --elapsed SECONDS [--summary-limit BYTES]
+       [--accelerator-reason TEXT] [--qemu VERSION] [--cpu MODEL]
     Writes the run's reports into DIR, from the files run-tests.sh leaves there: plan (the tests, NUL
     after each), instances (number and directory of each test started, NUL after each) and
     <directory>/result (exit status, run time in tenths of a second, and done, timeout or cancel).
@@ -236,8 +237,13 @@ def copy_evidence(src_root, dst_root, budget, output_only=False):
 def cmd_report(args):
     opts = {"--summary-limit": "1000000"}
     names = ("--run-dir", "--jobs", "--shard", "--accelerator", "--elapsed", "--summary-limit")
+    extra = {"--accelerator-reason": "accelerator_reason", "--qemu": "qemu", "--cpu": "cpu"}
+    info = {}
     while args:
         a = args.pop(0)
+        if a in extra and args:
+            info[extra[a]] = args.pop(0)
+            continue
         if a not in names or not args:
             raise Usage(f'report: unexpected argument {a!a}')
         opts[a] = args.pop(0)
@@ -275,7 +281,7 @@ def cmd_report(args):
     count["failed"] = len(bad) - count["not run"]
 
     with open(os.path.join(run_dir, "results.json"), "w") as f:
-        json.dump({"shard": shard, "jobs": int(opts["--jobs"]), "accelerator": accel,
+        json.dump({"shard": shard, "jobs": int(opts["--jobs"]), "accelerator": accel, **info,
                    "selected": len(tests), "passed": count["passed"], "failed": count["failed"],
                    "skipped": count["skipped"], "not_run": count["not run"],
                    "tests": [{k: v for k, v in t.items() if k != "raw_name"} for t in tests]}, f, indent=1)
@@ -285,7 +291,7 @@ def cmd_report(args):
     suites = ET.Element("testsuites", name=suite_name)
     suite = ET.SubElement(suites, "testsuite", name=suite_name)
     props = ET.SubElement(suite, "properties")
-    for k, v in (("shard", shard), ("jobs", opts["--jobs"]), ("accelerator", accel)):
+    for k, v in (("shard", shard), ("jobs", opts["--jobs"]), ("accelerator", accel), *info.items()):
         ET.SubElement(props, "property", name=k, value=text(v))
     for t in tests:
         case = ET.SubElement(suite, "testcase", name=text(t["raw_name"]), classname="rorthox",
@@ -310,7 +316,10 @@ def cmd_report(args):
     head = [f"### {suite_name}\n", "\n",
             f"{count['passed']} passed, {count['failed']} failed, {count['skipped']} skipped, "
             f"{count['not run']} not run of {len(tests)} in {elapsed // 60} min {elapsed % 60} s "
-            f"(up to {opts['--jobs']} at once, shard {shard or 'all'}, accelerator {accel})\n", "\n"]
+            f"(up to {opts['--jobs']} at once, shard {shard or 'all'}, accelerator {accel})\n"]
+    if info:
+        head.append("\n" + markdown("; ".join(f"{k.replace('_', ' ')}: {v}" for k, v in info.items())) + "\n")
+    head.append("\n")
     rows = ["| Test | Result | Time |\n", "| --- | --- | --- |\n"]
     # Failures first, so the size limit never hides one.
     for t in bad + [t for t in tests if t not in bad]:

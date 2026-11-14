@@ -425,12 +425,21 @@ any test starts. Relative paths on the command line are from the top of the repo
 
 When a run ends, the runner writes its reports into the run's directory: `results.json` (each test's name,
 number, result, exit status, run time and output directory), `junit.xml`, and `summary.md`, a table of the tests
-(failures first) with the totals, how many ran at once, the shard and the accelerator (`tcg`: QEMU without KVM).
+(failures first) with the totals, how many ran at once, the shard and the accelerator (with why it was chosen,
+the QEMU version and the CPU model).
 In CI, `summary.md` also goes into the job summary, only from the top-level runner (never from a runner inside a
 test) and below 1 MiB. `failed/` keeps a copy of what each failed test printed and of its logs: debugcon, the
 monitor log, the screen text and image, the debugger logs, but no disk images. A log over 1 MiB keeps its start
 and end, a test keeps at most 8 MiB and a run 64 MiB, and `index.txt` next to the copy says what was cut or left
 out. `--results DIR` puts the run's directory at DIR (new or empty) instead of `build/tests/runs/`.
+
+`RORTHOX_ACCEL` picks the accelerator for every QEMU the tests start: `tcg` (the default), `kvm`, or `auto`
+(KVM if a QEMU started with it reports `kvm support: enabled`, else TCG). The runner decides once, before the
+first test, and never runs a failed test again under TCG; with `kvm` and no working KVM it exits 2 and runs
+nothing. KVM runs use `-accel kvm,kernel-irqchip=off`, so the PIC and PIT are the same QEMU models as under TCG,
+and a test fails if one of its QEMUs didn't report KVM. `QEMU_CPU` sets the CPU model (default `qemu32`), and
+`QEMU_FLAGS` may not choose the accelerator or the CPU. The KVM path is checked with a stand-in for QEMU
+(`accelerator`) and has not yet run on a KVM host.
 
 Every test runs in a session of its own. The runner keeps what it prints in `output.log` in the test's directory
 and shows it when the test ends, each line behind the test's name (`[heap] heap: all checks passed`), so the
@@ -503,6 +512,9 @@ yet checked on a KVM host): registers and memory come from a copy that only a fu
 are at most 4 hardware breakpoints, and a single step after the debugger moved `eip` runs on freely. The helper
 reads all registers once after every stop, refuses a fifth breakpoint, a second one at the same address and such
 a step, and steps off a breakpoint with interrupts masked for that one step.
+`accelerator` checks `RORTHOX_ACCEL` with a stand-in for QEMU: the flags each setting gives QEMU, refused
+`QEMU_FLAGS`, the probe and the TCG choice before the first test, the KVM check of every monitor log, the reports,
+and that only the QEMU helpers start a guest and no test relies on `-d int` output unless it skips under KVM.
 `screen-waits` checks the tests' screen waits and cleanup without QEMU: on scripted screens (a typed command's echo,
 the step before's result, a half printed row, a scroll half done) the old ways to wait (a substring, a count of rows)
 accept too early, the new ones wait for the step's own rows on one screen and give up when they never come; and a

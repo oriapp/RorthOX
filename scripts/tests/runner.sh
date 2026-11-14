@@ -360,7 +360,7 @@ echo "runner: 6. file names CI can't upload"
 # $tmp/top/build/tests/runs, not to this checkout's.
 mkdir -p "$tmp/top/scripts"
 cp "$runner" "$tmp/top/scripts/run-tests.sh"
-cp scripts/run-tests.py scripts/test-timings.json "$tmp/top/scripts/"
+cp scripts/run-tests.py scripts/test-timings.json scripts/qemu-accel.sh "$tmp/top/scripts/"
 printf 'echo pass\n' > "$fx/bad:name.sh"
 cat > "$fx/odd-output.sh" <<'EOF'
 touch "$RORTHOX_TEST_ROOT/a?b" "$RORTHOX_TEST_ROOT/c"$'\r'"d"

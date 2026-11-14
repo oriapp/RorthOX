@@ -20,8 +20,13 @@
 #
 # Exit status: 0 when every test passed or was skipped (a test that exits with 77 is skipped),
 # 1 when a test failed, crashed or timed out or the run was interrupted (or, at the top level, a file
-# name in the run directory is one CI can't upload), 2 for a bad command line or bad timings file
-# (no test runs then). A shard with no tests runs nothing and exits 0.
+# name in the run directory is one CI can't upload), 2 for a bad command line or bad timings file, or
+# RORTHOX_ACCEL=kvm where KVM doesn't work (no test runs then). A shard with no tests runs nothing
+# and exits 0.
+#
+# RORTHOX_ACCEL=tcg|kvm|auto (default tcg) picks the accelerator once, before the first test (see
+# scripts/qemu-accel.sh); the reports and the last lines name it, the reason, the QEMU version and
+# the CPU model.
 #
 # Every run gets its own directory build/tests/runs/run.XXXXXX (inside $RORTHOX_TEST_ROOT/runs when
 # the runner itself runs inside a test). Each test there gets its own numbered directory, passed to
@@ -115,6 +120,16 @@ if [ "$list" = yes ]; then
     exit 0
 fi
 
+# The accelerator for every test, decided here once before any test starts (scripts/qemu-accel.sh):
+# the tests get RORTHOX_ACCEL=tcg|kvm and RORTHOX_ACCEL_REASON. With KVM, a test fails when one of its
+# QEMUs didn't report "kvm support: enabled" in its monitor.log (not below a directory named runs: a
+# runner inside the test checks its own runs, and a test keeps QEMU stand-ins there).
+. scripts/qemu-accel.sh
+accel_select || exit 2
+qemu_version=$("${QEMU:-qemu-system-i386}" --version 2> /dev/null | head -n 1)
+qemu_version=${qemu_version:-unknown}
+cpu_model=${QEMU_CPU:-qemu32}
+
 if [ -n "$results" ]; then
     mkdir -p "$results" || exit 2
     [ -z "$(ls -A "$results")" ] || { echo "--results: $results is not empty" >&2; exit 2; }
@@ -133,8 +148,6 @@ fi
 : >> "$run_dir/plan"
 : >> "$run_dir/instances"
 run_start=$SECONDS
-# qemu-lib.sh runs QEMU without an accelerator option: TCG.
-accelerator=tcg
 # Unix socket paths are short (108 bytes), so the temporary directories stay on a short absolute
 # path. The runner finds a test's processes by that path (pgrep -f takes a regular expression), so
 # a TMPDIR with other characters than these isn't used.
@@ -323,6 +336,15 @@ finish_test() {
                 if [ "$status" -eq 0 ] || [ "$status" -eq 77 ]; then status=1; fi
                 printf '\nrun-tests: stopped %s process(es) the test left running\n' "$left" >> "${logs[i]}"
             fi
+            if [ "$RORTHOX_ACCEL" = kvm ] && [ -d "${roots[i]}" ] && { [ "$status" -eq 0 ] || [ "$status" -eq 77 ]; }; then
+                find "${roots[i]}" -name runs -type d -prune -o -name monitor.log -type f \
+                    ! -exec grep -aq 'kvm support: enabled' {} \; -print > "$run_tmp/no-kvm" 2> /dev/null
+                if [ -s "$run_tmp/no-kvm" ]; then
+                    status=1
+                    { printf '\nrun-tests: RORTHOX_ACCEL=kvm, but these QEMUs did not report kvm support: enabled:\n'
+                      sed 's/^/  /' "$run_tmp/no-kvm"; } >> "${logs[i]}"
+                fi
+            fi
             ;;
     esac
     statuses[i]=$status
@@ -404,10 +426,12 @@ fi
 
 [ -z "$cancel" ] || echo "=== interrupted by SIG$cancel: $((${#tests[@]} - next)) test(s) not started"
 echo "=== ${#passed[@]} passed, ${#failed[@]} failed, ${#skipped[@]} skipped"
+echo "=== accelerator $RORTHOX_ACCEL ($RORTHOX_ACCEL_REASON), $qemu_version, CPU $cpu_model"
 echo "=== output in $run_dir"
 reports=ok
 if python3 -B scripts/run-tests.py report --run-dir "$run_dir" --jobs "$jobs" --shard "$shard" \
-    --accelerator "$accelerator" --elapsed "$((SECONDS - run_start))"; then
+    --accelerator "$RORTHOX_ACCEL" --accelerator-reason "$RORTHOX_ACCEL_REASON" --qemu "$qemu_version" \
+    --cpu "$cpu_model" --elapsed "$((SECONDS - run_start))"; then
     [ ! -d "$run_dir/failed" ] || echo "=== output of the failed tests in $run_dir/failed"
     # Only the top-level runner writes the CI job summary (summary.md stays below 1 MiB).
     if [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ -z "${RORTHOX_TEST_ROOT:-}" ]; then

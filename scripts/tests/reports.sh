@@ -17,6 +17,9 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 1
 runner="$PWD/scripts/run-tests.sh"
+# The reports name the accelerator: TCG here, whatever the run outside uses.
+export RORTHOX_ACCEL=tcg
+unset QEMU_CPU
 OUT=${RORTHOX_TEST_ROOT:-build/tests}/reports
 rm -rf "$OUT"
 mkdir -p "$OUT"
@@ -109,7 +112,9 @@ assert cases[2].find(\"failure\").get(\"message\") == \"failed (exit status 3)\"
 f = cases[3].find(\"failure\").text
 assert \"  FAIL ]]> </failure> & <x> ?[31m red ?? \ufffd end\" in f and \"::error::from the test\" in f, repr(f)
 assert cases[4].find(\"failure\").get(\"type\") == \"timed out\"
-assert {p.get(\"name\"): p.get(\"value\") for p in s.find(\"properties\")} == {\"shard\": \"\", \"jobs\": \"2\", \"accelerator\": \"tcg\"}
+props = {p.get(\"name\"): p.get(\"value\") for p in s.find(\"properties\")}
+assert props.pop(\"qemu\").startswith(\"QEMU emulator version \"), props
+assert props == {\"shard\": \"\", \"jobs\": \"2\", \"accelerator\": \"tcg\", \"accelerator_reason\": \"RORTHOX_ACCEL=tcg\", \"cpu\": \"qemu32\"}, props
 ' \"\$R\" \"\$hostile\""
 S="$R/summary.md"
 expect "summary: counts, jobs, shard, accelerator, one row per test" \

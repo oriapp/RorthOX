@@ -16,6 +16,7 @@
 #   check <description> <file> <text> [present|absent|line]
 #                                 one check, printed as ok/FAIL; failures are counted in $failures
 #   finish <name>                 print the screen and the result; exits 1 if a check failed
+#   qemu_require_tcg              skip the test (exit 77) under KVM, for checks that only hold under TCG
 #
 # qemu_start sets an EXIT trap that stops QEMU. A test that owns more (a debugger, a socket directory)
 # sets Q_CLEANUP to the name of a function; the trap calls it after QEMU is stopped.
@@ -27,11 +28,15 @@
 # briefly on it twice. Wait for whole rows that only the expected step prints (wait_screen_lines).
 #
 # Env: QEMU=qemu-system-i386   QEMU_FLAGS="extra flags"   QEMU_TIMEOUT=180 (hard limit per QEMU run, seconds)
+#      RORTHOX_ACCEL=tcg|kvm|auto (default tcg) and QEMU_CPU=qemu32: see scripts/qemu-accel.sh. qemu_start
+#      adds the accelerator and the CPU itself, and refuses QEMU_FLAGS that choose either. With KVM the
+#      first monitor command is "info kvm", and qemu_stop fails a QEMU that didn't say it runs with KVM.
 # Needs only qemu-system-i386 and the base system tools (timeout, mkfifo, od, awk, grep, sed).
 
 CONFIG_ENV="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/build/config/rorthox-config.env"
 [ -f "$CONFIG_ENV" ] || { echo "missing $CONFIG_ENV; run make all first" >&2; exit 2; }
 . "$CONFIG_ENV"
+. "$(dirname "${BASH_SOURCE[0]}")/qemu-accel.sh"
 
 QEMU="${QEMU:-qemu-system-i386}"
 QEMU_TIMEOUT="${QEMU_TIMEOUT:-180}"
@@ -46,10 +51,31 @@ vga_to_text() {
         sed 's/ *$//'
 }
 
+# The accelerator is chosen once: by the runner before any test starts, else here before this test's
+# first QEMU. Exits 2 if RORTHOX_ACCEL=kvm and KVM doesn't work.
+qemu_accel() {
+    if [ -z "${RORTHOX_ACCEL_REASON:-}" ] || [[ ! ${RORTHOX_ACCEL:-} =~ ^(tcg|kvm)$ ]]; then
+        accel_select || exit 2
+    fi
+}
+
+# qemu_require_tcg: end the test as skipped (77) under KVM. For checks that only hold under TCG, such
+# as "-d int" or "cpu_reset" output being absent: under KVM QEMU never writes it.
+qemu_require_tcg() {
+    qemu_accel
+    if [ "$RORTHOX_ACCEL" = kvm ]; then
+        echo "skipped: this test only holds under TCG"
+        exit 77
+    fi
+}
+
 qemu_start() {
     Q_IMAGE="$1"
     Q_OUT="$2"
     [ -f "$Q_IMAGE" ] || { echo "$Q_IMAGE not found, run 'make all' first" >&2; exit 2; }
+    accel_flags_ok "${QEMU_FLAGS:-}" || exit 2
+    qemu_accel
+    if [ "$RORTHOX_ACCEL" = kvm ]; then Q_ACCEL="$ACCEL_KVM_OPTS"; else Q_ACCEL=tcg; fi
     mkdir -p "$Q_OUT"
     rm -f "$Q_OUT/debugcon.log" "$Q_OUT/screen.txt" "$Q_OUT/screen.ppm" "$Q_OUT/vga.bin" "$Q_OUT/monitor.log"
     # QEMU reads monitor commands from a named pipe, so this script can send them one at a time.
@@ -60,6 +86,7 @@ qemu_start() {
     # QEMU_TIMEOUT). QEMU doesn't get this descriptor.
     exec 3<> "$Q_TMP/monitor"
     timeout "$QEMU_TIMEOUT" "$QEMU" -m "$QEMU_RAM_MIB" -display none -no-reboot \
+        -accel "$Q_ACCEL" -cpu "${QEMU_CPU:-qemu32}" \
         -drive "file=$Q_IMAGE,format=raw,index=0,media=disk" \
         -debugcon "file:$Q_OUT/debugcon.log" -serial none -monitor stdio \
         ${QEMU_FLAGS:-} < "$Q_TMP/monitor" > "$Q_OUT/monitor.log" 2>&1 3<&- &
@@ -67,6 +94,7 @@ qemu_start() {
     trap 'qemu_exit' EXIT
     exec 3> "$Q_TMP/monitor"   # write-only now, so a command fails once QEMU is gone
     trap '' PIPE   # if QEMU is gone, writing a command fails instead of killing the script
+    if [ "$RORTHOX_ACCEL" = kvm ]; then qemu_cmd "info kvm"; fi
 }
 
 # The EXIT trap: stop QEMU, then run the test's own cleanup (Q_CLEANUP), if any.
@@ -213,6 +241,11 @@ qemu_stop() {
         return 1
     fi
     [ -f "$Q_OUT/screen.txt" ] || { echo "  no screen dump, see $Q_OUT/monitor.log"; failures=$((failures + 1)); return 1; }
+    if [ "${RORTHOX_ACCEL:-}" = kvm ] && ! grep -aq 'kvm support: enabled' "$Q_OUT/monitor.log"; then
+        echo "  FAIL QEMU did not run with KVM (no \"kvm support: enabled\" in $Q_OUT/monitor.log)"
+        failures=$((failures + 1))
+        return 1
+    fi
     return 0
 }
 

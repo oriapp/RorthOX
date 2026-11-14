@@ -178,6 +178,10 @@ d="$2"
 cd "$3"
 . ./scripts/qemu-lib.sh
 QEMU="$d/qemu"
+# The stand-in can't answer "info kvm": TCG, and its monitor.log below runs/ (the runner checks
+# the others for KVM in a KVM run).
+RORTHOX_ACCEL=tcg
+unset RORTHOX_ACCEL_REASON
 hook() {
     local alive=no p
     for p in $(cat "$d/pids" 2> /dev/null); do kill -0 "$p" 2> /dev/null && alive=yes; done
@@ -196,7 +200,7 @@ case "$mode" in
     term-now|term-running) trap 'exit 1' TERM INT ;;
     term-launch) trap 'exit 1' TERM INT; QEMU_TIMEOUT=2; export TMPDIR="$d/tmp" ;;
 esac
-qemu_start "$d/disk.img" "$d/out"
+qemu_start "$d/disk.img" "$d/runs/out"
 case "$mode" in
     term-now|term-launch) kill -TERM $$ ;;
     term-running) started; kill -TERM $$ ;;
@@ -222,6 +226,7 @@ for mode in normal default error term-running term-now term-launch; do
         ln -sfn "$PWD/build" "$repo/build"
         sed 's/^    Q_PID=\$!$/    kill -TERM $$; Q_PID=$!/' scripts/qemu-lib.sh > "$repo/scripts/qemu-lib.sh"
         grep -qF 'kill -TERM $$; Q_PID=' "$repo/scripts/qemu-lib.sh" || echo "no kill put in" > "$d/inject.txt"
+        cp scripts/qemu-accel.sh "$repo/scripts/"
     fi
     # timeout leads a process group of its own: what is left of this child afterwards is in group
     # $child, and only that group is counted and stopped (never another run's child).
