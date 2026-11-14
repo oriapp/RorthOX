@@ -159,12 +159,17 @@ with tempfile.TemporaryDirectory() as temp:
         ('kvm-privileged', kvm_change('      - name: Add KVM test summary\n        timeout-minutes: 2\n',
             '      - name: Extra\n        timeout-minutes: 1\n        run: docker run --privileged --rm alpine true\n      - name: Add KVM test summary\n        timeout-minutes: 1\n'),
             'KVM job must not run host Docker'),
+        ('kvm-container-diagnostic', kvm_change('        run: ./ci/run.sh bash ci/kvm-diagnostics.sh container',
+            '        run: echo skipped'),
+            'KVM job must use the same verified image'),
+        ('kvm-extract', kvm_change('      - name: Extract KVM production build',
+            '      - name: Unpack KVM production build'), 'KVM job must use the same verified image'),
         ('kvm-test-timeout', kvm_change("          RORTHOX_TEST_TIMEOUT: '300'\n", ''),
             'KVM job must use the same verified image'),
         ('kvm-upload', kvm_change('      - name: Upload KVM results\n        timeout-minutes: 2\n        if: always()',
             '      - name: Upload KVM results\n        timeout-minutes: 2\n        if: success()'),
             'KVM job must use the same verified image'),
-        ('kvm-step-timeout', kvm_change('      - name: Test with KVM\n        timeout-minutes: 35',
+        ('kvm-step-timeout', kvm_change('      - name: Test with KVM\n        timeout-minutes: 31',
             '      - name: Test with KVM'), 'kvm: step'),
         ('kvm-override-accel', kvm_change('          ./ci/run.sh ./scripts/run-tests.sh -j 2',
             '          export RORTHOX_ACCEL=tcg\n          ./ci/run.sh ./scripts/run-tests.sh -j 2'), 'KVM run must not override its accelerator'),
@@ -180,8 +185,8 @@ with tempfile.TemporaryDirectory() as temp:
             '          T: !!binary JHt7IHNlY3JldHMuR0lUSFVCX1RPS0VOIH19\n'), 'YAML tags are not supported'),
         ('inline-binary-tag', kvm_change(credential_step, credential_step +
             '          T: [!!binary JHt7IHNlY3JldHMuR0lUSFVCX1RPS0VOIH19]\n'), 'YAML tags are not supported'),
-        ('docker-create', kvm_change("            echo '/dev/kvm absent; forced KVM will fail rather than fall back to TCG'",
-            '            docker create alpine true'), 'KVM job must not run host Docker'),
+        ('docker-create', kvm_change('          bash ci/kvm-diagnostics.sh host "$before" "$after"',
+            '            docker create alpine true'), 'KVM job must use the same verified image'),
         ('sudo-extra', kvm_change('            sudo udevadm settle',
             '            sudo chmod 0666 /var/run/docker.sock\n            sudo udevadm settle'), 'KVM sudo is confined to device setup'),
         ('host-script', kvm_change('          ./ci/run.sh ./scripts/run-tests.sh -j 2 --results build/tests/runs/kvm',
@@ -195,6 +200,14 @@ with tempfile.TemporaryDirectory() as temp:
             '          # ./ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$MANIFEST_SHA256"\n          ./ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$(sha256sum build/ci/production.tar.gz)"'), 'KVM job must use the same verified image'),
         ('commented-test-limit', kvm_change("          RORTHOX_TEST_TIMEOUT: '300'", "          # RORTHOX_TEST_TIMEOUT: '300'"), 'KVM job must use the same verified image'),
     )
+    cases += (
+        ('continued-escaped-secret', kvm_change(credential_step, credential_step +
+            '          T: "safe\n' + r'            \x24\x7b\x7b \x73ecrets.GITHUB_TOKEN }}"' + '\n'),
+            'escaped scalar requires YAML parser'),
+        ('duplicate-kvm-step-name', kvm_change('      - name: Test with KVM\n        timeout-minutes: 31',
+            '      - name: Test with KVM\n        timeout-minutes: 1\n        run: echo duplicate\n'
+            '      - name: Test with KVM\n        timeout-minutes: 30'), 'duplicate KVM step name'),
+    )
     for tag, mutated, reason in cases:
         print('checking', tag, flush=True)
         workflow.write_text(mutated)
@@ -207,8 +220,8 @@ with tempfile.TemporaryDirectory() as temp:
             result = subprocess.run(['python3', '-B', str(lint), str(workflow)], cwd=root,
                                     capture_output=True, text=True, env=env)
             expected = ('escaped scalar requires YAML parser' if path is not None and
-                        tag in ('escaped-secret-hex', 'escaped-secret-unicode', 'escaped-token', 'escaped-index', 'escaped-expression-start')
-                        else 'credentials outside publication' if path is None and tag == 'escaped-expression-start'
+                        tag in ('escaped-secret-hex', 'escaped-secret-unicode', 'escaped-token', 'escaped-index', 'escaped-expression-start', 'continued-escaped-secret')
+                        else 'credentials outside publication' if path is None and tag in ('escaped-expression-start', 'continued-escaped-secret')
                         else reason)
             assert result.returncode != 0 and expected in result.stderr, (tag, mode, result.stderr)
     env = os.environ.copy()

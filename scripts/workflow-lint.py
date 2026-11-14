@@ -133,7 +133,7 @@ def lint(text):
                     'YAML tags are not supported')
             if yaml is None:
                 # Refuse escapes in any double-quoted YAML scalar, not just expressions.
-                require(not re.search(r'"(?:[^"\\]|\\.)*\\', line),
+                require('\\' not in line,
                         'escaped scalar requires YAML parser')
             if re.match(r'^\s*(?:-\s+)?run:\s*[|>][+\-0-9]*\s*$', line):
                 block_indent = indent
@@ -183,7 +183,11 @@ def lint(text):
     kvm = jobs['kvm']
     kvm_steps = {name: body for name, body in
                  re.findall(r'^      - name: ([^\n]+)\n(.*?)(?=^      - |\Z)', kvm, re.M | re.S)}
+    names = re.findall(r'^      - name: ([^\n]+)$', kvm, re.M)
+    require(len(names) == len(set(names)), 'duplicate KVM step name')
     image_step = kvm_steps.get('Verify the image for this revision', '')
+    extract_step = kvm_steps.get('Extract KVM production build', '')
+    diagnostic_step = kvm_steps.get('Diagnose KVM in the image', '')
     test_step = kvm_steps.get('Test with KVM', '')
     host_step = kvm_steps.get('Enable the host KVM device if present', '')
     def step_field(step, field, value):
@@ -194,12 +198,18 @@ def lint(text):
             'ci/image-job.sh receive' in image_step and 'ci/image-job.sh fetch' in image_step and
             step_field(image_step, 'IMAGE_MODE', '${{ needs.image-prep.outputs.mode }}') and
             step_field(test_step, 'RORTHOX_IMAGE_ID', '${{ steps.image-id.outputs.id }}') and
+            step_field(extract_step, 'MANIFEST_SHA256', '${{ needs.build.outputs.manifest }}') and
+            step_field(extract_step, 'RORTHOX_IMAGE_ID', '${{ steps.image-id.outputs.id }}') and
             step_field(test_step, 'MANIFEST_SHA256', '${{ needs.build.outputs.manifest }}') and
             step_field(test_step, 'RORTHOX_ACCEL', 'kvm') and
             step_field(test_step, 'RORTHOX_TEST_TIMEOUT', "'300'") and
             step_field(test_step, 'RORTHOX_ACCEL_PROBE_TIMEOUT', "'30'") and
-            bool(re.search(r'^          ./ci/run\.sh python3 -B scripts/ci-artifact\.py extract build/ci/production\.tar\.gz "\$MANIFEST_SHA256"$', test_step, re.M)) and
+            bool(re.search(r'^          ./ci/run\.sh python3 -B scripts/ci-artifact\.py extract build/ci/production\.tar\.gz "\$MANIFEST_SHA256"$', extract_step, re.M)) and
+            step_field(diagnostic_step, 'RORTHOX_IMAGE_ID', '${{ steps.image-id.outputs.id }}') and
+            step_field(diagnostic_step, 'RORTHOX_ACCEL', 'kvm') and
+            'run: ./ci/run.sh bash ci/kvm-diagnostics.sh container' in diagnostic_step and
             bool(re.search(r'^          ./ci/run\.sh ./scripts/run-tests\.sh -j 2 --results build/tests/runs/kvm$', test_step, re.M)) and
+            bool(re.search(r'^          bash ci/kvm-diagnostics\.sh host \"\$before\" \"\$after\"$', host_step, re.M)) and
             'name: kvm-results' in kvm and
             re.search(r'^      - name: Upload KVM results\n        timeout-minutes: \d+\n        if: always\(\)$', kvm, re.M),
             'KVM job must use the same verified image and build artifact')
@@ -222,13 +232,20 @@ def lint(text):
         parsed_steps = {step.get('name'): step for step in parsed['kvm']['steps']}
         parsed_image = parsed_steps.get('Verify the image for this revision', {})
         parsed_test = parsed_steps.get('Test with KVM', {})
+        parsed_extract = parsed_steps.get('Extract KVM production build', {})
+        parsed_diagnostic = parsed_steps.get('Diagnose KVM in the image', {})
         require(isinstance(parsed_image, dict) and isinstance(parsed_test, dict) and
                 parsed_image.get('env', {}).get('IMAGE_MODE') == '${{ needs.image-prep.outputs.mode }}' and
                 parsed_test.get('env', {}).get('RORTHOX_IMAGE_ID') == '${{ steps.image-id.outputs.id }}' and
+                parsed_extract.get('env', {}).get('MANIFEST_SHA256') == '${{ needs.build.outputs.manifest }}' and
+                parsed_extract.get('env', {}).get('RORTHOX_IMAGE_ID') == '${{ steps.image-id.outputs.id }}' and
                 parsed_test.get('env', {}).get('MANIFEST_SHA256') == '${{ needs.build.outputs.manifest }}' and
                 parsed_test.get('env', {}).get('RORTHOX_TEST_TIMEOUT') == '300' and
                 parsed_test.get('env', {}).get('RORTHOX_ACCEL') == 'kvm' and
-                './ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$MANIFEST_SHA256"' in parsed_test.get('run', ''),
+                parsed_diagnostic.get('env', {}).get('RORTHOX_IMAGE_ID') == '${{ steps.image-id.outputs.id }}' and
+                parsed_diagnostic.get('env', {}).get('RORTHOX_ACCEL') == 'kvm' and
+                parsed_diagnostic.get('run') == './ci/run.sh bash ci/kvm-diagnostics.sh container' and
+                './ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$MANIFEST_SHA256"' in parsed_extract.get('run', ''),
                 'KVM parsed step bindings differ')
     for step in parsed['kvm']['steps'] if yaml is not None else kvm_steps.values():
         run = step.get('run', '') if yaml is not None else (step.split('        run:', 1)[1] if '        run:' in step else '')

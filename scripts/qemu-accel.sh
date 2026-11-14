@@ -21,6 +21,7 @@ accel_probe() {
         -accel "$ACCEL_KVM_OPTS" -cpu "${QEMU_CPU:-qemu32}" -m 16 -display none -nodefaults -no-user-config \
         -serial none -S -monitor stdio 2>&1)
     status=$?
+    accel_probe_details=${out:0:1200}
     if [ "$status" -eq 0 ] && grep -q 'kvm support: enabled' <<< "$out"; then
         accel_why="a QEMU with -accel $ACCEL_KVM_OPTS reported kvm support: enabled"
         return 0
@@ -41,6 +42,13 @@ accel_select() {
             RORTHOX_ACCEL=tcg ;;
         kvm)
             if ! accel_probe; then
+                if [ "${GITHUB_ACTIONS:-}" = true ]; then
+                    local message="RORTHOX_ACCEL=kvm, but KVM doesn't work here: $accel_why"
+                    message=${message//'%'/'%25'}
+                    message=${message//$'\r'/'%0D'}
+                    message=${message//$'\n'/'%0A'}
+                    printf '::error title=KVM unavailable::%s\n' "$message"
+                fi
                 echo "RORTHOX_ACCEL=kvm, but KVM doesn't work here: $accel_why" >&2
                 return 1
             fi

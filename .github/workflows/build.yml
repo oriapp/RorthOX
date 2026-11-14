@@ -297,21 +297,16 @@ jobs:
       - name: Enable the host KVM device if present
         timeout-minutes: 2
         run: |
-          uname -r
-          grep -m 2 -E "^(vendor_id|model name)[[:space:]]*:" /proc/cpuinfo || true
-          for parameter in /sys/module/kvm_{intel,amd}/parameters/{nested,ept,npt,unrestricted_guest}; do
-            if [ -r "$parameter" ]; then printf "%s: " "$parameter"; cat "$parameter"; fi
-          done
-          ls -l /dev/kvm || true
+          before=$(stat -c "%a %U %G" /dev/kvm 2>/dev/null || echo absent)
+          trap 'bash ci/kvm-diagnostics.sh host "$before" "$(stat -c "%a %U %G" /dev/kvm 2>/dev/null || echo absent)"' ERR
           if [ -c /dev/kvm ]; then
             echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
             sudo udevadm control --reload-rules
             sudo udevadm trigger --name-match=kvm
             sudo udevadm settle
-            ls -l /dev/kvm || true
-          else
-            echo '/dev/kvm absent; forced KVM will fail rather than fall back to TCG'
           fi
+          after=$(stat -c "%a %U %G" /dev/kvm 2>/dev/null || echo absent)
+          bash ci/kvm-diagnostics.sh host "$before" "$after"
       # actions/download-artifact v6
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
         timeout-minutes: 5
@@ -342,8 +337,23 @@ jobs:
         with:
           name: production
           path: ${{ runner.temp }}/production
+      - name: Extract KVM production build
+        timeout-minutes: 2
+        env:
+          MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}
+          RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}
+        run: |
+          mkdir -p build/ci
+          cp "$RUNNER_TEMP/production/production.tar.gz" build/ci/production.tar.gz
+          ./ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$MANIFEST_SHA256"
+      - name: Diagnose KVM in the image
+        timeout-minutes: 1
+        env:
+          RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}
+          RORTHOX_ACCEL: kvm
+        run: ./ci/run.sh bash ci/kvm-diagnostics.sh container
       - name: Test with KVM
-        timeout-minutes: 35
+        timeout-minutes: 31
         env:
           MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}
           RORTHOX_REQUIRE_ISO: '1'
@@ -352,9 +362,6 @@ jobs:
           RORTHOX_ACCEL_PROBE_TIMEOUT: '30'
           RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}
         run: |
-          mkdir -p build/ci
-          cp "$RUNNER_TEMP/production/production.tar.gz" build/ci/production.tar.gz
-          ./ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$MANIFEST_SHA256"
           ./ci/run.sh ./scripts/run-tests.sh -j 2 --results build/tests/runs/kvm
       - name: Add KVM test summary
         timeout-minutes: 2
