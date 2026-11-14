@@ -123,6 +123,64 @@ with tempfile.TemporaryDirectory() as temp:
         assert old in text and new != old, tag
         print('checking', tag, flush=True)
         run(text.replace(old, new, 1), False)
+    # Exercise decoded YAML context references and the workflow/job boundaries.
+    kvm_head = text.index('\n  kvm:\n')
+    def kvm_change(old, new):
+        head, body = text[:kvm_head], text[kvm_head:]
+        assert old in body
+        return head + body.replace(old, new, 1)
+    credential_step = '          RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}\n'
+    cases = (
+        ('escaped-secret-hex', text.replace(credential_step, credential_step +
+            r'          T: "${{ \x73ecrets.GITHUB_TOKEN }}"' + '\n', 1), 'credentials outside publication'),
+        ('escaped-secret-unicode', text.replace(credential_step, credential_step +
+            r'          T: "${{ \u0073ecrets.GITHUB_TOKEN }}"' + '\n', 1), 'credentials outside publication'),
+        ('escaped-token', kvm_change(credential_step, credential_step +
+            r'          T: "${{ github.tok\x65n }}"' + '\n'), 'credentials outside publication'),
+        ('escaped-index', kvm_change(credential_step, credential_step +
+            r'''          T: "${{ github\x5b'token'] }}"''' + '\n'), 'credentials outside publication'),
+        ('github-filter', kvm_change(credential_step, credential_step +
+            "          T: ${{ join(github.*, ',') }}\n"), 'credentials outside publication'),
+        ('value-jobs-env', text.replace('permissions: {}\n',
+            'permissions: {}\nenv:\n  NOTE: jobs:x\n  T: ${{ github.token }}\n', 1),
+            'credentials outside publication'),
+        ('comment-jobs-env', text.replace('permissions: {}\n',
+            'permissions: {}\n# jobs: unrelated\nenv:\n  T: ${{ github.token }}\n', 1),
+            'credentials outside publication'),
+        ('kvm-image-id', kvm_change(credential_step, ''), 'KVM job must use the same verified image'),
+        ('kvm-manifest', kvm_change('build/ci/production.tar.gz "$MANIFEST_SHA256"',
+            'build/ci/production.tar.gz "$(sha256sum build/ci/production.tar.gz | cut -c1-64)"'),
+            'KVM job must use the same verified image'),
+        ('kvm-commented-accel', kvm_change('          RORTHOX_ACCEL: kvm\n',
+            '          # RORTHOX_ACCEL: kvm\n          RORTHOX_ACCEL: tcg\n'),
+            'KVM job must use the same verified image'),
+        ('kvm-no-udev', kvm_change('            echo \'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"\' | sudo tee /etc/udev/rules.d/99-kvm4all.rules\n', ''),
+            'KVM job must use the same verified image'),
+        ('kvm-privileged', kvm_change('      - name: Add KVM test summary\n        timeout-minutes: 2\n',
+            '      - name: Extra\n        timeout-minutes: 1\n        run: docker run --privileged --rm alpine true\n      - name: Add KVM test summary\n        timeout-minutes: 1\n'),
+            'KVM job must not run privileged'),
+        ('kvm-test-timeout', kvm_change("          RORTHOX_TEST_TIMEOUT: '300'\n", ''),
+            'KVM job must use the same verified image'),
+        ('kvm-upload', kvm_change('      - name: Upload KVM results\n        timeout-minutes: 2\n        if: always()',
+            '      - name: Upload KVM results\n        timeout-minutes: 2\n        if: success()'),
+            'KVM job must use the same verified image'),
+        ('kvm-step-timeout', kvm_change('      - name: Test with KVM\n        timeout-minutes: 45',
+            '      - name: Test with KVM'), 'kvm: step'),
+    )
+    for tag, mutated, reason in cases:
+        print('checking', tag, flush=True)
+        workflow.write_text(mutated)
+        for path in (None, no_yaml):
+            mode = 'yaml' if path is None else 'fallback'
+            env = os.environ.copy()
+            env.pop('GITHUB_ACTIONS', None)
+            if path is not None:
+                env['PYTHONPATH'] = str(path)
+            result = subprocess.run(['python3', '-B', str(lint), str(workflow)], cwd=root,
+                                    capture_output=True, text=True, env=env)
+            expected = ('escaped expression requires YAML parser' if path is not None and
+                        tag.startswith('escaped-') else reason)
+            assert result.returncode != 0 and expected in result.stderr, (tag, mode, result.stderr)
     env = os.environ.copy()
     env['GITHUB_ACTIONS'] = 'true'
     env['PYTHONPATH'] = str(no_yaml)
@@ -130,9 +188,6 @@ with tempfile.TemporaryDirectory() as temp:
     missing = subprocess.run(['python3', '-B', str(lint), str(workflow)], cwd=root,
                              capture_output=True, env=env)
     assert missing.returncode != 0 and b'PyYAML is required' in missing.stderr
-    for value in (r'run: "echo $\x7b{ github.event.inputs.arg }}"',
-                  r'run: !!str "echo $\u007b{ github.event.inputs.arg }}"'):
-        run(text.replace('run: |', value, 1), False)
     results = temp / 'results'
     for i in range(1, 5):
         d = results / f'results-{i}'

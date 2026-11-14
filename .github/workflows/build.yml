@@ -291,26 +291,36 @@ jobs:
     steps:
       # actions/checkout v6
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        timeout-minutes: 1
         with:
           persist-credentials: false
       - name: Enable the host KVM device if present
+        timeout-minutes: 2
         run: |
+          uname -r
+          grep -m 2 -E "^(vendor_id|model name)[[:space:]]*:" /proc/cpuinfo || true
+          for parameter in /sys/module/kvm_{intel,amd}/parameters/{nested,ept,npt,unrestricted_guest}; do
+            if [ -r "$parameter" ]; then printf "%s: " "$parameter"; cat "$parameter"; fi
+          done
+          ls -l /dev/kvm || true
           if [ -c /dev/kvm ]; then
             echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
             sudo udevadm control --reload-rules
             sudo udevadm trigger --name-match=kvm
             sudo udevadm settle
-            ls -l /dev/kvm
+            ls -l /dev/kvm || true
           else
             echo '/dev/kvm absent; forced KVM will fail rather than fall back to TCG'
           fi
       # actions/download-artifact v6
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        timeout-minutes: 2
         if: needs.image-prep.outputs.mode == 'archive'
         with:
           name: candidate-image
           path: ${{ runner.temp }}
       - name: Verify the image for this revision
+        timeout-minutes: 3
         id: image-id
         env:
           IMAGE_MODE: ${{ needs.image-prep.outputs.mode }}
@@ -328,13 +338,16 @@ jobs:
           fi
       # actions/download-artifact v6
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        timeout-minutes: 2
         with:
           name: production
           path: ${{ runner.temp }}/production
       - name: Test with KVM
+        timeout-minutes: 45
         env:
           MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}
           RORTHOX_REQUIRE_ISO: '1'
+          RORTHOX_TEST_TIMEOUT: '300'
           RORTHOX_ACCEL: kvm
           RORTHOX_ACCEL_PROBE_TIMEOUT: '30'
           RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}
@@ -344,6 +357,7 @@ jobs:
           ./ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$MANIFEST_SHA256"
           ./ci/run.sh ./scripts/run-tests.sh -j 2 --results build/tests/runs/kvm
       - name: Add KVM test summary
+        timeout-minutes: 2
         if: always()
         run: |
           if [ -f build/tests/runs/kvm/summary.md ]; then
@@ -351,6 +365,7 @@ jobs:
           fi
       # Keep the diagnostic report separate from the four required TCG shards.
       - name: Upload KVM results
+        timeout-minutes: 2
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:

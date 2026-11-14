@@ -60,7 +60,7 @@ qemu_accel() {
 }
 
 # qemu_require_tcg: end the test as skipped (77) under KVM. For checks that only hold under TCG, such
-# as "-d int" or "cpu_reset" output being absent: under KVM QEMU never writes it.
+# as the "Triple fault" line or "-d int" output being absent: KVM omits both.
 qemu_require_tcg() {
     qemu_accel
     if [ "$RORTHOX_ACCEL" = kvm ]; then

@@ -53,7 +53,7 @@ def lint(text):
         if name == 'image':
             require(re.findall(r'^    continue-on-error: (.*)$', body, re.M) == ['true'],
                     'publication is not required for the image handoff')
-        if name in ('image-prep', 'image'):
+        if name in ('image-prep', 'image', 'kvm'):
             job_limits = re.findall(r'^    timeout-minutes: (\d+)', body, re.M)
             require(len(job_limits) == 1, f'{name}: missing job timeout')
             job_limit = int(job_limits[0])
@@ -173,15 +173,47 @@ def lint(text):
             'ci-artifact.py extract' in jobs['kvm'] and
             'name: kvm-results' in jobs['kvm'] and
             'sudo udevadm settle' in jobs['kvm'] and
-            'sudo udevadm trigger --name-match=kvm' in jobs['kvm'],
+            'sudo udevadm trigger --name-match=kvm' in jobs['kvm'] and
+            'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' in jobs['kvm'] and
+            'IMAGE_MODE: ${{ needs.image-prep.outputs.mode }}' in jobs['kvm'] and
+            'RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}' in jobs['kvm'] and
+            'MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}' in jobs['kvm'] and
+            re.search(r'ci-artifact\.py extract [^\n]* "\$MANIFEST_SHA256"', jobs['kvm']) and
+            re.search(r'^          RORTHOX_ACCEL: kvm$', jobs['kvm'], re.M) and
+            not re.search(r'^          RORTHOX_ACCEL: tcg$', jobs['kvm'], re.M) and
+            'RORTHOX_TEST_TIMEOUT: \'300\'' in jobs['kvm'] and
+            re.search(r'^      - name: Upload KVM results\n        timeout-minutes: \d+\n        if: always\(\)$', jobs['kvm'], re.M),
             'KVM job must use the same verified image and build artifact')
+    # Keep host-level Docker execution confined to the audited wrapper.
+    require(not re.search(r'\bdocker\s+run\b|--privileged\b', jobs['kvm'], re.I),
+            'KVM job must not run privileged or host Docker commands')
     require('    continue-on-error:' not in jobs['image-prep'],
             'image preparation must be required')
     # Context references must not put credentials in the workflow or read-only jobs.
     # github.ref and other non-secret fields are allowed; whole-context exports are not.
-    outside = text.split('jobs:', 1)[0] + ''.join(body for name, body in jobs.items() if name != 'image')
-    require(not re.search(r'\bsecrets\b|\bgithub\s*\[|\bgithub\.token\b|'
-                          r'\btoJSON\s*\(\s*github\b', outside, re.I),
+    scope = re.split(r'^jobs:[ \t]*$', text, maxsplit=1, flags=re.M)[0]
+    outside = scope + ''.join(body for name, body in jobs.items() if name != 'image')
+    credential = re.compile(r'\bsecrets\b|\bgithub\s*\[|'
+                            r'\bgithub\s*\.\s*(?!event_name\b|repository\b|ref\b|sha\b|workflow\b)'
+                            r'|\btoJSON\s*\(\s*github\b', re.I)
+    # YAML double-quoted scalars may decode escapes into credential expressions.
+    # Check parsed keys as well as values (including sequences and nested mappings).
+    def contains_credential(value):
+        if isinstance(value, str):
+            return bool(credential.search(value))
+        if isinstance(value, dict):
+            return any(contains_credential(k) or contains_credential(v) for k, v in value.items())
+        if isinstance(value, list):
+            return any(contains_credential(item) for item in value)
+        return False
+
+    if yaml is None:
+        # No parser means decoded YAML escapes cannot be inspected safely.
+        require(not re.search(r'\$\{\{[^}]*\\', outside),
+                'escaped expression requires YAML parser')
+    require(not credential.search(outside) and
+            (yaml is None or not contains_credential({**{k: v for k, v in document.items() if k != 'jobs'},
+                                                      'jobs': {k: v for k, v in parsed.items() if k != 'image'}})),
             'credentials outside publication')
     require('retention-days: 1' in jobs['image-prep'], 'candidate archive retention too long')
     require(text.count('secrets.') == 1 and 'GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}' in jobs['image'] and

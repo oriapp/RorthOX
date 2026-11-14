@@ -552,6 +552,8 @@ as a retry after a test fails). The container receives `/dev/kvm` only when the 
 access it; the KVM probe checks whether QEMU really enabled it. The required CI result uses
 TCG. On trusted pushes CI also runs the full suite with forced KVM in a separate,
 information-only job; that job can fail without making the required result red.
+Pull request code does not get a KVM run; self-hosted runners must never serve
+`pull_request` workflows. The trusted push run is the authoritative result.
 Local KVM has not been verified. See the run metadata for the chosen accelerator and reason.
 Local builds without Docker remain available with the documented toolchain.
 
