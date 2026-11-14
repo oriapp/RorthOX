@@ -34,10 +34,10 @@ def lint(text):
             'checkout must not persist credentials')
     require(not re.search(r'^\s*(run-id|github-token):', text, re.M),
             'artifact downloads must be same-run')
-    parts = re.split(r'^  (build|test|image-prep|image|result):\s*$', text, flags=re.M)
-    require(len(parts) == 11 and parts[1::2] ==
-            ['build', 'test', 'image-prep', 'image', 'result'],
-            'expected five jobs')
+    parts = re.split(r'^  (build|test|image-prep|image|result|kvm):\s*$', text, flags=re.M)
+    require(len(parts) == 13 and parts[1::2] ==
+            ['build', 'test', 'image-prep', 'image', 'result', 'kvm'],
+            'expected six jobs')
     jobs = dict(zip(parts[1::2], parts[2::2]))
     gate = "github.event_name == 'push' && github.repository == 'oriapp/RorthOX' && (github.ref == 'refs/heads/features' || github.ref == 'refs/heads/main')"
     require(re.findall(r'^    if: (.+)$', jobs['image'], re.M) == [gate],
@@ -47,6 +47,9 @@ def lint(text):
         expected = ['      contents: read'] + (['      packages: write'] if name == 'image' else [])
         require(len(grants) == 1 and grants[0].splitlines() == expected,
                 f'{name}: unexpected permissions')
+        if name == 'kvm':
+            require(re.findall(r'^    continue-on-error: (.*)$', body, re.M) == ['true'],
+                    'KVM job must remain advisory')
         if name == 'image':
             require(re.findall(r'^    continue-on-error: (.*)$', body, re.M) == ['true'],
                     'publication is not required for the image handoff')
@@ -79,11 +82,15 @@ def lint(text):
         require(isinstance(document, dict) and isinstance(document.get('jobs'), dict),
                 'invalid workflow jobs')
         parsed = document['jobs']
-        require(set(parsed) == {'build', 'test', 'image-prep', 'image', 'result'},
+        require(set(parsed) == {'build', 'test', 'image-prep', 'image', 'result', 'kvm'},
                 'unexpected workflow job')
         for name, job in parsed.items():
             require(isinstance(job, dict) and isinstance(job.get('steps'), list),
                     'invalid workflow steps')
+            if name == 'kvm':
+                require(job.get('continue-on-error') is True and
+                        all('continue-on-error' not in step for step in job['steps']
+                            if isinstance(step, dict)), 'only the KVM job may be advisory')
             if name == 'result':
                 require('continue-on-error' not in job and
                         all('continue-on-error' not in step for step in job['steps']
@@ -100,6 +107,7 @@ def lint(text):
                 parsed['test'].get('needs') == ['image-prep', 'build'] and
                 parsed['image'].get('needs') == ['image-prep', 'build', 'test'] and
                 parsed['result'].get('needs') == ['build', 'test'] and
+                parsed['kvm'].get('needs') == ['image-prep', 'build'] and
                 parsed['test'].get('strategy', {}).get('fail-fast') is False,
                 'invalid job dependencies or shard strategy')
     # Only block-style, unaliased YAML keys are supported by the fallback lint.
@@ -131,6 +139,9 @@ def lint(text):
             require('${{' not in command, 'expression inside run')
             if yaml is None:
                 require('\\' not in command, 'escaped run requires YAML parser')
+    require(not any(re.search(r'^    continue-on-error:', jobs[name], re.M)
+                    for name in ('build', 'test', 'image-prep', 'result')),
+            'only publication and KVM may mask a job failure')
     require('    continue-on-error:' not in jobs['build'] and
             '    continue-on-error:' not in jobs['test'], 'required job must not mask failure')
     require('./ci/run.sh make all iso' in jobs['build'], 'production build must run in image')
@@ -141,7 +152,7 @@ def lint(text):
     require(not re.search(r'^    continue-on-error:', jobs['result'], re.M) and
             not re.search(r'^        continue-on-error:', jobs['result'].split('      - name: Check every job', 1)[-1], re.M),
             'aggregate must not mask failure')
-    require('needs: [build, test]' in jobs['result'] and re.search(r'^    if: always\(\)$', jobs['result'], re.M)
+    require(re.search(r'^    needs: \[build, test\]$', jobs['result'], re.M) and re.search(r'^    if: always\(\)$', jobs['result'], re.M)
             and 'scripts/ci-result.py' in jobs['result'], 'aggregate must run after failure')
     require('shell: bash # Fail the step when prepare fails' in jobs['image-prep'],
             'piped steps must use bash pipefail')
@@ -154,6 +165,16 @@ def lint(text):
                 f'{name}: unverified image or host workload')
         require('sudo apt-' not in body and 'actions/cache@' not in body and
                 './configure.sh' not in body, f'{name}: legacy toolchain path')
+    require(re.search(r'^    needs: \[image-prep, build\]$', jobs['kvm'], re.M) and
+            re.search(r"^    if: github.event_name == 'push' && github.repository == 'oriapp/RorthOX'$", jobs['kvm'], re.M) and
+            'RORTHOX_ACCEL: kvm' in jobs['kvm'] and 'RORTHOX_ACCEL_PROBE_TIMEOUT:' in jobs['kvm'] and
+            './ci/run.sh ./scripts/run-tests.sh -j 2' in jobs['kvm'] and
+            'ci/image-job.sh receive' in jobs['kvm'] and 'ci/image-job.sh fetch' in jobs['kvm'] and
+            'ci-artifact.py extract' in jobs['kvm'] and
+            'name: kvm-results' in jobs['kvm'] and
+            'sudo udevadm settle' in jobs['kvm'] and
+            'sudo udevadm trigger --name-match=kvm' in jobs['kvm'],
+            'KVM job must use the same verified image and build artifact')
     require('    continue-on-error:' not in jobs['image-prep'],
             'image preparation must be required')
     # Context references must not put credentials in the workflow or read-only jobs.

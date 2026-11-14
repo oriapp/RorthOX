@@ -403,9 +403,9 @@ qemu-system-i386 -m 128 -drive file=bin/os.bin,format=raw,index=0,media=disk \
 make test
 ```
 
-This builds everything (and the GRUB ISO, when its packages are installed) and runs 70 tests (`scripts/smoke.sh` plus
+This builds everything (and the GRUB ISO, when its packages are installed) and runs 75 tests (`scripts/smoke.sh` plus
 every `scripts/tests/*.sh`), as many at once as there are CPUs (about 2 minutes with 16); it keeps going after a
-failure and prints a summary (`70 passed, 0 failed, 0 skipped`) and where the output went. `make test TEST_JOBS=1`
+failure and prints a summary (`75 passed, 0 failed, 0 skipped`) and where the output went. `make test TEST_JOBS=1`
 runs them one after the other (about 14 minutes; as at any `-j`, a test's output shows when it ends);
 `TEST_JOBS=4` runs four at once. `make smoke` runs
 only the smoke test, and `./scripts/run-tests.sh scripts/tests/panic.sh` runs single tests (a test named twice runs
@@ -546,7 +546,13 @@ docker run --rm --init --user "$(id -u):$(id -g)" --network none \
 ```
 
 Open the repository in a devcontainer to get the same image and `/work` checkout.
-The container uses TCG by default; KVM is not enabled for required CI jobs.
+The default is `RORTHOX_ACCEL=tcg`. Set `RORTHOX_ACCEL=kvm` to require KVM, or
+`RORTHOX_ACCEL=auto` to use KVM if it works and otherwise use TCG (before tests start, never
+as a retry after a test fails). The container receives `/dev/kvm` only when the host user can
+access it; the KVM probe checks whether QEMU really enabled it. The required CI result uses
+TCG. On trusted pushes CI also runs the full suite with forced KVM in a separate,
+information-only job; that job can fail without making the required result red.
+Local KVM has not been verified. See the run metadata for the chosen accelerator and reason.
 Local builds without Docker remain available with the documented toolchain.
 
 CI (`.github/workflows/build.yml`) runs on Ubuntu 24.04 for pushes to `main` or

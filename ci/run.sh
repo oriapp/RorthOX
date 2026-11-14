@@ -43,7 +43,7 @@ if [ "${RORTHOX_ACCEL:-}" != tcg ] && [ -c /dev/kvm ] && [ -r /dev/kvm ] && [ -w
     kvm_gid=$(stat -c %g /dev/kvm)
     if [ "$kvm_gid" != 0 ]; then args+=(--group-add "$kvm_gid"); fi
 fi
-for name in GITHUB_ACTIONS RORTHOX_ACCEL RORTHOX_REQUIRE_ISO RORTHOX_TEST_TIMEOUT; do
+for name in GITHUB_ACTIONS RORTHOX_ACCEL RORTHOX_ACCEL_PROBE_TIMEOUT RORTHOX_REQUIRE_ISO RORTHOX_TEST_TIMEOUT; do
     if [ "${!name+x}" ]; then args+=(-e "$name=${!name}"); fi
 done
 if [ "${RORTHOX_TEST_ROOT+x}" ]; then

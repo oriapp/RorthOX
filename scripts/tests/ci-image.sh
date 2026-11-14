@@ -110,6 +110,21 @@ if grep -q 'warning: checkout image inputs differ from ci/image.ref' "$tmp/curre
     fail 'current checkout warned about stale image inputs'
 fi
 mapfile -d '' -t default_args < "$tmp/default-argv"
+# When /dev/kvm is absent or not accessible, no device may be forwarded, even with forced KVM.
+( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/forced-argv" RORTHOX_IMAGE_REF="$digest"
+  export RORTHOX_ACCEL=kvm RORTHOX_ACCEL_PROBE_TIMEOUT=17
+  unset RORTHOX_IN_IMAGE RORTHOX_TEST_ROOT
+  bash ci/run.sh true )
+mapfile -d '' -t forced_args < "$tmp/forced-argv"
+probe=0
+for i in "${!forced_args[@]}"; do
+    if [ "${forced_args[i]}" = -e ] && [ "${forced_args[i+1]:-}" = RORTHOX_ACCEL_PROBE_TIMEOUT=17 ]; then probe=1; fi
+    if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+        [ "${forced_args[i]}" != --device ] || fail 'unusable KVM device forwarded'
+    fi
+done
+[ "$probe" = 1 ] || fail 'KVM probe timeout not forwarded'
+[[ " ${forced_args[*]} " == *' RORTHOX_ACCEL=kvm '* ]] || fail 'forced KVM not forwarded'
 [ "${default_args[${#default_args[@]}-2]}" = "$ref" ] || fail 'default image differs from recorded digest'
 # Changing an image input must warn for the locally pinned digest, without blocking it.
 mkdir -p "$tmp/stale/ci"
@@ -170,4 +185,12 @@ for i in "${!kvm_args[@]}"; do
     if [ "${kvm_args[i]}" = --group-add ] && [ "${kvm_args[i+1]:-}" = 4242 ]; then group=1; fi
 done
 [ "$device" = 1 ] && [ "$group" = 1 ] || fail 'nonzero KVM group was not forwarded'
+# The host-usable device path must also pass the probe timeout and forced-KVM choice.
+( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/kvm-forced-argv" RORTHOX_IMAGE_REF="$digest"
+  export RORTHOX_ACCEL=kvm RORTHOX_ACCEL_PROBE_TIMEOUT=19
+  unset RORTHOX_TEST_ROOT RORTHOX_IN_IMAGE
+  bash "$kvm_script" true )
+mapfile -d '' -t kvm_args < "$tmp/kvm-forced-argv"
+[[ " ${kvm_args[*]} " == *' --device /dev/null '* ]] || fail 'usable character device not forwarded'
+[[ " ${kvm_args[*]} " == *' RORTHOX_ACCEL_PROBE_TIMEOUT=19 '* ]] || fail 'KVM probe timeout missing from device run'
 echo 'PASS ci-image: key, context, reference, Dockerfile, isolated argv and exit status'
