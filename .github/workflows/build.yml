@@ -40,7 +40,7 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.sha }}
           REPOSITORY: ${{ github.repository }}
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}
         run: |
           if [ "$EVENT" = pull_request ]; then before=$BASE; else before=$BEFORE; fi
           python3 -B scripts/select-tests.py --event "$EVENT" --ref "$REF" --base "$before" --head "$HEAD" --repository "$REPOSITORY" --branch "${REF#refs/heads/}" --github-output "$GITHUB_OUTPUT"

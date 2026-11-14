@@ -166,13 +166,40 @@ def lint(text):
             and 'scripts/ci-result.py' in jobs['result'], 'aggregate must run after failure')
     require('shell: bash # Fail the step when prepare fails' in jobs['image-prep'],
             'piped steps must use bash pipefail')
+    # The fixture-base escape hatch is only for local selector tests.
+    require('--fixture-base' not in text, 'fixture base is forbidden in workflows')
     select = jobs['select']
+    choose_run = '''if [ "$EVENT" = pull_request ]; then before=$BASE; else before=$BEFORE; fi
+python3 -B scripts/select-tests.py --event "$EVENT" --ref "$REF" --base "$before" --head "$HEAD" --repository "$REPOSITORY" --branch "${REF#refs/heads/}" --github-output "$GITHUB_OUTPUT"
+'''
+    choose_env = {'EVENT', 'REF', 'BEFORE', 'BASE', 'HEAD', 'REPOSITORY', 'GH_TOKEN'}
+    if yaml is not None:
+        steps = parsed['select']['steps']
+        require(len(steps) == 2 and steps[1].get('name') == 'Choose tests' and
+                steps[1].get('run') == choose_run and
+                set(steps[1].get('env', {})) == choose_env,
+                'selector command and environment must be pinned')
+    else:
+        pinned_step = re.search(r'^      - name: Choose tests\n(.*?)(?=^      - |\Z)', select, re.M | re.S)
+        expected = '''        id: choose
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BEFORE: ${{ github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}
+        run: |
+''' + textwrap.indent(choose_run, '          ')
+        require(pinned_step is not None and pinned_step[1].rstrip('\n') == expected.rstrip('\n'),
+                'selector command and environment must be pinned')
     require('persist-credentials: false' in select and 'fetch-depth: 0' in select and
             'scripts/select-tests.py' in select and '--github-output "$GITHUB_OUTPUT"' in select and
             '          BASE: ${{ github.event.pull_request.base.sha }}' in select and
             '          BEFORE: ${{ github.event.before }}' in select and
             all(f'{key}: ${{{{ steps.choose.outputs.{key} }}}}' in select for key in ('mode', 'reason', 'tests', 'base', 'base_source')) and
-            'GH_TOKEN: ${{ github.token }}' in select and '--repository "$REPOSITORY"' in select and
+            "GH_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}" in select and '--repository "$REPOSITORY"' in select and
             '--branch "${REF#refs/heads/}"' in select and
             not re.search(r'\b(?:sudo|docker)\b', select) and 'secrets.' not in select,
             'selector must compare revisions without credentials or host privileges')
@@ -347,8 +374,9 @@ bash ci/kvm-diagnostics.sh host "$before" "$after" || { echo '::warning title=KV
         # No parser means decoded YAML escapes cannot be inspected safely.
         require(not re.search(r'\$\{\{[^}]*\\', outside),
                 'escaped expression requires YAML parser')
-    outside = outside.replace('GH_TOKEN: ${{ github.token }}', '')
-    require(select.count('GH_TOKEN: ${{ github.token }}') == 1 and
+    token_env = "GH_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}"
+    outside = outside.replace(token_env, '')
+    require(select.count(token_env) == 1 and
             not credential.search(outside) and
             (yaml is None or not contains_credential({**{k: v for k, v in document.items() if k != 'jobs'},
                                                       'jobs': {k: ({**v, 'steps': [{**step, 'env': {k2: v2 for k2, v2 in step.get('env', {}).items()
@@ -357,7 +385,7 @@ bash ci/kvm-diagnostics.sh host "$before" "$after" || { echo '::warning title=KV
                              for k, v in parsed.items() if k != 'image'}})),
             'credentials outside publication')
     require('retention-days: 1' in jobs['image-prep'], 'candidate archive retention too long')
-    require(text.count('GH_TOKEN: ${{ github.token }}') == 1 and text.count('secrets.') == 1 and 'GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}' in jobs['image'] and
+    require(text.count(token_env) == 1 and text.count('secrets.') == 1 and 'GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}' in jobs['image'] and
             not any('secrets.' in body for name, body in jobs.items() if name != 'image'),
             'credentials must be confined to publication')
     require('      - name: Log out of registry\n        timeout-minutes: 2\n        if: always()' in jobs['image'] and

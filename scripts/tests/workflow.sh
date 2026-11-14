@@ -213,14 +213,18 @@ with tempfile.TemporaryDirectory() as temp:
         ('selector-no-history', '          fetch-depth: 0', '          fetch-depth: 1', 'selector must compare'),
         ('selector-unpinned', '      - name: Choose tests',
          '      - uses: actions/checkout@v6\n      - name: Choose tests', 'actions must be'),
-        ('selector-no-output', '--github-output "$GITHUB_OUTPUT"', '--github-output /tmp/out', 'selector must compare'),
+        ('selector-no-output', '--github-output "$GITHUB_OUTPUT"', '--github-output /tmp/out', 'selector command'),
         ('selector-no-gate', "    if: ${{ !cancelled() && needs.image-prep.result == 'success' && needs.build.result == 'success' && needs.select.outputs.mode != 'none' }}", '    if: always()', 'selection must gate'),
         ('selector-no-result', 'SELECT_RESULT: ${{ needs.select.result }}', 'SELECT_RESULT: success', 'selection must gate'),
         ('defaults-accel-workflow', 'permissions: {}', 'permissions: {}\ndefaults:\n  run:\n    shell: env RORTHOX_ACCEL=tcg bash -e {0}', 'defaults must not override'),
         ('defaults-accel-test-escaped', '  test:\n', '  test:\n    defaults:\n      run:\n        shell: "env RORTHOX\\x5fACCEL=tcg bash -e {0}"\n', 'override its accelerator'),
         ('defaults-marker', '  test:\n', '  test:\n    defaults:\n      run:\n        shell: env RORTHOX_KVM_SETUP_FAILED=x bash -e {0}\n', 'setup marker'),
         ('selector-no-actions', '      actions: read', '      actions: write', 'unexpected permissions'),
-        ('selector-no-token', 'GH_TOKEN: ${{ github.token }}', 'GH_TOKEN: none', 'selector must compare'),
+        ('selector-no-token', "GH_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}", 'GH_TOKEN: none', 'selector'),
+        ('selector-token-pr', "GH_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}", 'GH_TOKEN: ${{ github.token }}', 'selector'),
+        ('selector-fixture-base', '--github-output "$GITHUB_OUTPUT"', '--fixture-base deadbeef --github-output "$GITHUB_OUTPUT"', 'fixture base'),
+        ('selector-extra-command', '          python3 -B scripts/select-tests.py --event', '          ./scripts/run-tests.sh\n          python3 -B scripts/select-tests.py --event', 'selector command'),
+        ('selector-extra-env', '          REPOSITORY: ${{ github.repository }}', '          REPOSITORY: ${{ github.repository }}\n          EXTRA: harmless', 'selector command'),
     )
     for tag, old, new, why in cases:
         assert text.count(old) == 1 or tag in ('shard-timeout',), tag
