@@ -34,10 +34,10 @@ def lint(text):
             'checkout must not persist credentials')
     require(not re.search(r'^\s*(run-id|github-token):', text, re.M),
             'artifact downloads must be same-run')
-    parts = re.split(r'^  (build|test|image-prep|image|result|kvm):\s*$', text, flags=re.M)
-    require(len(parts) == 13 and parts[1::2] ==
-            ['build', 'test', 'image-prep', 'image', 'result', 'kvm'],
-            'expected six jobs')
+    parts = re.split(r'^  (build|test|image-prep|image|result):\s*$', text, flags=re.M)
+    require(len(parts) == 11 and parts[1::2] ==
+            ['build', 'test', 'image-prep', 'image', 'result'],
+            'expected five jobs')
     jobs = dict(zip(parts[1::2], parts[2::2]))
     gate = "github.event_name == 'push' && github.repository == 'oriapp/RorthOX' && (github.ref == 'refs/heads/features' || github.ref == 'refs/heads/main')"
     require(re.findall(r'^    if: (.+)$', jobs['image'], re.M) == [gate],
@@ -47,13 +47,10 @@ def lint(text):
         expected = ['      contents: read'] + (['      packages: write'] if name == 'image' else [])
         require(len(grants) == 1 and grants[0].splitlines() == expected,
                 f'{name}: unexpected permissions')
-        if name == 'kvm':
-            require(re.findall(r'^    continue-on-error: (.*)$', body, re.M) == ['true'],
-                    'KVM job must remain advisory')
         if name == 'image':
             require(re.findall(r'^    continue-on-error: (.*)$', body, re.M) == ['true'],
                     'publication is not required for the image handoff')
-        if name in ('image-prep', 'image', 'kvm'):
+        if name in ('image-prep', 'image'):
             job_limits = re.findall(r'^    timeout-minutes: (\d+)', body, re.M)
             require(len(job_limits) == 1, f'{name}: missing job timeout')
             job_limit = int(job_limits[0])
@@ -82,15 +79,11 @@ def lint(text):
         require(isinstance(document, dict) and isinstance(document.get('jobs'), dict),
                 'invalid workflow jobs')
         parsed = document['jobs']
-        require(set(parsed) == {'build', 'test', 'image-prep', 'image', 'result', 'kvm'},
+        require(set(parsed) == {'build', 'test', 'image-prep', 'image', 'result'},
                 'unexpected workflow job')
         for name, job in parsed.items():
             require(isinstance(job, dict) and isinstance(job.get('steps'), list),
                     'invalid workflow steps')
-            if name == 'kvm':
-                require(job.get('continue-on-error') is True and
-                        all('continue-on-error' not in step for step in job['steps']
-                            if isinstance(step, dict)), 'only the KVM job may be advisory')
             if name == 'result':
                 require('continue-on-error' not in job and
                         all('continue-on-error' not in step for step in job['steps']
@@ -107,7 +100,6 @@ def lint(text):
                 parsed['test'].get('needs') == ['image-prep', 'build'] and
                 parsed['image'].get('needs') == ['image-prep', 'build', 'test'] and
                 parsed['result'].get('needs') == ['build', 'test'] and
-                parsed['kvm'].get('needs') == ['image-prep', 'build', 'test'] and
                 parsed['test'].get('strategy', {}).get('fail-fast') is False,
                 'invalid job dependencies or shard strategy')
     # Only block-style, unaliased YAML keys are supported by the fallback lint.
@@ -156,7 +148,7 @@ def lint(text):
                 require('\\' not in command, 'escaped run requires YAML parser')
     require(not any(re.search(r'^    continue-on-error:', jobs[name], re.M)
                     for name in ('build', 'test', 'image-prep', 'result')),
-            'only publication and KVM may mask a job failure')
+            'only publication may mask a job failure')
     require('    continue-on-error:' not in jobs['build'] and
             '    continue-on-error:' not in jobs['test'], 'required job must not mask failure')
     require('./ci/run.sh make all iso' in jobs['build'], 'production build must run in image')
@@ -176,129 +168,35 @@ def lint(text):
         require('ci/image-job.sh receive' in body and 'ci/image-job.sh fetch' in body and
                 'IMAGE_MODE: ${{ needs.image-prep.outputs.mode }}' in body and
                 'RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}' in body and
-                'RORTHOX_ACCEL: tcg' in body and './ci/run.sh ' in body,
+                f'RORTHOX_ACCEL: {"auto" if name == "test" else "tcg"}' in body and './ci/run.sh ' in body,
                 f'{name}: unverified image or host workload')
         require('sudo apt-' not in body and 'actions/cache@' not in body and
                 './configure.sh' not in body, f'{name}: legacy toolchain path')
-    kvm = jobs['kvm']
-    kvm_steps = {name: body for name, body in
-                 re.findall(r'^      - name: ([^\n]+)\n(.*?)(?=^      - |\Z)', kvm, re.M | re.S)}
-    # Compare every step, including steps whose first key is not name. The fallback
-    # accepts only the exact block-style spelling so quoted YAML cannot hide a step.
-    expected_steps = [
-        (None, 'actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803'),
-        ('Enable the host KVM device if present', None),
-        (None, 'actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53'),
-        ('Verify the image for this revision', None),
-        (None, 'actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53'),
-        ('Extract KVM production build', None),
-        ('Diagnose KVM in the image', None),
-        ('Test with KVM three times', None),
-        ('Download TCG results for parity', 'actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53'),
-        ('Compare KVM and TCG results', None),
-        ('Add KVM test summaries', None),
-        ('Upload KVM results', 'actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f'),
-    ]
-    blocks = re.split(r'^      - ', kvm, flags=re.M)[1:]
-    first_keys = [('name: ' + name if name is not None else 'uses: ' + action)
-                  for name, action in expected_steps]
-    require([block.splitlines()[0] for block in blocks] == first_keys and
-            not re.search(r'^        name:', kvm, re.M),
-            'duplicate or unexpected KVM step name')
-    if yaml is not None:
-        require([(step.get('name'), step.get('uses')) for step in parsed['kvm']['steps']] == expected_steps,
-                'duplicate or unexpected KVM step name')
-    image_step = kvm_steps.get('Verify the image for this revision', '')
-    extract_step = kvm_steps.get('Extract KVM production build', '')
-    diagnostic_step = kvm_steps.get('Diagnose KVM in the image', '')
-    test_step = kvm_steps.get('Test with KVM three times', '')
-    parity_step = kvm_steps.get('Compare KVM and TCG results', '')
-    download_step = kvm_steps.get('Download TCG results for parity', '')
-    host_step = kvm_steps.get('Enable the host KVM device if present', '')
-    def step_field(step, field, value):
-        return bool(re.search(r'^          ' + re.escape(field) + r': ' + re.escape(value) + r'$', step, re.M))
-
-    require(re.search(r'^    needs: \[image-prep, build, test\]$', kvm, re.M) and
-            re.search(r"^    if: \$\{\{ \(!cancelled\(\)\) && github.event_name == 'push' && github.repository == 'oriapp/RorthOX' && needs.build.result == 'success' \}\}$", kvm, re.M) and
-            'ci/image-job.sh receive' in image_step and 'ci/image-job.sh fetch' in image_step and
-            step_field(image_step, 'IMAGE_MODE', '${{ needs.image-prep.outputs.mode }}') and
-            step_field(test_step, 'RORTHOX_IMAGE_ID', '${{ steps.image-id.outputs.id }}') and
-            step_field(parity_step, 'RORTHOX_IMAGE_ID', '${{ steps.image-id.outputs.id }}') and
-            step_field(extract_step, 'MANIFEST_SHA256', '${{ needs.build.outputs.manifest }}') and
-            step_field(extract_step, 'RORTHOX_IMAGE_ID', '${{ steps.image-id.outputs.id }}') and
-            step_field(test_step, 'MANIFEST_SHA256', '${{ needs.build.outputs.manifest }}') and
-            step_field(test_step, 'RORTHOX_ACCEL', 'kvm') and
-            step_field(test_step, 'RORTHOX_TEST_TIMEOUT', "'300'") and
-            step_field(test_step, 'RORTHOX_ACCEL_PROBE_TIMEOUT', "'30'") and
-            bool(re.search(r'^          ./ci/run\.sh python3 -B scripts/ci-artifact\.py extract build/ci/production\.tar\.gz "\$MANIFEST_SHA256"$', extract_step, re.M)) and
-            step_field(diagnostic_step, 'RORTHOX_IMAGE_ID', '${{ steps.image-id.outputs.id }}') and
-            step_field(diagnostic_step, 'RORTHOX_ACCEL', 'kvm') and
-            'run: ./ci/run.sh bash ci/kvm-diagnostics.sh container' in diagnostic_step and
-            bool(re.search(r'^          for i in 1 2 3; do$', test_step, re.M)) and
-            bool(re.search(r'^            ./ci/run\.sh ./scripts/run-tests\.sh -j 2 --results "build/tests/runs/kvm-\$i" \|\| status=1$', test_step, re.M)) and
-            'exit "$status"' in test_step and
-            'pattern: results-*' in download_step and
-            'if: always()' in download_step and
-            'if: always()' in parity_step and
-            'scripts/ci-parity.py build/tests/runs/tcg-shards build/tests/runs/kvm-1 build/tests/runs/kvm-2 build/tests/runs/kvm-3' in parity_step and
-            bool(re.search(r'^            source="\$RUNNER_TEMP/tcg-results/results-\$i/results\.json"$', parity_step, re.M)) and
-            bool(re.search(r'^              cp "\$source" "build/tests/runs/tcg-shards/results-\$i/results\.json"$', parity_step, re.M)) and
-            'for i in 1 2 3 4; do' in parity_step and
-            re.findall(r'^\s+cp\b[^\n]*', parity_step, re.M) ==
-            ['              cp "$source" "build/tests/runs/tcg-shards/results-$i/results.json"'] and
-            bool(re.search(r'^          bash ci/kvm-diagnostics\.sh host \"\$before\" \"\$after\"$', host_step, re.M)) and
-            'name: kvm-results' in kvm and
-            re.search(r'^      - name: Upload KVM results\n        timeout-minutes: \d+\n        if: always\(\)$', kvm, re.M),
-            'KVM job must use the same verified image and build artifact')
-    sudo_lines = [line.strip() for line in kvm.splitlines() if re.search(r'\bsudo\b', line)]
+    test = jobs['test']
+    host = re.search(r'^      - name: Enable the host KVM device if present\n(.*?)(?=^      - |\Z)', test, re.M | re.S)
+    require(host is not None, 'required shard must prepare KVM device')
     allowed_sudo = [
         "echo 'KERNEL==\"kvm\", GROUP=\"kvm\", MODE=\"0666\", OPTIONS+=\"static_node=kvm\"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules",
         'sudo udevadm control --reload-rules',
         'sudo udevadm trigger --name-match=kvm',
         'sudo udevadm settle',
     ]
-    require(sudo_lines == allowed_sudo and
-            all(('            ' + line) in host_step.splitlines() for line in allowed_sudo),
-            'KVM sudo is confined to device setup')
-    require(not re.search(r'\bdocker\b', kvm, re.I) and
-            not re.search(r'^    (?:container|services):', kvm, re.M),
-            'KVM job must not run host Docker or use job containers')
+    require([line.strip() for line in test.splitlines() if re.search(r'\bsudo\b', line)] == allowed_sudo and
+            all(('            ' + line) in host.group(1).splitlines() for line in allowed_sudo) and
+            'bash ci/kvm-diagnostics.sh host "$before" "$after"' in host.group(1),
+            'KVM sudo is confined to shard device setup')
+    require(re.search(r'^          RORTHOX_ACCEL: auto$', test, re.M) and
+            "RORTHOX_TEST_TIMEOUT: '300'" in test and
+            not re.search(r'\b(?:docker|rsync)\b', test, re.I) and
+            not re.search(r'^    (?:container|services):', test, re.M),
+            'required shards must select KVM once without host Docker or rsync')
     if yaml is not None:
-        require('container' not in parsed['kvm'] and 'services' not in parsed['kvm'],
-                'KVM job must not use a container or services')
-        parsed_steps = {step.get('name'): step for step in parsed['kvm']['steps']}
-        parsed_image = parsed_steps.get('Verify the image for this revision', {})
-        parsed_test = parsed_steps.get('Test with KVM three times', {})
-        parsed_extract = parsed_steps.get('Extract KVM production build', {})
-        parsed_diagnostic = parsed_steps.get('Diagnose KVM in the image', {})
-        parsed_parity = parsed_steps.get('Compare KVM and TCG results', {})
-        parsed_download = parsed_steps.get('Download TCG results for parity', {})
-        require(isinstance(parsed_image, dict) and isinstance(parsed_test, dict) and
-                parsed_image.get('env', {}).get('IMAGE_MODE') == '${{ needs.image-prep.outputs.mode }}' and
-                parsed_test.get('env', {}).get('RORTHOX_IMAGE_ID') == '${{ steps.image-id.outputs.id }}' and
-                parsed_parity.get('env', {}).get('RORTHOX_IMAGE_ID') == '${{ steps.image-id.outputs.id }}' and
-                parsed_extract.get('env', {}).get('MANIFEST_SHA256') == '${{ needs.build.outputs.manifest }}' and
-                parsed_extract.get('env', {}).get('RORTHOX_IMAGE_ID') == '${{ steps.image-id.outputs.id }}' and
-                parsed_test.get('env', {}).get('MANIFEST_SHA256') == '${{ needs.build.outputs.manifest }}' and
-                parsed_test.get('env', {}).get('RORTHOX_TEST_TIMEOUT') == '300' and
-                parsed_test.get('env', {}).get('RORTHOX_ACCEL') == 'kvm' and
-                parsed_diagnostic.get('env', {}).get('RORTHOX_IMAGE_ID') == '${{ steps.image-id.outputs.id }}' and
-                parsed_diagnostic.get('env', {}).get('RORTHOX_ACCEL') == 'kvm' and
-                parsed_diagnostic.get('run') == './ci/run.sh bash ci/kvm-diagnostics.sh container' and
-                parsed_download.get('with', {}).get('pattern') == 'results-*' and
-                parsed_download.get('if') == 'always()' and
-                parsed_parity.get('if') == 'always()' and
-                'scripts/ci-parity.py build/tests/runs/tcg-shards' in parsed_parity.get('run', '') and
-                './ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$MANIFEST_SHA256"' in parsed_extract.get('run', ''),
-                'KVM parsed step bindings differ')
-    for step in parsed['kvm']['steps'] if yaml is not None else kvm_steps.values():
-        run = step.get('run', '') if yaml is not None else (step.split('        run:', 1)[1] if '        run:' in step else '')
-        require(not re.search(r'\bRORTHOX_ACCEL\b', run),
-                'KVM run must not override its accelerator')
-        for line in run.splitlines():
-            if re.search(r'(?<![\w./])(?:\./)?scripts/', line):
-                require(bool(re.search(r'\./ci/run\.sh\s+[^\n]*scripts/', line)),
-                        'KVM scripts must run inside the image')
+        require('container' not in parsed['test'] and 'services' not in parsed['test'] and
+                sum(step.get('name') == 'Enable the host KVM device if present'
+                    for step in parsed['test']['steps']) == 1 and
+                next(step for step in parsed['test']['steps'] if step.get('name') == 'Verify and test')
+                    .get('env', {}).get('RORTHOX_ACCEL') == 'auto',
+                'required shard KVM device setup or accelerator missing')
     require('    continue-on-error:' not in jobs['image-prep'],
             'image preparation must be required')
     # Context references must not put credentials in the workflow or read-only jobs.

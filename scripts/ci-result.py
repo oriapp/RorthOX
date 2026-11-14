@@ -7,29 +7,35 @@ import sys
 
 
 def main(root, build, shards):
-    lines = ['## CI results', '', '| Job | Conclusion | Passed | Failed | Skipped |',
-             '| --- | --- | ---: | ---: | ---: |']
+    lines = ['## CI results', '', '| Job | Conclusion | Accelerator | Passed | Failed | Skipped |',
+             '| --- | --- | --- | ---: | ---: | ---: |']
     ok = build == 'success' and shards == 'success'
-    lines.append(f'| build | {build} | — | — | — |')
+    lines.append(f'| build | {build} | — | — | — | — |')
     for i in range(1, 5):
         path = pathlib.Path(root) / f'results-{i}' / 'results.json'
         if not path.is_file():
-            lines.append(f'| test {i} | missing | — | — | — |')
+            lines.append(f'| test {i} | missing | — | — | — | — |')
             ok = False
             continue
         try:
             data = json.loads(path.read_text())
             tests = data['tests']
+            accel = data['accelerator']
+            reason = data['accelerator_reason']
+            if accel not in ('kvm', 'tcg') or not isinstance(reason, str) or not reason:
+                raise ValueError('invalid accelerator')
             if not isinstance(tests, list) or not all(isinstance(t, dict) and 'result' in t for t in tests):
                 raise ValueError('invalid tests list')
         except (OSError, ValueError, KeyError, TypeError):
-            lines.append(f'| test {i} | invalid report | — | — | — |')
+            lines.append(f'| test {i} | invalid report | — | — | — | — |')
             ok = False
             continue
         counts = {key: sum(t['result'] == key for t in tests) for key in ('passed', 'skipped')}
         # Other result spellings (crash, timeout, etc.) must not be called a pass.
         bad = sum(t['result'] not in ('passed', 'skipped') for t in tests)
-        lines.append(f'| test {i} | {"failed" if bad else "reported"} | '
+        safe = reason.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')[:1500]
+        print(f'::notice title=Test shard {i} accelerator::{accel}: {safe}')
+        lines.append(f'| test {i} | {"failed" if bad else "reported"} | {accel} | '
                      f'{counts["passed"]} | {bad} | {counts["skipped"]} |')
         ok &= bad == 0
     lines.extend(['', f'Overall: {"success" if ok else "failure"}.'])

@@ -89,9 +89,6 @@ with tempfile.TemporaryDirectory() as temp:
         ('required-test-masked', '  test:\n    needs:', '  test:\n    continue-on-error: true\n    needs:'),
         ('required-prep-masked', '  image-prep:\n    runs-on:', '  image-prep:\n    continue-on-error: true\n    runs-on:'),
         ('aggregate-job-masked', '  result:\n    needs:', '  result:\n    continue-on-error: true\n    needs:'),
-        ('kvm-required', '    needs: [build, test]\n    if: always()', '    needs: [build, test, kvm]\n    if: always()'),
-        ('kvm-in-pr', "    if: ${{ (!cancelled()) && github.event_name == 'push' && github.repository == 'oriapp/RorthOX' && needs.build.result == 'success' }}\n    continue-on-error: true", '    if: always()\n    continue-on-error: true'),
-        ('kvm-as-tcg', '          RORTHOX_ACCEL: kvm', '          RORTHOX_ACCEL: tcg'),
         ('publish-commented-needs', '    needs: [image-prep, build, test]\n    if: github.event_name', '    needs: image-prep # needs: [image-prep, build, test]\n    if: github.event_name'),
         ('no-logout-always', '        if: always()\n        run: docker logout ghcr.io', '        run: docker logout ghcr.io'),
         ('run-after-logout', '          echo "ref=$IMAGE_REF" >> "$GITHUB_OUTPUT"\n', '          echo "ref=$IMAGE_REF" >> "$GITHUB_OUTPUT"\n          docker run --rm "$IMAGE_REF" true\n'),
@@ -123,146 +120,20 @@ with tempfile.TemporaryDirectory() as temp:
         assert old in text and new != old, tag
         print('checking', tag, flush=True)
         run(text.replace(old, new, 1), False)
-    # Exercise decoded YAML context references and the workflow/job boundaries.
-    kvm_head = text.index('\n  kvm:\n')
-    def kvm_change(old, new):
-        head, body = text[:kvm_head], text[kvm_head:]
-        assert old in body
-        return head + body.replace(old, new, 1)
-    credential_step = '          RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}\n'
-    cases = (
-        ('escaped-secret-hex', text.replace(credential_step, credential_step +
-            r'          T: "${{ \x73ecrets.GITHUB_TOKEN }}"' + '\n', 1), 'credentials outside publication'),
-        ('escaped-secret-unicode', text.replace(credential_step, credential_step +
-            r'          T: "${{ \u0073ecrets.GITHUB_TOKEN }}"' + '\n', 1), 'credentials outside publication'),
-        ('escaped-token', kvm_change(credential_step, credential_step +
-            r'          T: "${{ github.tok\x65n }}"' + '\n'), 'credentials outside publication'),
-        ('escaped-index', kvm_change(credential_step, credential_step +
-            r'''          T: "${{ github\x5b'token'] }}"''' + '\n'), 'credentials outside publication'),
-        ('github-filter', kvm_change(credential_step, credential_step +
-            "          T: ${{ join(github.*, ',') }}\n"), 'credentials outside publication'),
-        ('value-jobs-env', text.replace('permissions: {}\n',
-            'permissions: {}\nenv:\n  NOTE: jobs:x\n  T: ${{ github.token }}\n', 1),
-            'credentials outside publication'),
-        ('comment-jobs-env', text.replace('permissions: {}\n',
-            'permissions: {}\n# jobs: unrelated\nenv:\n  T: ${{ github.token }}\n', 1),
-            'credentials outside publication'),
-        ('kvm-image-id', kvm_change(credential_step, ''), 'KVM job must use the same verified image'),
-        ('kvm-diagnostic-image-id', kvm_change('      - name: Diagnose KVM in the image\n        timeout-minutes: 1\n        env:\n          RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}\n',
-            '      - name: Diagnose KVM in the image\n        timeout-minutes: 1\n        env:\n'), 'KVM job must use the same verified image'),
-        ('kvm-manifest', kvm_change('build/ci/production.tar.gz "$MANIFEST_SHA256"',
-            'build/ci/production.tar.gz "$(sha256sum build/ci/production.tar.gz | cut -c1-64)"'),
-            'KVM job must use the same verified image'),
-        ('kvm-commented-accel', kvm_change('          RORTHOX_ACCEL: kvm\n',
-            '          # RORTHOX_ACCEL: kvm\n          RORTHOX_ACCEL: tcg\n'),
-            'KVM job must use the same verified image'),
-        ('kvm-no-udev', kvm_change('            echo \'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"\' | sudo tee /etc/udev/rules.d/99-kvm4all.rules\n', ''),
-            'KVM sudo is confined to device setup'),
-        ('kvm-privileged', kvm_change('      - name: Add KVM test summaries\n        timeout-minutes: 2\n        if: always()\n        run: |',
-            '      - name: Add KVM test summaries\n        timeout-minutes: 2\n        if: always()\n        run: |\n          docker run --privileged --rm alpine true'),
-            'KVM job must not run host Docker'),
-        ('kvm-container-diagnostic', kvm_change('        run: ./ci/run.sh bash ci/kvm-diagnostics.sh container',
-            '        run: echo skipped'),
-            'KVM job must use the same verified image'),
-        ('kvm-extract', kvm_change('      - name: Extract KVM production build',
-            '      - name: Unpack KVM production build'), 'duplicate or unexpected KVM step name'),
-        ('kvm-test-timeout', kvm_change("          RORTHOX_TEST_TIMEOUT: '300'\n", ''),
-            'KVM job must use the same verified image'),
-        ('kvm-upload', kvm_change('      - name: Upload KVM results\n        timeout-minutes: 2\n        if: always()',
-            '      - name: Upload KVM results\n        timeout-minutes: 2\n        if: success()'),
-            'KVM job must use the same verified image'),
-        ('kvm-step-timeout', kvm_change('      - name: Test with KVM three times\n        timeout-minutes: 85',
-            '      - name: Test with KVM three times'), 'kvm: step'),
-        ('kvm-override-accel', kvm_change('            ./ci/run.sh ./scripts/run-tests.sh -j 2',
-            '            export RORTHOX_ACCEL=tcg\n            ./ci/run.sh ./scripts/run-tests.sh -j 2'), 'KVM run must not override its accelerator'),
-        ('github-nested', kvm_change(credential_step, credential_step +
-            '          T: ${{ toJSON((github)) }}\n'), 'credentials outside publication'),
-        ('github-or', kvm_change(credential_step, credential_step +
-            '          T: ${{ toJSON(null || github) }}\n'), 'credentials outside publication'),
-        ('github-and', kvm_change(credential_step, credential_step +
-            '          T: ${{ toJSON(true && github) }}\n'), 'credentials outside publication'),
-        ('escaped-expression-start', kvm_change(credential_step, credential_step +
-            r'          T: "\x24\x7b\x7b \x73ecrets.GITHUB_TOKEN }}"' + '\n'), 'escaped scalar requires YAML parser'),
-        ('binary-tag', kvm_change(credential_step, credential_step +
-            '          T: !!binary JHt7IHNlY3JldHMuR0lUSFVCX1RPS0VOIH19\n'), 'YAML tags are not supported'),
-        ('inline-binary-tag', kvm_change(credential_step, credential_step +
-            '          T: [!!binary JHt7IHNlY3JldHMuR0lUSFVCX1RPS0VOIH19]\n'), 'YAML tags are not supported'),
-        ('docker-create', kvm_change('          bash ci/kvm-diagnostics.sh host "$before" "$after"',
-            '          bash ci/kvm-diagnostics.sh host "$before" "$after"\n          docker create alpine true'), 'KVM job must not run host Docker'),
-        ('sudo-extra', kvm_change('            sudo udevadm settle',
-            '            sudo chmod 0666 /var/run/docker.sock\n            sudo udevadm settle'), 'KVM sudo is confined to device setup'),
-        ('host-script', kvm_change('            ./ci/run.sh ./scripts/run-tests.sh -j 2 --results "build/tests/runs/kvm-$i" || status=1',
-            '            ./ci/run.sh ./scripts/run-tests.sh -j 2 --results "build/tests/runs/kvm-$i" || status=1\n            ./scripts/accelerator.sh'), 'KVM scripts must run inside the image'),
-        ('kvm-job-container', kvm_change('    runs-on: ubuntu-24.04\n',
-            '    runs-on: ubuntu-24.04\n    container: alpine:latest\n'), 'KVM job must not run host Docker'),
-        ('commented-image-id', kvm_change(credential_step, '          # RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}\n'), 'KVM job must use the same verified image'),
-        ('commented-manifest', kvm_change('          MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}',
-            '          # MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}\n          MANIFEST_SHA256: deadbeef'), 'KVM job must use the same verified image'),
-        ('commented-extract', kvm_change('          ./ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$MANIFEST_SHA256"',
-            '          # ./ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$MANIFEST_SHA256"\n          ./ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$(sha256sum build/ci/production.tar.gz)"'), 'KVM job must use the same verified image'),
-        ('commented-test-limit', kvm_change("          RORTHOX_TEST_TIMEOUT: '300'", "          # RORTHOX_TEST_TIMEOUT: '300'"), 'KVM job must use the same verified image'),
+    # Required shards must not lose host device setup, select forced TCG or copy
+    # arbitrary artifacts. Both YAML and parser-free lint reject these edits.
+    shard_cases = (
+        ('no-shard-udev', '            sudo udevadm settle', '            echo no-device'),
+        ('forced-shard-tcg', '          RORTHOX_ACCEL: auto', '          RORTHOX_ACCEL: tcg'),
+        ('shard-rsync', '          ./ci/run.sh ./scripts/run-tests.sh --shard',
+         '          rsync -a /tmp/x build/tests/\n          ./ci/run.sh ./scripts/run-tests.sh --shard'),
+        ('shard-sudo', '            sudo udevadm settle',
+         '            sudo chmod 0666 /var/run/docker.sock\n            sudo udevadm settle'),
     )
-    cases += (
-        ('kvm-parity-image-id', kvm_change('      - name: Compare KVM and TCG results\n        timeout-minutes: 2\n        if: always()\n        env:\n          RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}\n',
-            '      - name: Compare KVM and TCG results\n        timeout-minutes: 2\n        if: always()\n'),
-            'KVM job must use the same verified image'),
-        ('kvm-job-always', kvm_change("    if: ${{ (!cancelled()) && github.event_name == 'push' && github.repository == 'oriapp/RorthOX' && needs.build.result == 'success' }}",
-            "    if: always() && github.event_name == 'push' && github.repository == 'oriapp/RorthOX' && needs.build.result == 'success'"),
-            'KVM job must use the same verified image'),
-        ('kvm-copy-failures', kvm_change('              cp "$source" "build/tests/runs/tcg-shards/results-$i/results.json"',
-            '              cp -R "$RUNNER_TEMP/tcg-results/." build/tests/runs/tcg-shards/'),
-            'KVM job must use the same verified image'),
-        ('missing-parity-step', kvm_change('      - name: Compare KVM and TCG results',
-            '      - name: Ignore parity'), 'duplicate or unexpected KVM step name'),
-        ('one-kvm-run', kvm_change('for i in 1 2 3; do', 'for i in 1; do'),
-            'KVM job must use the same verified image and build artifact'),
-        ('wrong-tcg-artifacts', kvm_change('pattern: results-*', 'pattern: unrelated-*'),
-            'KVM job must use the same verified image and build artifact'),
-        ('continued-escaped-secret', kvm_change(credential_step, credential_step +
-            '          T: "safe\n' + r'            \x24\x7b\x7b \x73ecrets.GITHUB_TOKEN }}"' + '\n'),
-            'escaped scalar requires YAML parser'),
-        ('duplicate-kvm-step-name', kvm_change('      - name: Test with KVM three times\n        timeout-minutes: 85',
-            '      - name: Test with KVM three times\n        timeout-minutes: 1\n        run: echo duplicate\n'
-            '      - name: Test with KVM three times\n        timeout-minutes: 84'), 'duplicate or unexpected KVM step name'),
-        ('quoted-kvm-step-name', kvm_change('      - name: Test with KVM three times\n        timeout-minutes: 85',
-            '      - name: "Test with KVM three times"\n        timeout-minutes: 1\n        run: echo duplicate\n'
-            '      - name: Test with KVM three times\n        timeout-minutes: 84'), 'duplicate or unexpected KVM step name'),
-        ('single-quoted-kvm-step-name', kvm_change('      - name: Test with KVM three times\n        timeout-minutes: 85',
-            "      - name: 'Test with KVM three times'\n        timeout-minutes: 1\n        run: echo duplicate\n"
-            '      - name: Test with KVM three times\n        timeout-minutes: 84'), 'duplicate or unexpected KVM step name'),
-        ('commented-kvm-step-name', kvm_change('      - name: Test with KVM three times\n        timeout-minutes: 85',
-            '      - name: Test with KVM three times # comment\n        timeout-minutes: 1\n        run: echo duplicate\n'
-            '      - name: Test with KVM three times\n        timeout-minutes: 84'), 'duplicate or unexpected KVM step name'),
-        ('unnamed-kvm-run', kvm_change('      - name: Add KVM test summaries',
-            '      - run: ./ci/run.sh ./scripts/run-tests.sh -j 2 --results "build/tests/runs/kvm-$i"\n'
-            '        timeout-minutes: 1\n'
-            '      - name: Add KVM test summaries'), 'duplicate or unexpected KVM step name'),
-        ('kvm-if-first', kvm_change('      - name: Add KVM test summaries',
-            '      - if: always()\n'
-            '        name: Retry\n'
-            '        timeout-minutes: 1\n'
-            '        run: ./ci/run.sh ./scripts/run-tests.sh -j 2 --results "build/tests/runs/kvm-$i"\n'
-            '      - name: Add KVM test summaries'), 'duplicate or unexpected KVM step name'),
-        ('spaced-kvm-step-name', kvm_change('      - name: Test with KVM three times\n        timeout-minutes: 85',
-            '      - name: Test with KVM three times \n        timeout-minutes: 1\n        run: echo duplicate\n'
-            '      - name: Test with KVM three times\n        timeout-minutes: 84'), 'duplicate or unexpected KVM step name'),
-    )
-    for tag, mutated, reason in cases:
+    for tag, old, new in shard_cases:
+        assert old in text, tag
         print('checking', tag, flush=True)
-        workflow.write_text(mutated)
-        for path in (None, no_yaml):
-            mode = 'yaml' if path is None else 'fallback'
-            env = os.environ.copy()
-            env.pop('GITHUB_ACTIONS', None)
-            if path is not None:
-                env['PYTHONPATH'] = str(path)
-            result = subprocess.run(['python3', '-B', str(lint), str(workflow)], cwd=root,
-                                    capture_output=True, text=True, env=env)
-            expected = ('escaped scalar requires YAML parser' if path is not None and
-                        tag in ('escaped-secret-hex', 'escaped-secret-unicode', 'escaped-token', 'escaped-index', 'escaped-expression-start', 'continued-escaped-secret')
-                        else 'credentials outside publication' if path is None and tag in ('escaped-expression-start', 'continued-escaped-secret')
-                        else reason)
-            assert result.returncode != 0 and expected in result.stderr, (tag, mode, result.stderr)
+        run(text.replace(old, new, 1), False)
     env = os.environ.copy()
     env['GITHUB_ACTIONS'] = 'true'
     env['PYTHONPATH'] = str(no_yaml)
@@ -274,24 +145,27 @@ with tempfile.TemporaryDirectory() as temp:
     for i in range(1, 5):
         d = results / f'results-{i}'
         d.mkdir(parents=True)
-        (d / 'results.json').write_text(json.dumps({'tests': [{'result': 'passed'}]}))
+        (d / 'results.json').write_text(json.dumps({'accelerator': 'tcg', 'accelerator_reason': 'RORTHOX_ACCEL=auto: no KVM', 'tests': [{'result': 'passed'}]}))
     aggregate = root / 'scripts/ci-result.py'
     def check(build, shards, success):
         proc = subprocess.run(['python3', '-B', str(aggregate), str(results), build, shards],
                               capture_output=True, text=True)
         assert (proc.returncode == 0) == success, proc.stdout + proc.stderr
     check('success', 'success', True)
+    summary = subprocess.run(['python3', '-B', str(aggregate), str(results),
+                              'success', 'success'], capture_output=True, text=True).stdout
+    assert '| test 1 | reported | tcg |' in summary and '::notice title=Test shard 1 accelerator::tcg:' in summary
     check('failure', 'skipped', False)
     report = results / 'results-3/results.json'
-    report.write_text(json.dumps({'tests': [{'result': 'failed'}]}))
+    report.write_text(json.dumps({'accelerator': 'kvm', 'accelerator_reason': 'RORTHOX_ACCEL=auto: KVM works', 'tests': [{'result': 'failed'}]}))
     check('success', 'success', False)
     assert 'failed' in subprocess.run(['python3', '-B', str(aggregate), str(results),
                                        'success', 'success'], capture_output=True, text=True).stdout
     report.write_text('{not json')
     check('success', 'success', False)
-    report.write_text(json.dumps({'tests': [{}]}))
+    report.write_text(json.dumps({'accelerator': 'kvm', 'accelerator_reason': 'KVM', 'tests': [{}]}))
     check('success', 'success', False)
-    report.write_text(json.dumps({'tests': [{'result': 'passed'}]}))
+    report.write_text(json.dumps({'accelerator': 'tcg', 'accelerator_reason': 'RORTHOX_ACCEL=auto: no KVM', 'tests': [{'result': 'passed'}]}))
     (results / 'results-2/results.json').unlink()
     check('success', 'success', False)
     print('PASS aggregate requires every job and report')

@@ -561,14 +561,15 @@ Open the repository in a devcontainer to get the same image and `/work` checkout
 The default is `RORTHOX_ACCEL=tcg`. Set `RORTHOX_ACCEL=kvm` to require KVM, or
 `RORTHOX_ACCEL=auto` to use KVM if it works and otherwise use TCG (before tests start, never
 as a retry after a test fails). The container receives `/dev/kvm` only when the host user can
-access it; the KVM probe checks whether QEMU really enabled it. The required CI result uses
-TCG. On trusted pushes CI runs the same production build through the full suite with forced KVM three times
-in a separate information-only job. It compares each run's per-test result against the four required TCG shards:
-the runner records test results, not individual check IDs. Missing reports or tests and any difference are reported;
-the top ten KVM/TCG per-test duration ratios appear in the job summary. KVM failures do not make the required result red.
-Pull request code does not get a KVM run; self-hosted runners must never serve
+access it; the KVM probe checks whether QEMU really enabled it. The four required CI shards use `RORTHOX_ACCEL=auto` on pushes and pull requests: each
+runner enables access to `/dev/kvm`, probes KVM once, and records the chosen accelerator and reason
+in its report and a public shard notice. If KVM is unavailable or unusable, that shard runs TCG;
+a failed test is never retried. The required result reports the accelerator of every shard. PR
+code already runs on the same hosted runners with device setup, so its accelerator policy is the
+same as a push, though either run can fall back independently. A later nightly workflow will
+exercise forced KVM and forced TCG separately. Self-hosted runners must never serve
 `pull_request` workflows. The trusted push run is the authoritative result.
-Local KVM has not been verified. See the run metadata for the chosen accelerator and reason.
+Local KVM has not been verified. The hosted KVM path passed three forced full-suite runs. See the run metadata for the chosen accelerator and reason.
 Local builds without Docker remain available with the documented toolchain.
 
 `ci-parity` checks equal and divergent report fixtures without QEMU. `ci-image` tests KVM's read and write

@@ -94,6 +94,19 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
+      - name: Enable the host KVM device if present
+        timeout-minutes: 2
+        run: |
+          before=$(stat -c "%a %U %G" /dev/kvm 2>/dev/null || echo absent)
+          trap 'bash ci/kvm-diagnostics.sh host "$before" "$(stat -c "%a %U %G" /dev/kvm 2>/dev/null || echo absent)"' ERR
+          if [ -c /dev/kvm ]; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+            sudo udevadm control --reload-rules
+            sudo udevadm trigger --name-match=kvm
+            sudo udevadm settle
+          fi
+          after=$(stat -c "%a %U %G" /dev/kvm 2>/dev/null || echo absent)
+          bash ci/kvm-diagnostics.sh host "$before" "$after"
       # actions/download-artifact v6; only this run's validated candidate is accepted.
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
         if: needs.image-prep.outputs.mode == 'archive'
@@ -126,7 +139,8 @@ jobs:
           MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}
           SHARD: ${{ matrix.shard }}
           RORTHOX_REQUIRE_ISO: '1'
-          RORTHOX_ACCEL: tcg
+          RORTHOX_ACCEL: auto
+          RORTHOX_TEST_TIMEOUT: '300'
           RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}
         run: |
           mkdir -p build/ci
@@ -278,142 +292,3 @@ jobs:
           BUILD_RESULT: ${{ needs.build.result }}
           TEST_RESULT: ${{ needs.test.result }}
         run: python3 -B scripts/ci-result.py "$RUNNER_TEMP/ci-results" "$BUILD_RESULT" "$TEST_RESULT"
-
-  # This is diagnostic only. Its failures are visible in its logs and artifact, not in the required result.
-  kvm:
-    needs: [image-prep, build, test]
-    if: ${{ (!cancelled()) && github.event_name == 'push' && github.repository == 'oriapp/RorthOX' && needs.build.result == 'success' }}
-    continue-on-error: true
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    permissions:
-      contents: read
-    steps:
-      # actions/checkout v6
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-        timeout-minutes: 1
-        with:
-          persist-credentials: false
-      - name: Enable the host KVM device if present
-        timeout-minutes: 2
-        run: |
-          before=$(stat -c "%a %U %G" /dev/kvm 2>/dev/null || echo absent)
-          trap 'bash ci/kvm-diagnostics.sh host "$before" "$(stat -c "%a %U %G" /dev/kvm 2>/dev/null || echo absent)"' ERR
-          if [ -c /dev/kvm ]; then
-            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-            sudo udevadm control --reload-rules
-            sudo udevadm trigger --name-match=kvm
-            sudo udevadm settle
-          fi
-          after=$(stat -c "%a %U %G" /dev/kvm 2>/dev/null || echo absent)
-          bash ci/kvm-diagnostics.sh host "$before" "$after"
-      # actions/download-artifact v6
-      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
-        timeout-minutes: 5
-        if: needs.image-prep.outputs.mode == 'archive'
-        with:
-          name: candidate-image
-          path: ${{ runner.temp }}
-      - name: Verify the image for this revision
-        timeout-minutes: 10
-        id: image-id
-        env:
-          IMAGE_MODE: ${{ needs.image-prep.outputs.mode }}
-          IMAGE_REF: ${{ needs.image-prep.outputs.ref }}
-          IMAGE_SHA256: ${{ needs.image-prep.outputs.checksum }}
-          IMAGE_ID: ${{ needs.image-prep.outputs.id }}
-        run: |
-          if [ "$IMAGE_MODE" = archive ]; then
-            bash ci/image-job.sh receive
-          elif [ "$IMAGE_MODE" = digest ]; then
-            bash ci/image-job.sh fetch
-          else
-            echo 'No validated image for this revision' >&2
-            exit 1
-          fi
-      # actions/download-artifact v6
-      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
-        timeout-minutes: 2
-        with:
-          name: production
-          path: ${{ runner.temp }}/production
-      - name: Extract KVM production build
-        timeout-minutes: 2
-        env:
-          MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}
-          RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}
-        run: |
-          mkdir -p build/ci
-          cp "$RUNNER_TEMP/production/production.tar.gz" build/ci/production.tar.gz
-          ./ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$MANIFEST_SHA256"
-      - name: Diagnose KVM in the image
-        timeout-minutes: 1
-        env:
-          RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}
-          RORTHOX_ACCEL: kvm
-        run: ./ci/run.sh bash ci/kvm-diagnostics.sh container
-      - name: Test with KVM three times
-        timeout-minutes: 85
-        env:
-          MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}
-          RORTHOX_REQUIRE_ISO: '1'
-          RORTHOX_TEST_TIMEOUT: '300'
-          RORTHOX_ACCEL: kvm
-          RORTHOX_ACCEL_PROBE_TIMEOUT: '30'
-          RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}
-        run: |
-          status=0
-          for i in 1 2 3; do
-            ./ci/run.sh ./scripts/run-tests.sh -j 2 --results "build/tests/runs/kvm-$i" || status=1
-          done
-          exit "$status"
-      # Only artifacts from the four required shards of this run are compared.
-      - name: Download TCG results for parity
-        timeout-minutes: 3
-        if: always()
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
-        with:
-          pattern: results-*
-          path: ${{ runner.temp }}/tcg-results
-      - name: Compare KVM and TCG results
-        timeout-minutes: 2
-        if: always()
-        env:
-          RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}
-        run: |
-          mkdir -p build/tests/runs/tcg-shards
-          for i in 1 2 3 4; do
-            source="$RUNNER_TEMP/tcg-results/results-$i/results.json"
-            if [ -f "$source" ]; then
-              mkdir -p "build/tests/runs/tcg-shards/results-$i"
-              cp "$source" "build/tests/runs/tcg-shards/results-$i/results.json"
-            fi
-          done
-          status=0
-          ./ci/run.sh python3 -B scripts/ci-parity.py build/tests/runs/tcg-shards build/tests/runs/kvm-1 build/tests/runs/kvm-2 build/tests/runs/kvm-3 build/tests/runs/parity-summary.md || status=1
-          if [ -f build/tests/runs/parity-summary.md ]; then
-            head -c 6000 build/tests/runs/parity-summary.md >> "$GITHUB_STEP_SUMMARY"
-          fi
-          exit "$status"
-      - name: Add KVM test summaries
-        timeout-minutes: 2
-        if: always()
-        run: |
-          for i in 1 2 3; do
-            if [ -f "build/tests/runs/kvm-$i/summary.md" ]; then
-              head -c 200000 "build/tests/runs/kvm-$i/summary.md" >> "$GITHUB_STEP_SUMMARY"
-            fi
-          done
-      # Keep the diagnostic report separate from the four required TCG shards.
-      - name: Upload KVM results
-        timeout-minutes: 2
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
-        with:
-          name: kvm-results
-          path: |
-            build/tests/runs/kvm-*/results.json
-            build/tests/runs/kvm-*/junit.xml
-            build/tests/runs/kvm-*/summary.md
-            build/tests/runs/kvm-*/failed/
-          if-no-files-found: warn
