@@ -11,6 +11,9 @@ TEST = re.compile(r'scripts/tests/[A-Za-z0-9._-]+\.sh\Z')
 DELEGATES = {
     'scripts/tests/heap-oom.sh': ('argument-oom', 'elf-unwind', 'open-oom'),
     'scripts/tests/exceptions.sh': ('tss-io',),
+    'scripts/tests/kernel-exceptions.sh': ('test-isolation',),
+    'scripts/tests/screen-waits.sh': ('test-isolation',),
+    'scripts/tests/task-list.sh': ('test-isolation',),
 }
 
 
@@ -85,7 +88,7 @@ def select(repo, event, ref, base, head):
         for name in tuple(tests):
             for dependent in DELEGATES.get(name, ()):
                 target = f'scripts/tests/{dependent}.sh'
-                if target not in new_modes or new_modes[target] not in (b'100644', b'100755'):
+                if new_modes.get(target.encode('utf-8')) not in (b'100644', b'100755'):
                     return full('missing delegated test')
                 tests.add(target)
         listed = ['scripts/smoke.sh', *sorted(tests)]

@@ -177,7 +177,7 @@ def lint(text):
             'TEST_MODE: ${{ needs.select.outputs.mode }}' in jobs['test'] and
             'SELECTED_TESTS: ${{ needs.select.outputs.tests }}' in jobs['test'] and
             '"${selected[@]}"' in jobs['test'] and
-            "needs.select.outputs.mode != 'subset'" in jobs['test'] and
+            'if [ "$TEST_MODE" = subset ]; then' in jobs['test'] and
             "steps.image-id.outcome == 'success'" in jobs['test'] and
             "if: needs.build.result == 'success' && needs.select.outputs.mode != 'none'" in jobs['result'] and
             all(f'SELECT_{key}: ${{{{ needs.select.outputs.{value} }}}}' in jobs['result']
@@ -258,11 +258,12 @@ bash ci/kvm-diagnostics.sh host "$before" "$after" || { echo '::warning title=KV
     # Only the named TCG-only step may force an accelerator; parsed run strings
     # catch both inline assignments and exports hidden in a quoted YAML scalar.
     tcg_step = re.search(r'^      - name: Test TCG-only boot cases\n(.*?)(?=^      - |\Z)', test, re.M | re.S)
-    require(tcg_step is not None and "if: ${{ !cancelled() && matrix.shard == 1 && steps.image-id.outcome == 'success' && (needs.select.outputs.mode != 'subset' || contains(format(' {0} ', needs.select.outputs.tests), ' scripts/tests/boot-segments.sh ')) }}" in tcg_step.group(1) and
+    require(tcg_step is not None and "if: ${{ !cancelled() && matrix.shard == 1 && steps.image-id.outcome == 'success' }}" in tcg_step.group(1) and
             '          RORTHOX_ACCEL: tcg' in tcg_step.group(1) and
             'grep -lE ' in tcg_step.group(1) and
             'steps.image-id.outcome == \'success\'' in tcg_step.group(1) and
             'qemu_require_tcg' in tcg_step.group(1) and
+            'if [ "${#tcg_only[@]}" -eq 0 ]; then exit 0; fi' in tcg_step.group(1) and
             './ci/run.sh ./scripts/run-tests.sh --results build/tests/runs/shard-1/tcg-only' in tcg_step.group(1) and
             'build/tests/runs/shard-${{ matrix.shard }}/tcg-only/results.json' in test and
             'scripts/ci-result.py' in jobs['result'], 'required TCG-only run missing')

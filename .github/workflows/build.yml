@@ -188,7 +188,7 @@ jobs:
             ./ci/run.sh ./scripts/run-tests.sh --shard "$SHARD/4" -j 2 --results "build/tests/runs/shard-$SHARD"
           fi
       - name: Test TCG-only boot cases
-        if: ${{ !cancelled() && matrix.shard == 1 && steps.image-id.outcome == 'success' && (needs.select.outputs.mode != 'subset' || contains(format(' {0} ', needs.select.outputs.tests), ' scripts/tests/boot-segments.sh ')) }}
+        if: ${{ !cancelled() && matrix.shard == 1 && steps.image-id.outcome == 'success' }}
         env:
           RORTHOX_REQUIRE_ISO: '1'
           RORTHOX_ACCEL: tcg
@@ -203,6 +203,7 @@ jobs:
               [[ " $SELECTED_TESTS " != *" $t "* ]] || filtered+=("$t")
             done
             tcg_only=("${filtered[@]}")
+            if [ "${#tcg_only[@]}" -eq 0 ]; then exit 0; fi
           fi
           test "${#tcg_only[@]}" -gt 0
           ./ci/run.sh ./scripts/run-tests.sh --results build/tests/runs/shard-1/tcg-only "${tcg_only[@]}"
