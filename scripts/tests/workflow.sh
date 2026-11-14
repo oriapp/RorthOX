@@ -8,6 +8,7 @@ python3 -B - "$PWD" "$OUT" <<'PY'
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -151,8 +152,8 @@ with tempfile.TemporaryDirectory() as temp:
         ('shard-override', shard_run, '          export RORTHOX_ACCEL=tcg\n' + shard_run, 'must not override'),
         ('shard-inline-override', shard_run, '          RORTHOX_ACCEL=tcg ' + shard_run.strip() + '\n' + shard_run, 'must not override'),
         ('tcg-missing', '      - name: Test TCG-only boot cases', '      - name: Test TCG cases', 'TCG-only'),
-        ('tcg-accel', '      - name: Test TCG-only boot cases\n        if: matrix.shard == 1\n        env:\n          RORTHOX_REQUIRE_ISO: \'1\'\n          RORTHOX_ACCEL: tcg',
-         '      - name: Test TCG-only boot cases\n        if: matrix.shard == 1\n        env:\n          RORTHOX_REQUIRE_ISO: \'1\'\n          RORTHOX_ACCEL: auto', 'TCG-only'),
+        ('tcg-accel', '      - name: Test TCG-only boot cases\n        if: ${{ !cancelled() && matrix.shard == 1 }}\n        env:\n          RORTHOX_REQUIRE_ISO: \'1\'\n          RORTHOX_ACCEL: tcg',
+         '      - name: Test TCG-only boot cases\n        if: ${{ !cancelled() && matrix.shard == 1 }}\n        env:\n          RORTHOX_REQUIRE_ISO: \'1\'\n          RORTHOX_ACCEL: auto', 'TCG-only'),
         ('host-duplicated', '      - name: Verify and test',
          '      - name: Enable the host KVM device if present\n        run: echo extra\n      - name: Verify and test', 'KVM device'),
         ('host-diagnostics', '          bash ci/kvm-diagnostics.sh host "$before" "$after"',
@@ -165,6 +166,25 @@ with tempfile.TemporaryDirectory() as temp:
          '          SHARD: ${{ matrix.shard }}\n          T: "${{ se\\u0063rets.GITHUB_TOKEN }}"', 'credentials'),
         ('escaped-expression', '      - name: Verify and test',
          '      - run: "echo $\\x7b{ github.event.inputs.arg }"\n      - name: Verify and test', 'expression'),
+        ('fallback-escaped-scalar', '          SHARD: ${{ matrix.shard }}',
+         '          SHARD: ${{ matrix.shard }}\n          T: "\\x24{{ se\\x63rets.GITHUB_TOKEN }}"', 'credentials'),
+        ('sudo-step-shell', '      - name: Verify and test',
+         '      - name: Extra\n        shell: "su\\x64o bash -e {0}"\n        run: echo ok\n      - name: Verify and test', 'KVM sudo'),
+        ('sudo-job-shell', '  build:\n',
+         '  build:\n    defaults:\n      run:\n        shell: "su\\x64o bash -e {0}"\n', 'KVM sudo'),
+        ('sudo-workflow-shell', 'permissions: {}',
+         'permissions: {}\ndefaults:\n  run:\n    shell: sudo bash -e {0}', 'KVM sudo'),
+        ('marker-step-env', '          RORTHOX_ACCEL: auto\n',
+         '          RORTHOX_ACCEL: auto\n          RORTHOX_KVM_SETUP_FAILED: fake\n', 'setup marker'),
+        ('marker-job-env', '  test:\n',
+         '  test:\n    env:\n      RORTHOX_KVM_SETUP_FAILED: fake\n', 'setup marker'),
+        ('marker-run', shard_run, '          export RORTHOX_KVM_SETUP_FAILED=fake\n' + shard_run, 'setup marker'),
+        ('marker-host-unconditional', '            if [ -n "$failed" ]; then\n',
+         '            echo "RORTHOX_KVM_SETUP_FAILED=fake" >> "$GITHUB_ENV"\n            if [ -n "$failed" ]; then\n', 'setup marker'),
+        ('shard-unset', shard_run, '          unset RORTHOX_ACCEL\n' + shard_run, 'must not override'),
+        ('shard-env-unset', shard_run, '          env -u RORTHOX_ACCEL ' + shard_run.strip() + '\n' + shard_run, 'must not override'),
+        ('upload-root', '            build/tests/runs/shard-${{ matrix.shard }}/results.json',
+         '            build/tests/runs/shard-${{ matrix.shard }}/results.json\n            build/tests/runs/sibling/results.json', 'upload paths'),
     )
     for tag, old, new, why in cases:
         assert text.count(old) == 1 or tag in ('shard-timeout',), tag
@@ -185,21 +205,38 @@ with tempfile.TemporaryDirectory() as temp:
     missing = subprocess.run(['python3', '-B', str(lint), str(workflow)], cwd=root,
                              capture_output=True, env=env)
     assert missing.returncode != 0 and b'PyYAML is required' in missing.stderr
+    # Multi-path upload-artifact roots files at the common parent of every
+    # search path, including paths for files that are absent on this shard.
+    upload = text.split('      - name: Upload shard results\n', 1)[1].split('  image-prep:', 1)[0]
+    paths = upload.split('          path: |\n', 1)[1].split('          if-no-files-found:', 1)[0].splitlines()
+    patterns = [line.strip() for line in paths if line.strip()]
     results = temp / 'results'
     for i in range(1, 5):
-        d = results / f'results-{i}'
-        d.mkdir(parents=True)
-        (d / 'results.json').write_text(json.dumps({'accelerator': 'tcg', 'accelerator_reason': 'RORTHOX_ACCEL=auto: no KVM', 'tests': [{'result': 'passed'}]}))
+        shard = temp / f'upload-{i}'
+        shard_report = shard / f'build/tests/runs/shard-{i}/results.json'
+        shard_report.parent.mkdir(parents=True)
+        shard_report.write_text(json.dumps({'accelerator': 'tcg', 'accelerator_reason': 'RORTHOX_ACCEL=auto: no KVM', 'tests': [{'result': 'passed'}]}))
+        if i == 1:
+            tcg_report = shard / 'build/tests/runs/shard-1/tcg-only/results.json'
+            tcg_report.parent.mkdir(parents=True)
+            tcg_report.write_text(json.dumps({'accelerator': 'tcg', 'accelerator_reason': 'RORTHOX_ACCEL=tcg',
+                                              'tests': [{'name': 'scripts/tests/boot-segments.sh', 'result': 'passed'}]}))
+        search_paths = [shard / p.replace('${{ matrix.shard }}', str(i)) for p in patterns]
+        root_path = pathlib.Path(os.path.commonpath([str(src if p.endswith('/') else src.parent)
+                                                    for p, src in zip(patterns, search_paths)]))
+        for source in (shard_report, tcg_report) if i == 1 else (shard_report,):
+            target = results / f'results-{i}' / source.relative_to(root_path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
     aggregate = root / 'scripts/ci-result.py'
     def check(build, shards, success):
         proc = subprocess.run(['python3', '-B', str(aggregate), str(results), build, shards],
                               capture_output=True, text=True)
         assert (proc.returncode == 0) == success, proc.stdout + proc.stderr
     extra = results / 'results-1/tcg-only/results.json'
-    extra.parent.mkdir()
-    extra.write_text(json.dumps({'accelerator': 'tcg', 'accelerator_reason': 'RORTHOX_ACCEL=tcg',
-                                 'tests': [{'name': 'scripts/tests/boot-segments.sh', 'result': 'passed'}]}))
+    assert extra.is_file(), 'uploaded TCG-only report not found at aggregate path'
     check('success', 'success', True)
+    print('PASS upload-artifact layout and all five reports')
     extra.write_text(json.dumps({'accelerator': 'tcg', 'accelerator_reason': 'forced',
                                  'tests': [{'name': 'scripts/tests/not-required.sh', 'result': 'passed'}]}))
     check('success', 'success', False)
@@ -207,7 +244,10 @@ with tempfile.TemporaryDirectory() as temp:
                                  'tests': [{'name': 'scripts/tests/boot-segments.sh', 'result': 'passed'}]}))
     summary = subprocess.run(['python3', '-B', str(aggregate), str(results),
                               'success', 'success'], capture_output=True, text=True).stdout
-    assert '| TCG-only | reported | tcg |' in summary and '| test 1 | reported | tcg |' in summary and '::notice title=Test shard 1 accelerator::tcg:' in summary
+    assert 'Overall: success.' in summary and '| TCG-only | reported | tcg |' in summary
+    assert all(f'| test {i} | reported | tcg |' in summary for i in range(1, 5))
+    assert '::notice title=Test shard 1 accelerator::tcg:' in summary
+    print('PASS aggregate: four shards and TCG-only reported; Overall: success')
     check('failure', 'skipped', False)
     report = results / 'results-3/results.json'
     report.write_text(json.dumps({'accelerator': 'kvm', 'accelerator_reason': 'RORTHOX_ACCEL=auto: KVM works', 'tests': [{'result': 'failed'}]}))
@@ -225,6 +265,7 @@ with tempfile.TemporaryDirectory() as temp:
         'accelerator_reason': 'no KVM', 'tests': [{'result': 'passed'}]}))
     extra.unlink()
     check('success', 'success', False)
+    print('PASS aggregate: missing TCG-only report gives Overall: failure')
     extra.write_text(json.dumps({'accelerator': 'kvm', 'accelerator_reason': 'invalid',
                                  'tests': [{'name': 'scripts/tests/boot-segments.sh', 'result': 'passed'}]}))
     check('success', 'success', False)

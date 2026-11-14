@@ -152,7 +152,7 @@ jobs:
           ./ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$MANIFEST_SHA256"
           ./ci/run.sh ./scripts/run-tests.sh --shard "$SHARD/4" -j 2 --results "build/tests/runs/shard-$SHARD"
       - name: Test TCG-only boot cases
-        if: matrix.shard == 1
+        if: ${{ !cancelled() && matrix.shard == 1 }}
         env:
           RORTHOX_REQUIRE_ISO: '1'
           RORTHOX_ACCEL: tcg
@@ -160,7 +160,7 @@ jobs:
         run: |
           mapfile -t tcg_only < <(grep -lE '^[[:space:]]*qemu_require_tcg([[:space:]]|$)' scripts/tests/*.sh | grep -v '^scripts/tests/accelerator.sh$')
           test "${#tcg_only[@]}" -gt 0
-          ./ci/run.sh ./scripts/run-tests.sh --results build/tests/runs/tcg-only "${tcg_only[@]}"
+          ./ci/run.sh ./scripts/run-tests.sh --results build/tests/runs/shard-1/tcg-only "${tcg_only[@]}"
       # Upload the reports and bounded failed-only evidence, even on a red shard.
       - name: Upload shard results
         if: always()
@@ -172,10 +172,10 @@ jobs:
             build/tests/runs/shard-${{ matrix.shard }}/junit.xml
             build/tests/runs/shard-${{ matrix.shard }}/summary.md
             build/tests/runs/shard-${{ matrix.shard }}/failed/
-            build/tests/runs/tcg-only/results.json
-            build/tests/runs/tcg-only/junit.xml
-            build/tests/runs/tcg-only/summary.md
-            build/tests/runs/tcg-only/failed/
+            build/tests/runs/shard-${{ matrix.shard }}/tcg-only/results.json
+            build/tests/runs/shard-${{ matrix.shard }}/tcg-only/junit.xml
+            build/tests/runs/shard-${{ matrix.shard }}/tcg-only/summary.md
+            build/tests/runs/shard-${{ matrix.shard }}/tcg-only/failed/
           if-no-files-found: warn
 
   # The read-only producer runs on forks as well as trusted branches. All required jobs use its image.

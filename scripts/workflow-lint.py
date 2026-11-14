@@ -121,7 +121,8 @@ def lint(text):
             block_indent = None
         if block_indent is None:
             # Tags change scalar types, including !!binary values hidden in flow mappings.
-            require(not re.search(r'(?:^|[\s\[{,:])!(?:!|<|[A-Za-z_])', line),
+            require(not re.search(r'(?:^|[\s\[{,:])!(?:!|<|[A-Za-z_])',
+                                  re.sub(r'\$\{\{.*?\}\}', '', line)),
                     'YAML tags are not supported')
             if yaml is None:
                 # Refuse escapes in any double-quoted YAML scalar, not just expressions.
@@ -183,18 +184,22 @@ def lint(text):
         'if [ -z "$failed" ]; then sudo udevadm settle --timeout=30 || failed=settle; fi',
     ]
     # The full error-handled command must be present in the named step, nowhere else.
-    raw_sudo = [(name, line.strip()) for name, body in jobs.items()
-                for line in body.splitlines() if re.search(r'\bsudo\b', line)]
-    require(raw_sudo == [('test', line) for line in allowed_sudo] and
+    raw_sudo = [line.strip() for line in text.splitlines() if re.search(r'\bsudo\b', line)]
+    require(raw_sudo == allowed_sudo and
             all(('            ' + line) in host.group(1).splitlines() for line in allowed_sudo) and
             'bash ci/kvm-diagnostics.sh host "$before" "$after"' in host.group(1) and
             'RORTHOX_KVM_SETUP_FAILED=$failed failed' in host.group(1),
             'KVM sudo is confined to shard device setup')
     if yaml is not None:
+        # Decoded YAML scalars can hide sudo in a shell override as well as a run.
         parsed_sudo = [(name, line.strip()) for name, job in parsed.items()
-                       for step in job['steps'] for line in str(step.get('run', '')).splitlines()
+                       for step in job['steps']
+                       for field in ('run', 'shell')
+                       for line in str(step.get(field, '')).splitlines()
                        if re.search(r'\bsudo\b', line)]
-        require(parsed_sudo == [('test', line) for line in allowed_sudo],
+        require(parsed_sudo == [('test', line) for line in allowed_sudo] and
+                not re.search(r'\bsudo\b', str(document.get('defaults', {}))) and
+                all(not re.search(r'\bsudo\b', str(job.get('defaults', {}))) for job in parsed.values()),
                 'KVM sudo is confined to shard device setup')
     require(re.search(r'^          RORTHOX_ACCEL: auto$', test, re.M) and
             "RORTHOX_TEST_TIMEOUT: '300'" not in test and
@@ -204,14 +209,25 @@ def lint(text):
     # Only the named TCG-only step may force an accelerator; parsed run strings
     # catch both inline assignments and exports hidden in a quoted YAML scalar.
     tcg_step = re.search(r'^      - name: Test TCG-only boot cases\n(.*?)(?=^      - |\Z)', test, re.M | re.S)
-    require(tcg_step is not None and 'if: matrix.shard == 1' in tcg_step.group(1) and
+    require(tcg_step is not None and 'if: ${{ !cancelled() && matrix.shard == 1 }}' in tcg_step.group(1) and
             '          RORTHOX_ACCEL: tcg' in tcg_step.group(1) and
             'grep -lE ' in tcg_step.group(1) and
             'qemu_require_tcg' in tcg_step.group(1) and
-            './ci/run.sh ./scripts/run-tests.sh --results build/tests/runs/tcg-only' in tcg_step.group(1) and
-            'build/tests/runs/tcg-only/results.json' in test and
+            './ci/run.sh ./scripts/run-tests.sh --results build/tests/runs/shard-1/tcg-only' in tcg_step.group(1) and
+            'build/tests/runs/shard-${{ matrix.shard }}/tcg-only/results.json' in test and
             'scripts/ci-result.py' in jobs['result'], 'required TCG-only run missing')
-    run_override = re.compile(r'\b(?:export\s+)?RORTHOX_ACCEL\s*=')
+    upload = re.search(r'^      - name: Upload shard results\n(.*?)(?=^      - |\Z)',
+                       test, re.M | re.S)
+    require(upload is not None and test.count('      - name: Upload shard results\n') == 1 and
+            test.count('          name: results-${{ matrix.shard }}\n') == 1 and
+            '          name: results-${{ matrix.shard }}\n' in upload.group(1) and
+            upload.group(1).count('          path: |\n') == 1,
+            'shard results upload paths missing')
+    paths = upload.group(1).split('          path: |\n', 1)[1].split('          if-no-files-found:', 1)[0].splitlines()
+    require(len(paths) >= 8 and all(re.match(r'^            build/tests/runs/shard-\$\{\{ matrix\.shard \}\}/[^/]+', path)
+                                    for path in paths),
+            'shard results upload paths must share their shard root')
+    run_override = re.compile(r'\b(?:export\s+)?RORTHOX_ACCEL\s*=|\bunset\s+RORTHOX_ACCEL\b|\benv\s+-u\s+RORTHOX_ACCEL\b')
     other_test = test.replace(tcg_step.group(0), '')
     require(not run_override.search(other_test) and
             not run_override.search(tcg_step.group(1).split('        run: |', 1)[-1]), 'shard must not override its accelerator')
@@ -232,6 +248,21 @@ def lint(text):
                 next(step for step in parsed['test']['steps'] if step.get('name') == 'Test TCG-only boot cases')
                     .get('env', {}).get('RORTHOX_ACCEL') == 'tcg',
                 'required shard KVM device setup or accelerator missing')
+    marker = 'RORTHOX_KVM_SETUP_FAILED'
+    marker_lines = [line.strip() for line in text.splitlines() if marker in line]
+    allowed_marker = [
+        'echo "RORTHOX_KVM_SETUP_FAILED=$failed failed" >> "$GITHUB_ENV"',
+        "bash ci/kvm-diagnostics.sh host \"$before\" \"$after\" || { echo '::warning title=KVM diagnostics::host diagnostics failed'; echo 'RORTHOX_KVM_SETUP_FAILED=host diagnostics failed' >> \"$GITHUB_ENV\"; }",
+    ]
+    require(marker_lines == allowed_marker and
+            all(line in host.group(1) for line in allowed_marker),
+            'KVM setup marker must be confined to host setup failures')
+    if yaml is not None:
+        require(all(marker not in str(scope.get('env', {})) for scope in (document, *parsed.values())) and
+                all(marker not in str(step.get('env', {})) for job in parsed.values() for step in job['steps']) and
+                all(marker not in str(step.get('run', '')) for job in parsed.values()
+                    for step in job['steps'] if step.get('name') != 'Enable the host KVM device if present'),
+                'KVM setup marker must be confined to host setup failures')
     require('    continue-on-error:' not in jobs['image-prep'],
             'image preparation must be required')
     # Context references must not put credentials in the workflow or read-only jobs.
