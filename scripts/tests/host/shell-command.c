@@ -13,8 +13,9 @@
  * Words are separated by ASCII spaces only, and a command has 1 to RORTHOX_MAX_COMMAND_ARGUMENTS
  * words (the program name included):
  *  - parse: no words, 1 word, MAX-1, MAX, MAX+1 and many more words, repeated, leading and
- *    trailing spaces, a tab inside a word: the list holds exactly the words, or there is no list
- *    and nothing stays allocated; a command above the limit makes at most MAX nodes on the way.
+ *    trailing spaces, a tab inside a word (also in a MAX and a MAX+1 word command): the list
+ *    holds exactly the words, or there is no list and nothing stays allocated; a command above
+ *    the limit makes at most MAX nodes on the way.
  *  - parse with allocation failure at each node of a 1, 2, 3 and MAX word command: no list,
  *    nothing stays allocated, no bad free (no prefix of the command survives).
  *  - repeated parses, also after a refused command: the same list each time.
@@ -226,6 +227,26 @@ static void make_command(char *out, int n, int gap, int edge)
     for (int i = 0; i < edge; i++)
         *p++ = ' ';
     *p = 0;
+}
+
+// Like make_command(<n>, 1, 0), with a tab inside the second word: "blank.elf w2\tt w3 ...". The
+// Tab key types '\t', and it is not a word separator.
+static void make_tab_command(char *out, int n)
+{
+    char plain[1100];
+    make_command(plain, n, 1, 0);
+    const char *p = plain;
+    char *q = out;
+    while (*p && *p != ' ')
+        *q++ = *p++;
+    *q++ = *p++;
+    while (*p && *p != ' ')
+        *q++ = *p++;
+    *q++ = '\t';
+    *q++ = 't';
+    while (*p)
+        *q++ = *p++;
+    *q = 0;
 }
 
 static char why[200];
@@ -534,6 +555,8 @@ int main(void)
     make_command(commands[c++], MAX, 3, 4);
     make_command(commands[c++], MAX + 1, 3, 4);
     make_command(commands[c++], 200, 1, 0);
+    make_tab_command(commands[c++], MAX);
+    make_tab_command(commands[c++], MAX + 1);
     int ncommands = c;
 
     struct job job;

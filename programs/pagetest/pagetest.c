@@ -10,6 +10,11 @@
  * sizes of 0, sizes that can't be rounded up and sizes bigger than the heap still give NULL
  * without keeping a block.
  *
+ * The shell frees its command list when it gets the CPU back after the launch, and those blocks
+ * lie below this program's: first fit would hand them out if that happened between a free and
+ * the next malloc. So the program first prints "pagetest: ready" and waits for a key; the test
+ * sends it once the shell is back at its key request (it has freed the list by then).
+ *
  * One print call per line; the run ends with "pagetest: PASS" or "pagetest: FAIL <what>", then
  * "pagetest: done".
  */
@@ -101,6 +106,9 @@ static int exact(int fd, unsigned char *ptr, unsigned int request)
 
 int main(int argc, char **argv)
 {
+    print("pagetest: ready\n");
+    rorthox_getkeyblock();
+
     int fd = rorthox_open("0:/shell.elf", RORTHOX_FILE_READ);
     if (fd < 0)
     {

@@ -68,7 +68,7 @@
     "scripts/tests/tss-io.sh": 34.5,
     "scripts/tests/tty-backspace.sh": 4.9,
     "scripts/tests/tty-scroll.sh": 5.6,
-    "scripts/tests/user-pages.sh": 3.5,
+    "scripts/tests/user-pages.sh": 5.0,
     "scripts/tests/user-pointers.sh": 6.3,
     "scripts/tests/write-protect.sh": 8.1
   }

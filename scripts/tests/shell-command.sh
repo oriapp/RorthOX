@@ -8,7 +8,8 @@
 # 1. Host check (scripts/tests/host/shell-command.c): the real programs/stdlib/src/rorthox.c and
 #    string.c built with the host C compiler, every symbol prefixed with "user_", with stand-ins
 #    for the malloc, free and system syscalls. rorthox_parse_command() with 0, 1, MAX-1, MAX,
-#    MAX+1 and more words, repeated, leading and trailing spaces and a tab inside a word, with
+#    MAX+1 and more words, repeated, leading and trailing spaces and a tab inside a word (also at
+#    MAX and MAX+1 words: a tab doesn't split a word, so they are a list and a refusal), with
 #    each node's allocation failing in turn, and many calls in a row; rorthox_system_run() the
 #    same way: the syscall gets the whole list once, the list is freed after it returns and its
 #    result is returned.
@@ -65,7 +66,7 @@ else
 fi
 echo "exit=$host_status" > "$OUT/host-status.txt"
 check "host check built and exited with status 0"  "$OUT/host-status.txt" "exit=0" line
-check "host check: every parser case passed"       "$OUT/host-check.log"  "shell-command host check: 0 of 109 cases failed" line
+check "host check: every parser case passed"       "$OUT/host-check.log"  "shell-command host check: 0 of 113 cases failed" line
 
 # The heap table: one byte per block, 0 = free.
 config_value() {
@@ -169,8 +170,10 @@ if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" &&
     if state over shell="$OUT/shell.txt" screen="$OUT/screen-over.txt" && n=$(free_blocks); then
         counts+=("$n")
         type_line "$fits"
-        # blank.elf's last argument row (the echoed command doesn't match), then the shell alone again.
-        if wait_screen_lines "$RUN_TIMEOUT" "prompt:fits" &&
+        # blank.elf's exit row (fresh: nothing ended before), then the shell alone again. The shell
+        # prints its one prompt when it gets the CPU back after the launch, which can be anywhere in
+        # blank.elf's output, even inside a row ("fits>"), so the wait is not on the argument row.
+        if wait_screen_lines "$RUN_TIMEOUT" "regex:(> )?Process was terminated" &&
             state fits shell="$OUT/shell.txt" screen="$OUT/screen-fits.txt" && n=$(free_blocks); then
             counts+=("$n")
         fi
@@ -199,10 +202,11 @@ awk -v cmd="> $over" -v max="$MAX" -v banner="${RORTHOX_NAME} v${RORTHOX_VERSION
     }' "$OUT/screen-over.txt" > "$OUT/layout.txt"
 sed 's/^/  /' "$OUT/layout.txt"
 # blank.elf prints one row per argument, more rows than the screen has: at the rendezvous the last
-# argument ("fits", the limit's word) must be below a "y" row and above the exit row (the shell's
-# prompt may be in front of any of them).
+# argument ("fits", the limit's word) must be below a "y" row and above the exit row. The shell's
+# one prompt "> " can be in any of these rows, at any place (print calls are whole, blank.elf's
+# printf writes one character at a time), so it is taken out of a row first.
 awk '
-    { sub(/^> /, "") }
+    { sub(/> ?/, "") }
     $0 == "y" { y = NR }
     $0 == "fits" && y == NR - 1 { f = NR }
     f && NR > f && $0 == "Process was terminated" { t = 1 }

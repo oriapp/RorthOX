@@ -267,8 +267,11 @@ static int reuse(const char *tag)
     strcpy(cmd, "fault.elf child");
     struct command_argument *child = rorthox_parse_command(cmd, sizeof(cmd));
     volatile uint32_t *page = malloc(4096);
-    // A live page right after it leaves a one-page hole: the kernel's first one-page allocation
-    // for the child takes it, not the child's own malloc calls (they come later).
+    // A live page right after it leaves a one-page hole: the kernel's one-page allocations for
+    // the child take it, not the child's own malloc calls (they come later). The shell frees its
+    // command list for this program whenever it next runs, maybe only now, and leaves a few more
+    // one-block holes below. That doesn't change the outcome: the child's page tables alone are
+    // over a thousand one-block allocations, so they fill every hole, this one included.
     void *guard = malloc(4096);
     if (!box || !child || !page || !guard)
     {
