@@ -15,7 +15,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120 # Cold toolchain build on an empty cache.
+    needs: image-prep
+    timeout-minutes: 25
     permissions:
       contents: read
     outputs:
@@ -25,30 +26,39 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
-      - name: Install packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential bison flex libgmp3-dev libmpc-dev \
-            libmpfr-dev texinfo curl xz-utils nasm qemu-system-x86 mtools python3 \
-            grub-common grub-pc-bin xorriso dosfstools
-      # actions/cache v6; configure.sh is the source of the toolchain versions and options.
-      - name: Cache the cross toolchain
-        id: cross-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      # actions/download-artifact v6; only this run's validated candidate is accepted.
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        if: needs.image-prep.outputs.mode == 'archive'
         with:
-          path: ~/opt/cross
-          key: cross-ubuntu-24.04-${{ hashFiles('configure.sh') }}
-      - name: Build the cross toolchain
-        if: steps.cross-cache.outputs.cache-hit != 'true'
-        run: ./configure.sh
-      - name: Add the cross toolchain to PATH
-        run: echo "$HOME/opt/cross/bin" >> "$GITHUB_PATH"
+          name: candidate-image
+          path: ${{ runner.temp }}
+      - name: Verify the image for this revision
+        id: image-id
+        env:
+          IMAGE_MODE: ${{ needs.image-prep.outputs.mode }}
+          IMAGE_REF: ${{ needs.image-prep.outputs.ref }}
+          IMAGE_SHA256: ${{ needs.image-prep.outputs.checksum }}
+          IMAGE_ID: ${{ needs.image-prep.outputs.id }}
+        run: |
+          if [ "$IMAGE_MODE" = archive ]; then
+            bash ci/image-job.sh receive
+          elif [ "$IMAGE_MODE" = digest ]; then
+            bash ci/image-job.sh fetch
+          else
+            echo 'No validated image for this revision' >&2
+            exit 1
+          fi
       - name: Build and package
         id: package
+        env:
+          RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}
+          RORTHOX_ACCEL: tcg
         run: |
-          make all iso
-          python3 -B scripts/ci-artifact.py create "$RUNNER_TEMP/production.tar.gz" "$RUNNER_TEMP/production.sha256"
-          read -r manifest < "$RUNNER_TEMP/production.sha256"
+          ./ci/run.sh make all iso
+          mkdir -p build/ci
+          ./ci/run.sh python3 -B scripts/ci-artifact.py create build/ci/production.tar.gz build/ci/production.sha256
+          read -r manifest < build/ci/production.sha256
+          cp build/ci/production.tar.gz "$RUNNER_TEMP/production.tar.gz"
           echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
       # actions/upload-artifact v6
       - name: Upload production build
@@ -70,7 +80,7 @@ jobs:
           if-no-files-found: ignore
 
   test:
-    needs: build
+    needs: [image-prep, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -84,24 +94,28 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
-      - name: Install packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential bison flex libgmp3-dev libmpc-dev \
-            libmpfr-dev texinfo curl xz-utils nasm qemu-system-x86 mtools python3 \
-            grub-common grub-pc-bin xorriso dosfstools
-      # actions/cache v6
-      - name: Cache the cross toolchain
-        id: cross-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      # actions/download-artifact v6; only this run's validated candidate is accepted.
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        if: needs.image-prep.outputs.mode == 'archive'
         with:
-          path: ~/opt/cross
-          key: cross-ubuntu-24.04-${{ hashFiles('configure.sh') }}
-      - name: Build the cross toolchain
-        if: steps.cross-cache.outputs.cache-hit != 'true'
-        run: ./configure.sh
-      - name: Add the cross toolchain to PATH
-        run: echo "$HOME/opt/cross/bin" >> "$GITHUB_PATH"
+          name: candidate-image
+          path: ${{ runner.temp }}
+      - name: Verify the image for this revision
+        id: image-id
+        env:
+          IMAGE_MODE: ${{ needs.image-prep.outputs.mode }}
+          IMAGE_REF: ${{ needs.image-prep.outputs.ref }}
+          IMAGE_SHA256: ${{ needs.image-prep.outputs.checksum }}
+          IMAGE_ID: ${{ needs.image-prep.outputs.id }}
+        run: |
+          if [ "$IMAGE_MODE" = archive ]; then
+            bash ci/image-job.sh receive
+          elif [ "$IMAGE_MODE" = digest ]; then
+            bash ci/image-job.sh fetch
+          else
+            echo 'No validated image for this revision' >&2
+            exit 1
+          fi
       # actions/download-artifact v6; defaults to an artifact of this run.
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
         with:
@@ -112,9 +126,13 @@ jobs:
           MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}
           SHARD: ${{ matrix.shard }}
           RORTHOX_REQUIRE_ISO: '1'
+          RORTHOX_ACCEL: tcg
+          RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}
         run: |
-          python3 -B scripts/ci-artifact.py extract "$RUNNER_TEMP/production/production.tar.gz" "$MANIFEST_SHA256"
-          ./scripts/run-tests.sh --shard "$SHARD/4" -j 2 --results "build/tests/runs/shard-$SHARD"
+          mkdir -p build/ci
+          cp "$RUNNER_TEMP/production/production.tar.gz" build/ci/production.tar.gz
+          ./ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$MANIFEST_SHA256"
+          ./ci/run.sh ./scripts/run-tests.sh --shard "$SHARD/4" -j 2 --results "build/tests/runs/shard-$SHARD"
       # Upload the reports and bounded failed-only evidence, even on a red shard.
       - name: Upload shard results
         if: always()
@@ -128,11 +146,10 @@ jobs:
             build/tests/runs/shard-${{ matrix.shard }}/failed/
           if-no-files-found: warn
 
-  # The read-only producer runs on forks as well as trusted branches. The required path does not wait for it.
+  # The read-only producer runs on forks as well as trusted branches. All required jobs use its image.
   image-prep:
-    continue-on-error: true
     runs-on: ubuntu-24.04
-    timeout-minutes: 120 # Step limits total 116 minutes, leaving time for cleanup.
+    timeout-minutes: 120 # Cold candidate builds have a 100-minute step limit.
     permissions:
       contents: read
     outputs:
@@ -173,7 +190,7 @@ jobs:
           compression-level: 0
           retention-days: 1
 
-  # Only this job may write packages, and only on first-party branch pushes.
+  # Publication is separate from the required read-only image handoff.
   image:
     continue-on-error: true
     needs: image-prep
@@ -232,90 +249,6 @@ jobs:
         run: |
           echo "ref=$IMAGE_REF" >> "$GITHUB_OUTPUT"
           echo "Already public: $IMAGE_REF" >> "$GITHUB_STEP_SUMMARY"
-
-  # Advisory only; no dependency from result to this job.
-  candidate:
-    needs: image-prep
-    if: ${{ !cancelled() }}
-    continue-on-error: true
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60 # Step limits total 57 minutes.
-    permissions:
-      contents: read
-    steps:
-      # actions/checkout v6
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-        timeout-minutes: 2
-        with:
-          persist-credentials: false
-      # actions/download-artifact v6
-      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
-        timeout-minutes: 3
-        if: needs.image-prep.outputs.mode == 'archive'
-        with:
-          name: candidate-image
-          path: ${{ runner.temp }}
-      - name: Verify image identity
-        timeout-minutes: 8
-        id: image-id
-        env:
-          IMAGE_REF: ${{ needs.image-prep.outputs.ref }}
-          IMAGE_SHA256: ${{ needs.image-prep.outputs.checksum }}
-          IMAGE_ID: ${{ needs.image-prep.outputs.id }}
-          IMAGE_MODE: ${{ needs.image-prep.outputs.mode }}
-        run: |
-          if [ "$IMAGE_MODE" = archive ]; then
-            bash ci/image-job.sh receive
-          elif [ "$IMAGE_MODE" = digest ]; then
-            bash ci/image-job.sh fetch
-          else
-            exit 1
-          fi
-      - name: Build and test inside candidate image (TCG)
-        timeout-minutes: 40
-        id: suite
-        env:
-          RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}
-          RORTHOX_REQUIRE_ISO: '1'
-          RORTHOX_ACCEL: tcg
-        run: |
-          ./ci/run.sh make all iso
-          ./ci/run.sh ./scripts/run-tests.sh -j 2 --results build/tests/runs/candidate
-      - name: Record certification evidence
-        timeout-minutes: 2
-        if: always()
-        shell: bash # The tool-version pipe must preserve docker's exit status.
-        env:
-          IMAGE_ID: ${{ steps.image-id.outputs.id }}
-          IMAGE_REF: ${{ needs.image-prep.outputs.ref }}
-          IMAGE_MODE: ${{ needs.image-prep.outputs.mode }}
-          SUITE_OUTCOME: ${{ steps.suite.outcome }}
-        run: |
-          {
-            echo '## Candidate image (advisory; required build and four shards remain authoritative)'
-            echo "Suite: $SUITE_OUTCOME; source: $IMAGE_MODE; reference: ${IMAGE_REF:-not yet published}"
-            if [ -n "$IMAGE_ID" ]; then
-              echo "Image ID: $IMAGE_ID"
-              echo "Size: $(docker image inspect --format '{{.Size}}' "$IMAGE_ID") bytes"
-              for tool in 'i686-elf-gcc --version' 'x86_64-elf-gcc --version' 'nasm -v' 'qemu-system-i386 --version' 'grub-mkrescue --version' 'xorriso -version' 'python3 --version'; do
-                printf '%s: ' "$tool"
-                docker run --rm --network none "$IMAGE_ID" sh -c "$tool" | sed -n '1p'
-              done
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-      # actions/upload-artifact v6
-      - name: Upload candidate diagnostics
-        timeout-minutes: 2
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
-        with:
-          name: candidate-results
-          path: |
-            build/tests/runs/candidate/results.json
-            build/tests/runs/candidate/junit.xml
-            build/tests/runs/candidate/summary.md
-            build/tests/runs/candidate/failed/
-          if-no-files-found: ignore
 
   result:
     needs: [build, test]

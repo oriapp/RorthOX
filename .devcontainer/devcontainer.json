@@ -1,7 +1,8 @@
 {
   "name": "RorthOX build",
-  "image": "ghcr.io/oriapp/rorthox-build@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "image": "ghcr.io/oriapp/rorthox-build@sha256:c956d725f44367c312ee6af1be58445ecab556d66eae2504b4c2569235a39934",
   "workspaceFolder": "/work",
   "workspaceMount": "source=${localWorkspaceFolder},target=/work,type=bind",
-  "remoteUser": "ubuntu"
+  "remoteUser": "ubuntu",
+  "containerEnv": {"RORTHOX_IN_IMAGE": "1"}
 }

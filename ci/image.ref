@@ -1,2 +1,2 @@
-# A person records the verified published digest in a later commit; CI does not modify this file.
-ghcr.io/oriapp/rorthox-build@sha256:0000000000000000000000000000000000000000000000000000000000000000
+# Published image for the current ci/image-key.sh inputs.
+ghcr.io/oriapp/rorthox-build@sha256:c956d725f44367c312ee6af1be58445ecab556d66eae2504b4c2569235a39934

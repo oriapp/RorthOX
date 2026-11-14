@@ -514,23 +514,45 @@ the GRUB case of `write-protect` fail when `bin/rorthox.iso` is missing or holds
 `bin/kernel.bin` (`make test` builds it first). `fsck.fat` (package `dosfstools`)
 is optional: without it `fat-write` and `file-syscalls` say they skip that one check and still run the rest.
 
-The candidate build image is `ghcr.io/oriapp/rorthox-build`: its tag is the full content hash of `ci/Dockerfile`
-and `configure.sh`, while pulls use a registry digest. CI builds it once per missing public tag and only trusted branch
-pushes can publish it. Until the first published image is public, or for a pull request changing its inputs, CI
-transfers a checksummed image archive and runs it by its verified image ID. Publication validates the tools but
-runs before the advisory TCG suite completes. If that suite fails, the content tag remains: inspect its report and
-fix the image inputs or remove the tag before retrying. Do not record its digest until the suite passes. Only the
-existing four shards are required. The digest in `ci/image.ref` stays a placeholder until a
-person records the published digest in a later commit; CI never edits or pushes that file. After that, a local
-`./ci/run.sh make test` runs in the image (build `make all iso` first); the existing local commands still work.
+The build image is published at `ghcr.io/oriapp/rorthox-build`. Its content tag
+hashes `ci/Dockerfile` and `configure.sh`; `ci/image.ref` records the public digest.
+Docker is required for the image quick start. From the repository root, build and
+run all tests with one command:
 
-CI (`.github/workflows/build.yml`) runs on Ubuntu 24.04 for pushes to `main` or `features` and for pull requests.
-The build job compiles the cross toolchain (cached), runs `make all iso` once and uploads a `production` archive with
-its revision, tool versions and file checksums. Four independent test jobs download that same-run archive, verify its
-manifest and run one shard each without rebuilding production files; their `results-1` through `results-4` artifacts
-keep JUnit, JSON, summaries and bounded failed-test logs. The final result job runs even if the build or a shard
-fails, and only passes if all required jobs and reports passed. Failed tests also appear as error annotations.
-The candidate image jobs are advisory, so a cold image build cannot delay the required jobs or make their result red.
+```sh
+./ci/run.sh make test
+```
+
+This is equivalent to running Docker directly with the recorded digest (the
+explicit network and privilege limits also match `ci/run.sh`):
+
+```sh
+docker run --rm --init --user "$(id -u):$(id -g)" --network none \
+  --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g \
+  -v "$PWD:/work" -w /work \
+  ghcr.io/oriapp/rorthox-build@sha256:c956d725f44367c312ee6af1be58445ecab556d66eae2504b4c2569235a39934 make test
+```
+
+Open the repository in a devcontainer to get the same image and `/work` checkout.
+The container uses TCG by default; KVM is not enabled for required CI jobs.
+Local builds without Docker remain available with the documented toolchain.
+
+CI (`.github/workflows/build.yml`) runs on Ubuntu 24.04 for pushes to `main` or
+`features` and for pull requests. A read-only preparation job pulls the image
+for the current input hash or builds it from its pinned minimal context. The
+required build and four test shards use that image: when inputs change they
+verify and load the candidate archive by SHA-256 and image ID, rather than
+running the old published digest. The build job runs `make all iso` once and
+uploads a production archive with file checksums. Four fresh jobs verify that
+same-run archive and run one shard each without rebuilding production files;
+`results-1` through `results-4` carry JUnit, JSON, summaries and bounded failed
+logs. The aggregate runs even if a required job fails and requires all four
+shards. Only trusted branch pushes may publish a tag; publication is separate
+from the required result and checks tool versions, not the full suite, before
+publishing. A changed image can be published even when its required suite later
+fails: never promote that digest to `ci/image.ref` until the suite is green;
+repair the inputs or remove the failed tag. A third same-input trusted push
+while publication is queued may replace an older pending publication job.
 
 ## Project layout
 

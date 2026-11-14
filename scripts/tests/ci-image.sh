@@ -33,10 +33,11 @@ done < <(bash ci/image-key.sh --inputs)
 bash ci/image-key.sh --context "$tmp/context"
 [ "$(find "$tmp/context" -type f | LC_ALL=C sort | sed "s|$tmp/context/||")" = "$(bash ci/image-key.sh --inputs)" ] || fail 'build context has unlisted files'
 if bash ci/image-key.sh --context "$tmp/context" >/dev/null 2>&1; then fail 'nonempty context accepted'; fi
-# The recorded placeholder has the same digest form as the published reference.
+# The published digest is shared with the devcontainer.
 ref=$(grep -v '^#' ci/image.ref | head -n1)
 [[ "$ref" =~ ^ghcr\.io/oriapp/rorthox-build@sha256:[0-9a-f]{64}$ ]] || fail 'invalid reference'
 [ "$(python3 -B -c 'import json; print(json.load(open(".devcontainer/devcontainer.json"))["image"])')" = "$ref" ] || fail 'devcontainer reference differs from image.ref'
+[ "$(python3 -B -c 'import json; print(json.load(open(".devcontainer/devcontainer.json"))["containerEnv"]["RORTHOX_IN_IMAGE"])')" = 1 ] || fail 'devcontainer must run commands directly in image'
 [ "$(grep -c '^FROM ' ci/Dockerfile)" -eq 2 ] || fail 'unexpected image stages'
 if grep '^FROM ' ci/Dockerfile | grep -Ev '^FROM ubuntu:24\.04@sha256:[0-9a-f]{64}( AS [a-z]+)?$' >/dev/null; then
     fail 'unfixed base'
@@ -85,8 +86,13 @@ expected+=(-e GITHUB_ACTIONS=true -e RORTHOX_ACCEL=tcg -e RORTHOX_REQUIRE_ISO=1
 for i in "${!expected[@]}"; do
     [ "${actual[i]}" = "${expected[i]}" ] || fail "docker argv[$i]: ${actual[i]}"
 done
-if ( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/argv"; unset RORTHOX_IN_IMAGE RORTHOX_IMAGE_REF; bash ci/run.sh true ) >/dev/null 2>&1; then
-    fail 'placeholder digest accepted'
+( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/default-argv"; unset RORTHOX_IN_IMAGE RORTHOX_IMAGE_REF
+  bash ci/run.sh true )
+mapfile -d '' -t default_args < "$tmp/default-argv"
+[ "${default_args[${#default_args[@]}-2]}" = "$ref" ] || fail 'default image differs from recorded digest'
+if ( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/argv" RORTHOX_IMAGE_REF=ghcr.io/oriapp/rorthox-build@sha256:0000000000000000000000000000000000000000000000000000000000000000
+     bash ci/run.sh true ) >/dev/null 2>&1; then
+    fail 'zero digest accepted'
 fi
 if ( cd "$tmp" && RORTHOX_IMAGE_REF="$digest" bash "$root/ci/run.sh" true ) >/dev/null 2>&1; then
     fail 'outside checkout accepted'

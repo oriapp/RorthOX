@@ -22,7 +22,7 @@ def lint(text):
             and re.search(r'^  pull_request:', text, re.M), 'missing push or PR trigger')
     require(re.search(r'^  cancel-in-progress: .*github.ref != .refs/heads/main.', text, re.M)
             and re.search(r'^  group: .*github.sha', text, re.M), 'main run must never be superseded')
-    for action, release in [('checkout', 'v6'), ('cache', 'v6'),
+    for action, release in [('checkout', 'v6'),
                             ('download-artifact', 'v6'), ('upload-artifact', 'v6')]:
         require(re.search(r'^\s*# actions/' + action + ' ' + release + r'\b', text, re.M),
                 f'missing release comment: {action}')
@@ -34,10 +34,10 @@ def lint(text):
             'checkout must not persist credentials')
     require(not re.search(r'^\s*(run-id|github-token):', text, re.M),
             'artifact downloads must be same-run')
-    parts = re.split(r'^  (build|test|image-prep|image|candidate|result):\s*$', text, flags=re.M)
-    require(len(parts) == 13 and parts[1::2] ==
-            ['build', 'test', 'image-prep', 'image', 'candidate', 'result'],
-            'expected six jobs')
+    parts = re.split(r'^  (build|test|image-prep|image|result):\s*$', text, flags=re.M)
+    require(len(parts) == 11 and parts[1::2] ==
+            ['build', 'test', 'image-prep', 'image', 'result'],
+            'expected five jobs')
     jobs = dict(zip(parts[1::2], parts[2::2]))
     gate = "github.event_name == 'push' && github.repository == 'oriapp/RorthOX' && (github.ref == 'refs/heads/features' || github.ref == 'refs/heads/main')"
     require(re.findall(r'^    if: (.+)$', jobs['image'], re.M) == [gate],
@@ -47,9 +47,10 @@ def lint(text):
         expected = ['      contents: read'] + (['      packages: write'] if name == 'image' else [])
         require(len(grants) == 1 and grants[0].splitlines() == expected,
                 f'{name}: unexpected permissions')
-        if name not in ('build', 'test', 'result'):
+        if name == 'image':
             require(re.findall(r'^    continue-on-error: (.*)$', body, re.M) == ['true'],
-                    f'{name}: advisory job must not fail the run')
+                    'publication is not required for the image handoff')
+        if name in ('image-prep', 'image'):
             job_limits = re.findall(r'^    timeout-minutes: (\d+)', body, re.M)
             require(len(job_limits) == 1, f'{name}: missing job timeout')
             job_limit = int(job_limits[0])
@@ -68,6 +69,8 @@ def lint(text):
         import yaml
     except ImportError:
         yaml = None
+    if yaml is None and __import__('os').environ.get('GITHUB_ACTIONS') == 'true':
+        raise Invalid('PyYAML is required on Actions')
     if yaml is not None:
         try:
             document = yaml.safe_load(text)
@@ -101,38 +104,57 @@ def lint(text):
         require('${{' not in match[2], 'expression inside run')
         # YAML can decode \\x7b, \\u007b and escaped newlines into ${{.
         # Without PyYAML, refuse escapes in any double-quoted run value.
-        quoted = match[2].lstrip().startswith('"')
-        if yaml is None and quoted:
-            require('\\' not in match[2], 'escaped quoted run requires YAML parser')
+        if yaml is None:
+            require('\\' not in match[2] and not match[2].lstrip().startswith('!'),
+                    'escaped or tagged run requires YAML parser')
         for command in lines[i + 1:]:
             if command.strip() and len(command) - len(command.lstrip()) <= indent:
                 break
             require('${{' not in command, 'expression inside run')
-            if yaml is None and quoted:
-                require('\\' not in command, 'escaped quoted run requires YAML parser')
-    require('needs: build' in jobs['test'] and 'fail-fast: false' in jobs['test']
-            and 'shard: [1, 2, 3, 4]' in jobs['test'], 'four independent shards required')
+            if yaml is None:
+                require('\\' not in command, 'escaped run requires YAML parser')
+    require('    continue-on-error:' not in jobs['build'] and
+            '    continue-on-error:' not in jobs['test'], 'required job must not mask failure')
+    require('./ci/run.sh make all iso' in jobs['build'], 'production build must run in image')
+    require('needs: image-prep' in jobs['build'] and
+            'needs: [image-prep, build]' in jobs['test'] and
+            'fail-fast: false' in jobs['test'] and 'shard: [1, 2, 3, 4]' in jobs['test'],
+            'required jobs must consume the image and four independent shards')
     require('needs: [build, test]' in jobs['result'] and re.search(r'^    if: always\(\)$', jobs['result'], re.M)
             and 'scripts/ci-result.py' in jobs['result'], 'aggregate must run after failure')
-    require('needs: image-prep' in jobs['candidate'] and
-            re.search(r'^    if: \$\{\{ !cancelled\(\) \}\}$', jobs['candidate'], re.M) and
-            not re.search(r'needs:.*candidate', jobs['result']),
-            'advisory image suite must not affect required result')
-    require('shell: bash # Fail the step when prepare fails' in jobs['image-prep']
-            and 'shell: bash # The tool-version pipe' in jobs['candidate'],
+    require('shell: bash # Fail the step when prepare fails' in jobs['image-prep'],
             'piped steps must use bash pipefail')
+    for name in ('build', 'test'):
+        body = jobs[name]
+        require('ci/image-job.sh receive' in body and 'ci/image-job.sh fetch' in body and
+                'IMAGE_MODE: ${{ needs.image-prep.outputs.mode }}' in body and
+                'RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}' in body and
+                'RORTHOX_ACCEL: tcg' in body and './ci/run.sh ' in body,
+                f'{name}: unverified image or host workload')
+        require('sudo apt-' not in body and 'actions/cache@' not in body and
+                './configure.sh' not in body, f'{name}: legacy toolchain path')
+    require(not re.search(r'^  image-prep:\n    continue-on-error:', text, re.M),
+            'image preparation must be required')
     require('retention-days: 1' in jobs['image-prep'], 'candidate archive retention too long')
+    require(text.count('secrets.') == 1 and 'GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}' in jobs['image'] and
+            not any('secrets.' in body for name, body in jobs.items() if name != 'image'),
+            'credentials must be confined to publication')
+    require('      - name: Log out of registry\n        timeout-minutes: 2\n        if: always()' in jobs['image'] and
+            jobs['image'].index('ci/image-job.sh receive') < jobs['image'].index('ci/image-job.sh publish') <
+            jobs['image'].index('docker logout ghcr.io') and
+            'docker run' not in jobs['image'][jobs['image'].index('docker logout ghcr.io'):],
+            'publication must validate before login and always log out')
     require('needs: image-prep' in jobs['image'] and
             'cancel-in-progress: false' in jobs['image'] and
             'group: image-${{ needs.image-prep.outputs.key }}' in jobs['image'],
             'publication must serialize on the input hash')
     require('ci/image-job.sh prepare' in jobs['image-prep'] and
-            'ci/image-job.sh receive' in jobs['candidate'] and
             'ci/image-job.sh publish' in jobs['image'] and
-            'ci/image-job.sh fetch' in jobs['candidate'], 'missing verified image handoff')
-    require('scripts/ci-artifact.py extract' in jobs['test']
-            and 'scripts/ci-artifact.py create' in jobs['build'], 'build handoff must be verified')
-    require('RORTHOX_REQUIRE_ISO:' in jobs['test'] and 'run-tests.sh --shard' in jobs['test'],
+            'ci/image-job.sh receive' in jobs['build'] and
+            'ci/image-job.sh fetch' in jobs['test'], 'missing verified image handoff')
+    require('./ci/run.sh python3 -B scripts/ci-artifact.py extract' in jobs['test']
+            and './ci/run.sh python3 -B scripts/ci-artifact.py create' in jobs['build'], 'build handoff must be verified')
+    require('RORTHOX_REQUIRE_ISO:' in jobs['test'] and './ci/run.sh ./scripts/run-tests.sh --shard' in jobs['test'],
             'required sharded test invocation missing')
 
 

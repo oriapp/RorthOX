@@ -30,7 +30,7 @@ validate() {
     [ "$hash" = "$key" ] || fail 'input hash label mismatch'
     revision=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$id")
     [ "$revision" = "$GITHUB_SHA" ] || fail 'revision label mismatch'
-    docker run --rm --network none "$id" bash -ec '
+    docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges --user "$(id -u):$(id -g)" "$id" bash -ec '
         i686-elf-gcc --version | head -n 1
         x86_64-elf-gcc --version | head -n 1
         nasm -v
