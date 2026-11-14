@@ -403,9 +403,9 @@ qemu-system-i386 -m 128 -drive file=bin/os.bin,format=raw,index=0,media=disk \
 make test
 ```
 
-This builds everything (and the GRUB ISO, when its packages are installed) and runs 75 tests (`scripts/smoke.sh` plus
+This builds everything (and the GRUB ISO, when its packages are installed) and runs 76 tests (`scripts/smoke.sh` plus
 every `scripts/tests/*.sh`), as many at once as there are CPUs (about 2 minutes with 16); it keeps going after a
-failure and prints a summary (`75 passed, 0 failed, 0 skipped`) and where the output went. `make test TEST_JOBS=1`
+failure and prints a summary (`76 passed, 0 failed, 0 skipped`) and where the output went. `make test TEST_JOBS=1`
 runs them one after the other (about 14 minutes; as at any `-j`, a test's output shows when it ends);
 `TEST_JOBS=4` runs four at once. `make smoke` runs
 only the smoke test, and `./scripts/run-tests.sh scripts/tests/panic.sh` runs single tests (a test named twice runs
@@ -483,7 +483,7 @@ while the debugger is attached, and no change to the build.
 
 | Area | Tests | What they prove |
 |---|---|---|
-| Boot and CPU setup | `smoke`, `kernel-bss`, `descriptor-tables`, `idt-load`, `interrupt-count`, `pic`, `pit`, `kernel-headers` | the shell boots and runs a program with arguments; `.bss` is zero before C; GDT/TSS layout and limits; 256 IDT vectors; PIC remap and masks; the PIT divisor (11932), the milliseconds-to-ticks conversion, and what a tick does from ring 3 (acknowledge, count, wake, switch) and from the idle loop (count, wake, return) |
+| Boot and CPU setup | `smoke`, `boot-segments`, `kernel-bss`, `descriptor-tables`, `idt-load`, `interrupt-count`, `pic`, `pit`, `kernel-headers` | the shell boots and runs a program with arguments; the boot sector reads the kernel with flat data segments in DS, ES, FS, GS and SS, a 32-bit stack, DF clear and A20 on, also when the BIOS leaves DF set, A20 off and garbage in ESP (TCG only: TCG doesn't check segment limits); `.bss` is zero before C; GDT/TSS layout and limits; 256 IDT vectors; PIC remap and masks; the PIT divisor (11932), the milliseconds-to-ticks conversion, and what a tick does from ring 3 (acknowledge, count, wake, switch) and from the idle loop (count, wake, return) |
 | GRUB boot | `multiboot-header`, `grub-boot` | the Multiboot header fields and their bounds in `kernel.bin` (no QEMU needed); the ISO boots through the GRUB menu and runs `blank.elf`, and a second boot from a disk whose boot sector only loops checks through QEMU's gdbstub that the Multiboot entry, not the boot sector, sets up the GDT, segments and stack |
 | Exceptions and privilege | `exception-frames`, `exceptions`, `kernel-exceptions`, `panic`, `panic-screen`, `task-flags`, `tss-io` | one frame layout for every vector; only the syscall and debugging gates are open to ring 3; a user fault ends only that program (gone from the task list, the same shell gets the keys back, also when the faulting program's child owns the keyboard); kernel faults panic and stay halted; each task keeps its EFLAGS; ring 3 can't touch I/O ports |
 | Memory | `heap`, `heap-free`, `heap-oom`, `print-oom`, `user-pages`, `isolation`, `write-protect` | oversized requests fail; bad frees are ignored; running out of heap while starting a program is an error, not a crash, and starts nothing; print and printc still work with the heap full; memory from `malloc` and a raw program's memory and stack are zero to the end of the page, even when the block held other data before, and syscalls still accept only the bytes that were asked for; a program gets a page fault on every page it does not own (kernel code and data, the heap table, the screen, the stacks, page tables, another running program's memory, a page it freed that the kernel now uses) and can still use its own data, stack, allocations and code; on both the disk and the GRUB boot, CR0.WP is set and a store the kernel itself makes to a program's read-only code page is a page fault (error 0x3) that stops the kernel, with the page unchanged |
