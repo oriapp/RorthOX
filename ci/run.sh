@@ -38,6 +38,14 @@ fi
 args=(--rm --init --user "$(id -u):$(id -g)" --network none
       --cap-drop ALL --security-opt no-new-privileges --pids-limit 512
       --memory 4g -v "$root:/work" -w "/work$subdir")
+# Container tasks are launched by the daemon, not children of the taskset-bound client.
+# Constrain Docker's cpuset explicitly for single-CPU serial runs.
+if [ -n "${RORTHOX_CPUSET:-}" ]; then
+    [[ "$RORTHOX_CPUSET" =~ ^[0-9]+$ ]] || { echo 'error: invalid CPU set' >&2; exit 2; }
+    allowed=$(awk '/^Cpus_allowed_list:/ {print $2}' /proc/self/status)
+    taskset -c "$RORTHOX_CPUSET" true >/dev/null 2>&1 || { echo "error: CPU $RORTHOX_CPUSET outside allowed affinity $allowed" >&2; exit 2; }
+    args+=(--cpuset-cpus "$RORTHOX_CPUSET")
+fi
 if [ "${RORTHOX_ACCEL:-}" != tcg ] && [ -c /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
     args+=(--device /dev/kvm)
     kvm_gid=$(stat -c %g /dev/kvm)

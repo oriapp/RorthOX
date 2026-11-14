@@ -443,6 +443,31 @@ test fails if one of its QEMUs didn't report KVM. `QEMU_CPU` sets the CPU model 
 `QEMU_FLAGS` may not choose the accelerator or the CPU. The KVM path is checked with a stand-in for QEMU
 (`accelerator`) and has run on a hosted KVM machine.
 
+### Nightly coverage and timings
+
+`.github/workflows/nightly.yml` runs at 02:37 UTC each day after it reaches `main`; it can also be started with
+**Actions → nightly → Run workflow** on a selected branch. A push to `features` triggers a rollout run only when the
+nightly workflow or one of its timing, parity or aggregate helpers changes. The workflow builds one verified production
+artifact and runs the full suite in four forced-TCG shards and four forced-KVM shards. An unavailable KVM device fails
+its axis instead of falling back to TCG. Separately, a flake hunt runs the full suite three times in order (`-j 1`)
+under TCG on one host CPU from the runner's allowed cpuset. Each iteration keeps its own report, including failures;
+the aggregate compares the TCG/KVM results and counts passes per test out of three. It reports failed iterations and
+missing results, and uploads reports and bounded failed-test evidence.
+
+The flake hunt also publishes a **candidate** `test-timings.json` artifact. The refresh tool takes the median of
+successful durations from the three serial TCG reports; failed, skipped, timed-out and missing measurements do not
+become timing weights. With no successful duration, an existing test retains its old weight and a new test retains the
+runner's default. To review a downloaded candidate, compare it with `scripts/test-timings.json`, inspect the three
+iteration reports and the candidate's largest moves, then copy and commit the file manually if the measurements make
+sense. For a local candidate from three result files:
+
+```sh
+python3 -B scripts/timing-refresh.py --current scripts/test-timings.json --out /tmp/test-timings.json \
+    build/tests/runs/flake-{1,2,3}/results.json
+```
+
+The nightly has read-only repository permissions and never commits or publishes a build image.
+
 Every test runs in a session of its own. The runner keeps what it prints in `output.log` in the test's directory
 and shows it when the test ends, each line behind the test's name (`[heap] heap: all checks passed`), so the
 output of tests running at the same time doesn't mix and nothing a test prints is read as a CI command. When a test

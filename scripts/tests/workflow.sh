@@ -33,6 +33,39 @@ with tempfile.TemporaryDirectory() as temp:
                                     capture_output=True, env=env)
             assert (result.returncode == 0) == valid, result.stderr
     run(text, True)
+    nightly = (root / '.github/workflows/nightly.yml').read_text()
+    nightly_path = temp / 'nightly.yml'
+    def run_nightly(source, valid):
+        nightly_path.write_text(source)
+        env = os.environ.copy()
+        env['GITHUB_ACTIONS'] = 'true'
+        p = subprocess.run(['python3', '-B', str(lint), str(nightly_path)], cwd=root,
+                           text=True, capture_output=True, env=env)
+        assert (p.returncode == 0) == valid, p.stderr
+    run_nightly(nightly, True)
+    nightly_cases = (
+        ('publication', '  aggregate:\n', '  publication:\n    runs-on: ubuntu-24.04\n  aggregate:\n'),
+        ('permission', 'permissions: {}', 'permissions:\n  contents: write'),
+        ('job-permission', '  flake:\n    needs: [image-prep, build]\n    runs-on: ubuntu-24.04\n    timeout-minutes: 240\n    permissions:\n      contents: read', '  flake:\n    needs: [image-prep, build]\n    runs-on: ubuntu-24.04\n    timeout-minutes: 240\n    permissions:\n      packages: write'),
+        ('action-pin', 'actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803', 'actions/checkout@v6'),
+        ('credential', '          RORTHOX_ACCEL: tcg', '          TOKEN: ${{ github.token }}\n          RORTHOX_ACCEL: tcg'),
+        ('dispatch-in-run', '          ./ci/run.sh make all iso', '          echo "${{ github.event.inputs.arg }}"\n          ./ci/run.sh make all iso'),
+        ('trigger', "      - 'scripts/timing-refresh.py'", "      - 'README.md'"),
+        ('fallback', '          RORTHOX_ACCEL: ${{ matrix.accel }}', '          RORTHOX_ACCEL: auto'),
+        ('no-kvm-fail', "        if: matrix.accel == 'kvm'", "        if: matrix.accel == 'tcg'"),
+        ('not-single-cpu', '          export RORTHOX_CPUSET=$cpu', '          export CPU=$cpu'),
+        ('not-serial', '-j 1 --results', '-j 2 --results'),
+        ('not-three', '          for i in 1 2 3; do', '          for i in 1 2; do'),
+        ('retry', '  flake:\n', '  flake:\n    # retries hide failures\n'),
+        ('aggregate-skipped', '    if: always()\n    runs-on: ubuntu-24.04\n    timeout-minutes: 10', '    if: success()\n    runs-on: ubuntu-24.04\n    timeout-minutes: 10'),
+        ('publish', 'ci/image-job.sh prepare', 'ci/image-job.sh publish'),
+        ('extra-base', '          ./ci/run.sh make all iso', '          ./ci/run.sh make all iso --fixture-base abc'),
+    )
+    for tag, old, new in nightly_cases:
+        assert old in nightly, tag
+        print('checking nightly', tag, flush=True)
+        run_nightly(nightly.replace(old, new, 1), False)
+    print('PASS nightly workflow and security fixtures', flush=True)
     # The required path must consume the image selected by the read-only producer.
     needles = (
         ('legacy-packages', '      - name: Install packages\n        run: sudo apt-get update\n', False),

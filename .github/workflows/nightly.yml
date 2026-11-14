@@ -1,0 +1,296 @@
+name: nightly
+
+on:
+  schedule:
+    - cron: '37 2 * * *'
+  workflow_dispatch:
+  # Rollout check on features; schedules run only on main.
+  push:
+    branches: [features]
+    paths:
+      - '.github/workflows/nightly.yml'
+      - 'scripts/timing-refresh.py'
+      - 'scripts/tests/timing-refresh.sh'
+      - 'scripts/ci-nightly.py'
+      - 'scripts/ci-parity.py'
+
+permissions: {}
+concurrency:
+  group: nightly-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'workflow_dispatch' }}
+
+jobs:
+  image-prep:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.prepare.outputs.mode }}
+      ref: ${{ steps.prepare.outputs.ref }}
+      id: ${{ steps.prepare.outputs.id }}
+      checksum: ${{ steps.prepare.outputs.checksum }}
+    steps:
+      # actions/checkout v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Fetch or build read-only image
+        id: prepare
+        shell: bash
+        run: bash ci/image-job.sh prepare 2>&1 | tee "$RUNNER_TEMP/nightly-image.log"
+      # actions/upload-artifact v6
+      - name: Transfer candidate image
+        if: steps.prepare.outputs.mode == 'archive'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: nightly-candidate
+          path: ${{ runner.temp }}/candidate-image.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+      - name: Upload preparation failure
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: nightly-image-failure
+          path: ${{ runner.temp }}/nightly-image.log
+          if-no-files-found: warn
+
+  build:
+    needs: image-prep
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    outputs:
+      manifest: ${{ steps.package.outputs.manifest }}
+    steps:
+      # actions/checkout v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      # actions/download-artifact v6
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        if: needs.image-prep.outputs.mode == 'archive'
+        with:
+          name: nightly-candidate
+          path: ${{ runner.temp }}
+      - name: Verify image
+        id: image-id
+        env:
+          IMAGE_MODE: ${{ needs.image-prep.outputs.mode }}
+          IMAGE_REF: ${{ needs.image-prep.outputs.ref }}
+          IMAGE_SHA256: ${{ needs.image-prep.outputs.checksum }}
+          IMAGE_ID: ${{ needs.image-prep.outputs.id }}
+        run: |
+          if [ "$IMAGE_MODE" = archive ]; then bash ci/image-job.sh receive; else bash ci/image-job.sh fetch; fi
+      - name: Build once
+        id: package
+        env:
+          RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}
+          RORTHOX_ACCEL: tcg
+        run: |
+          ./ci/run.sh make all iso
+          mkdir -p build/ci
+          ./ci/run.sh python3 -B scripts/ci-artifact.py create build/ci/production.tar.gz build/ci/production.sha256
+          read -r manifest < build/ci/production.sha256
+          cp build/ci/production.tar.gz "$RUNNER_TEMP/production.tar.gz"
+          echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+      # actions/upload-artifact v6
+      - name: Upload production
+        if: steps.package.outcome == 'success'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: nightly-production
+          path: ${{ runner.temp }}/production.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+      - name: Upload build failure
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: nightly-build-failure
+          path: |
+            bin/
+            build/kernel.map
+          if-no-files-found: ignore
+
+  axis:
+    needs: [image-prep, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        accel: [tcg, kvm]
+        shard: [1, 2, 3, 4]
+    steps:
+      # actions/checkout v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Enable KVM device
+        if: matrix.accel == 'kvm'
+        run: |
+          if [ ! -c /dev/kvm ]; then
+            echo '::error title=KVM unavailable::No KVM character device on this runner'
+            exit 1
+          fi
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo udevadm settle --timeout=30
+          if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+            echo '::error title=KVM unavailable::KVM device is not accessible'
+            exit 1
+          fi
+      # actions/download-artifact v6
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        if: needs.image-prep.outputs.mode == 'archive'
+        with:
+          name: nightly-candidate
+          path: ${{ runner.temp }}
+      - name: Verify image
+        id: image-id
+        env:
+          IMAGE_MODE: ${{ needs.image-prep.outputs.mode }}
+          IMAGE_REF: ${{ needs.image-prep.outputs.ref }}
+          IMAGE_SHA256: ${{ needs.image-prep.outputs.checksum }}
+          IMAGE_ID: ${{ needs.image-prep.outputs.id }}
+        run: |
+          if [ "$IMAGE_MODE" = archive ]; then bash ci/image-job.sh receive; else bash ci/image-job.sh fetch; fi
+      # actions/download-artifact v6
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        with:
+          name: nightly-production
+          path: ${{ runner.temp }}/production
+      - name: Test full shard
+        env:
+          MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}
+          SHARD: ${{ matrix.shard }}
+          RORTHOX_ACCEL: ${{ matrix.accel }}
+          RORTHOX_REQUIRE_ISO: '1'
+          RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}
+        run: |
+          mkdir -p build/ci
+          cp "$RUNNER_TEMP/production/production.tar.gz" build/ci/production.tar.gz
+          ./ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$MANIFEST_SHA256"
+          ./ci/run.sh ./scripts/run-tests.sh --shard "$SHARD/4" -j 2 --results "build/tests/runs/nightly-$RORTHOX_ACCEL-$SHARD"
+      # actions/upload-artifact v6
+      - name: Upload axis results
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: axis-${{ matrix.accel }}-${{ matrix.shard }}
+          path: |
+            build/tests/runs/nightly-${{ matrix.accel }}-${{ matrix.shard }}/results.json
+            build/tests/runs/nightly-${{ matrix.accel }}-${{ matrix.shard }}/junit.xml
+            build/tests/runs/nightly-${{ matrix.accel }}-${{ matrix.shard }}/summary.md
+            build/tests/runs/nightly-${{ matrix.accel }}-${{ matrix.shard }}/failed/
+          if-no-files-found: warn
+
+  flake:
+    needs: [image-prep, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      # actions/download-artifact v6
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        if: needs.image-prep.outputs.mode == 'archive'
+        with:
+          name: nightly-candidate
+          path: ${{ runner.temp }}
+      - name: Verify image
+        id: image-id
+        env:
+          IMAGE_MODE: ${{ needs.image-prep.outputs.mode }}
+          IMAGE_REF: ${{ needs.image-prep.outputs.ref }}
+          IMAGE_SHA256: ${{ needs.image-prep.outputs.checksum }}
+          IMAGE_ID: ${{ needs.image-prep.outputs.id }}
+        run: |
+          if [ "$IMAGE_MODE" = archive ]; then bash ci/image-job.sh receive; else bash ci/image-job.sh fetch; fi
+      # actions/download-artifact v6
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        with:
+          name: nightly-production
+          path: ${{ runner.temp }}/production
+      - name: Three serial TCG runs on one CPU
+        env:
+          MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}
+          RORTHOX_ACCEL: tcg
+          RORTHOX_REQUIRE_ISO: '1'
+          RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}
+        run: |
+          mkdir -p build/ci/nightly/flake
+          cp "$RUNNER_TEMP/production/production.tar.gz" build/ci/production.tar.gz
+          ./ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$MANIFEST_SHA256"
+          # Choose a CPU in the runner's real affinity mask, never a quota.
+          allowed=$(awk '/^Cpus_allowed_list:/ {print $2}' /proc/self/status)
+          first=${allowed%%,*}
+          cpu=${first%%-*}
+          [[ "$cpu" =~ ^[0-9]+$ ]] && taskset -c "$cpu" true
+          export RORTHOX_CPUSET=$cpu
+          printf 'revision=%s image=%s cpuset=%s allowed=%s\n' "$GITHUB_SHA" "$RORTHOX_IMAGE_ID" "$cpu" "$allowed" > build/ci/nightly/flake/metadata.txt
+          for i in 1 2 3; do
+            result="build/tests/runs/flake-$i"
+            if taskset -c "$cpu" ./ci/run.sh ./scripts/run-tests.sh -j 1 --results "$result"; then status=0; else status=$?; fi
+            mkdir -p "build/ci/nightly/flake/iteration-$i"
+            printf '%s\n' "$status" > "build/ci/nightly/flake/iteration-$i/status.txt"
+            if [ -f "$result/results.json" ]; then cp "$result/results.json" "build/ci/nightly/flake/iteration-$i/results.json"; fi
+            if [ -f "$result/summary.md" ]; then cp "$result/summary.md" "build/ci/nightly/flake/iteration-$i/summary.md"; fi
+            if [ -d "$result/failed" ]; then cp -a "$result/failed" "build/ci/nightly/flake/iteration-$i/"; fi
+          done
+      - name: Candidate timing weights
+        if: ${{ !cancelled() && steps.image-id.outcome == 'success' }}
+        run: |
+          python3 -B scripts/timing-refresh.py --current scripts/test-timings.json --out build/ci/nightly/flake/test-timings.json build/ci/nightly/flake/iteration-{1,2,3}/results.json
+      # actions/upload-artifact v6
+      - name: Upload every iteration and candidate
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: nightly-flake
+          path: build/ci/nightly/flake/
+          if-no-files-found: warn
+
+  aggregate:
+    needs: [image-prep, build, axis, flake]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      # actions/download-artifact v6
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        if: ${{ !cancelled() && needs.axis.result != 'skipped' }}
+        with:
+          pattern: axis-*
+          path: ${{ runner.temp }}/axis
+      # actions/download-artifact v6
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        if: ${{ !cancelled() && needs.flake.result != 'skipped' }}
+        with:
+          name: nightly-flake
+          path: ${{ runner.temp }}/flake
+      - name: Check parity and flake hunt
+        env:
+          IMAGE_RESULT: ${{ needs.image-prep.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          AXIS_RESULT: ${{ needs.axis.result }}
+          FLAKE_RESULT: ${{ needs.flake.result }}
+        run: |
+          python3 -B scripts/ci-nightly.py "$RUNNER_TEMP/axis" "$RUNNER_TEMP/flake" "$GITHUB_STEP_SUMMARY" "$IMAGE_RESULT" "$BUILD_RESULT" "$AXIS_RESULT" "$FLAKE_RESULT"

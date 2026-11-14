@@ -149,6 +149,20 @@ if [ "$(id -u)" -ne 0 ]; then
     done
 fi
 [ "${default_args[${#default_args[@]}-2]}" = "$ref" ] || fail 'default image differs from recorded digest'
+# The flake hunt binds the container's cpuset, not only the Docker client.
+allowed=$(awk '/^Cpus_allowed_list:/ {print $2}' /proc/self/status)
+first=${allowed%%,*}
+cpu=${first%%-*}
+( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/cpuset-argv" RORTHOX_IMAGE_REF="$digest" RORTHOX_CPUSET="$cpu" RORTHOX_ACCEL=tcg
+  bash ci/run.sh true )
+mapfile -d '' -t cpuset_args < "$tmp/cpuset-argv"
+cpuset=0
+for i in "${!cpuset_args[@]}"; do
+    if [ "${cpuset_args[i]}" = --cpuset-cpus ] && [ "${cpuset_args[i+1]:-}" = "$cpu" ]; then cpuset=1; fi
+done
+[ "$cpuset" = 1 ] || fail 'Docker container cpuset missing'
+if ( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/cpuset-bad" RORTHOX_IMAGE_REF="$digest" RORTHOX_CPUSET=invalid
+     bash ci/run.sh true ) >/dev/null 2>&1; then fail 'invalid cpuset accepted'; fi
 # Changing an image input must warn for the locally pinned digest, without blocking it.
 mkdir -p "$tmp/stale/ci"
 cp ci/Dockerfile ci/image-key.sh ci/run.sh ci/image.ref "$tmp/stale/ci/"

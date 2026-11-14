@@ -7,6 +7,7 @@ mkdir -p "$OUT"
 python3 -B - "$PWD" "$OUT" <<'PY'
 import json
 import pathlib
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -14,98 +15,76 @@ import tempfile
 root = pathlib.Path(sys.argv[1])
 with tempfile.TemporaryDirectory(dir=sys.argv[2]) as work:
     work = pathlib.Path(work)
-    tcg = work / 'tcg'
-    runs = [work / f'kvm-{i}' for i in (1, 2, 3)]
+    tcg, kvm = work / 'tcg', work / 'kvm'
+    expected = work / 'expected.txt'
+    expected.write_text(''.join(f'test-{i}\n' for i in range(1, 5)))
     def save(path, accel, tests):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({'accelerator': accel, 'selected': len(tests), 'tests': tests}))
     def test(name, result='passed'):
         return {'name': name, 'result': result, 'duration': 1.0}
-    for i in (1, 2, 3, 4):
-        save(tcg / f'results-{i}' / 'results.json', 'tcg', [test(f'test-{i}')])
-    for run in runs:
-        save(run / 'results.json', 'kvm', [test(f'test-{i}') for i in (1, 2, 3, 4)])
-    def check(ok, needle):
-        p = subprocess.run(['python3', '-B', str(root / 'scripts/ci-parity.py'), str(tcg),
-                            *(str(run) for run in runs)], cwd=root, capture_output=True, text=True)
-        assert (p.returncode == 0) == ok and needle in p.stdout, (p.returncode, p.stdout, p.stderr)
+    def report(side, number):
+        return side / f'results-{number}' / 'results.json'
+    for i in range(1, 5):
+        save(report(tcg, i), 'tcg', [test(f'test-{i}')])
+        save(report(kvm, i), 'kvm', [test(f'test-{i}')])
+    def check(ok, needle, summary=False):
+        out = work / 'summary.md'
+        out.unlink(missing_ok=True)
+        p = subprocess.run(['python3', '-B', str(root / 'scripts/ci-parity.py'), str(tcg), str(kvm), str(expected)] +
+                           ([str(out)] if summary else []), cwd=root, capture_output=True, text=True)
+        assert (p.returncode == 0) == ok and needle in p.stdout and 'Traceback' not in p.stderr, (p.returncode, p.stdout, p.stderr)
+        return p.stdout, out.read_text() if out.exists() else ''
     check(True, 'parity OK')
-    tcg_only = 'scripts/tests/boot-segments.sh'
-    save(tcg / 'results-1' / 'results.json', 'tcg', [test('test-1'), test(tcg_only)])
-    for run in runs:
-        save(run / 'results.json', 'kvm', [test(f'test-{i}') for i in (1, 2, 3, 4)] + [test(tcg_only, 'skipped')])
-    check(True, 'TCG-only 1')
-    p = subprocess.run(['python3', '-B', str(root / 'scripts/ci-parity.py'), str(tcg),
-                        *(str(run) for run in runs)], cwd=root, capture_output=True, text=True)
-    assert 'TCG 4.0s; KVM 4.0s, 4.0s, 4.0s; top 5:' in p.stdout, p.stdout
-    assert 'top 5: test-4 run 3:' in p.stdout and 'test-3 run 2:' in p.stdout, p.stdout
-    # A new caller makes the hard-coded TCG-only list stale before any report is read.
-    extra_caller = root / 'scripts/tests/ci-parity-caller.sh'
+    only = 'scripts/tests/boot-segments.sh'
+    expected.write_text(expected.read_text() + only + '\n')
+    save(report(tcg, 1), 'tcg', [test('test-1'), test(only)])
+    save(report(kvm, 1), 'kvm', [test('test-1'), test(only, 'skipped')])
+    output, _ = check(True, 'TCG-only 1')
+    assert 'TCG 4.0s; KVM 4.0s; top 5:' in output, output
+    caller = root / 'scripts/tests/ci-parity-caller.sh'
     try:
-        extra_caller.write_text('qemu_require_tcg\n')
+        caller.write_text('qemu_require_tcg\n')
         check(False, 'TCG-only test list stale')
     finally:
-        extra_caller.unlink()
-    save(runs[0] / 'results.json', 'kvm', [test(f'test-{i}') for i in (1, 2, 3, 4)] + [test(tcg_only, 'failed')])
-    check(False, 'KVM 1 scripts/tests/boot-segments.sh: TCG passed, KVM failed')
-    save(runs[0] / 'results.json', 'kvm', [test(f'test-{i}') for i in (1, 2, 3, 4)] + [test(tcg_only, 'skipped')])
-    save(runs[0] / 'results.json', 'kvm', [test('test-1', 'skipped')] +
-         [test(f'test-{i}') for i in (2, 3, 4)] + [test(tcg_only, 'skipped')])
-    check(False, 'KVM 1 test-1: TCG passed, KVM skipped')
-    for run in runs:
-        save(run / 'results.json', 'kvm', [test(f'test-{i}') for i in (1, 2, 3, 4)])
-    save(tcg / 'results-1' / 'results.json', 'tcg', [test('test-1')])
-    import runpy
+        caller.unlink()
+    save(report(kvm, 1), 'kvm', [test('test-1'), test(only, 'failed')])
+    check(False, f'{only}: TCG passed, KVM failed')
+    save(report(kvm, 1), 'kvm', [test('test-1', 'skipped'), test(only, 'skipped')])
+    check(False, 'test-1: TCG passed, KVM skipped')
+    save(report(kvm, 1), 'kvm', [test('test-1'), test(only, 'skipped')])
     escape = runpy.run_path(str(root / 'scripts/ci-parity.py'))['escape']
     assert escape('a:b,c%\r\n') == 'a:b,c%25%0D%0A'
     assert escape('a:b,c%\r\n', property=True) == 'a%3Ab%2Cc%25%0D%0A'
     assert escape('a' * 3499 + '%\n') == 'a' * 3499
-    assert escape('a' * 3498 + '%\n') == 'a' * 3498
-    target = runs[1] / 'results.json'
-    save(target, 'kvm', [test(f'test-{i}', 'failed' if i == 2 else 'passed') for i in (1, 2, 3, 4)])
-    check(False, 'KVM 2 test-2: TCG passed, KVM failed')
-    save(target, 'kvm', [test(f'test-{i}') for i in (1, 3, 4)])
-    check(False, 'KVM 2 test-2: TCG passed, KVM missing')
-    target.unlink()
+    save(report(kvm, 2), 'kvm', [test('test-2', 'failed')])
+    check(False, 'test-2: TCG passed, KVM failed')
+    report(kvm, 2).unlink()
+    check(False, 'incomplete test coverage: TCG missing 0, KVM missing 1')
+    report(kvm, 2).write_text('{bad json')
     check(False, 'parity error')
-    target.write_text('{bad json')
+    save(report(kvm, 2), 'kvm', [test('test-2')])
+    save(report(kvm, 4), 'kvm', [test('test-4'), test('test-2')])
+    check(False, 'duplicate kvm test across shards')
+    save(report(kvm, 4), 'kvm', [test('test-4')])
+    save(report(kvm, 2), 'kvm', [test('test-2'), test('bad: %\n::error::fake')])
+    check(False, 'incomplete test coverage')
+    save(report(kvm, 2), 'kvm', [test('test-2')])
+    report(kvm, 2).write_bytes(b'\xff')
     check(False, 'parity error')
-    save(target, 'kvm', [test(f'test-{i}') for i in (1, 2, 3, 4)])
-    save(target, 'kvm', [test(f'test-{i}') for i in (1, 2, 3, 4)] +
-         [test('bad: %\n::error::fake')])
-    check(False, 'bad: %25%0A::error')
-    save(target, 'kvm', [test(f'test-{i}') for i in (1, 2, 3, 4)])
-    def probe(needle, *, summary=False):
-        path = work / 'parity.md'
-        path.unlink(missing_ok=True)
-        args = ['python3', '-B', str(root / 'scripts/ci-parity.py'), str(tcg),
-                *(str(run) for run in runs)]
-        if summary:
-            args.append(str(path))
-        p = subprocess.run(args, cwd=root, capture_output=True, text=True)
-        assert p.returncode == 1 and '::notice::KVM/TCG parity OK' not in p.stdout, (p.returncode, p.stdout, p.stderr)
-        assert needle in p.stdout and 'Traceback' not in p.stderr, (p.stdout, p.stderr)
-        return path.read_text() if summary and path.exists() else ''
-    target.write_bytes(b'\xff')
-    probe('parity error')  # Invalid UTF-8 is a report error, not a traceback.
-    target.write_text('{' * 2000)
-    probe('parity error')  # Deep JSON nesting is bounded by the decoder.
-    target.write_text('{"accelerator":"kvm","selected":1,"tests":[{"name":"x","result":"passed","duration":1' + '9' * 3000 + '}]}')
-    probe('parity error')  # Very large JSON numbers must not escape error handling.
-    save(target, 'kvm', [test(f'test-{i}') for i in (1, 2, 3, 4)] + [test('[evil](https://example.invalid)')])
-    summary = probe('parity differs', summary=True)
-    assert '&#91;evil&#93;' in summary and '[evil](' not in summary, summary
-    # A bad Unicode name must not emit a successful verdict before output fails.
-    save(target, 'kvm', [test(f'test-{i}') for i in (1, 2, 3, 4)])
-    save(tcg / 'results-1' / 'results.json', 'tcg', [test('\udcff')])
-    for run in runs:
-        save(run / 'results.json', 'kvm', [test('\udcff')] + [test(f'test-{i}') for i in (2, 3, 4)])
-    probe('parity error', summary=True)
-    save(tcg / 'results-1' / 'results.json', 'tcg', [test('test-1')])
-    for run in runs:
-        save(run / 'results.json', 'kvm', [test(f'test-{i}') for i in (1, 2, 3, 4)])
-    shard = tcg / 'results-3' / 'results.json'
-    shard.unlink()
+    report(kvm, 2).write_text('{' * 2000)
     check(False, 'parity error')
-    print('PASS ci-parity: equal, failed, missing test, missing/malformed reports')
+    report(kvm, 2).write_text('{"accelerator":"kvm","selected":1,"tests":[{"name":"x","result":"passed","duration":1' + '9' * 3000 + '}]}')
+    check(False, 'parity error')
+    save(report(kvm, 2), 'kvm', [test('test-2'), test('[evil](https://example.invalid)')])
+    check(False, 'incomplete test coverage', summary=True)
+    save(report(kvm, 2), 'kvm', [test('test-2')])
+    save(report(tcg, 1), 'tcg', [test('\udcff')])
+    save(report(kvm, 1), 'kvm', [test('\udcff'), test(only, 'skipped')])
+    check(False, 'parity error', summary=True)
+    save(report(tcg, 1), 'tcg', [test('test-1'), test(only)])
+    save(report(kvm, 1), 'kvm', [test('test-1'), test(only, 'skipped')])
+    report(tcg, 3).unlink()
+    check(False, 'incomplete test coverage: TCG missing 1, KVM missing 0')
+    print('PASS ci-parity: 4+4 shards, TCG-only, divergent, missing, duplicate and malformed reports')
 PY

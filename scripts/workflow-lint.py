@@ -408,9 +408,117 @@ bash ci/kvm-diagnostics.sh host "$before" "$after" || { echo '::warning title=KV
             'required sharded test invocation missing')
 
 
+def lint_nightly(text):
+    try:
+        import yaml
+    except ImportError as error:
+        raise Invalid('nightly lint requires PyYAML') from error
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError as error:
+        raise Invalid(f'invalid nightly YAML: {error}') from error
+    require(isinstance(doc, dict) and doc.get('name') == 'nightly' and doc.get('permissions') == {},
+            'nightly requires empty top-level permissions')
+    trigger = doc.get('on', doc.get(True))  # PyYAML YAML 1.1 treats "on" as a boolean key.
+    require(isinstance(trigger, dict) and set(trigger) == {'schedule', 'workflow_dispatch', 'push'} and
+            len(trigger['schedule']) == 1 and re.fullmatch(r'[0-9*/ ,\-]+', trigger['schedule'][0]['cron']) and
+            trigger['workflow_dispatch'] is None and
+            trigger['push'] == {'branches': ['features'], 'paths': [
+                '.github/workflows/nightly.yml', 'scripts/timing-refresh.py',
+                'scripts/tests/timing-refresh.sh', 'scripts/ci-nightly.py', 'scripts/ci-parity.py']},
+            'nightly triggers must be scoped')
+    require(doc.get('concurrency', {}).get('group') ==
+            "nightly-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}" and
+            doc['concurrency'].get('cancel-in-progress') ==
+            "${{ github.ref != 'refs/heads/main' && github.event_name != 'workflow_dispatch' }}",
+            'nightly must use its own concurrency group')
+    jobs = doc.get('jobs')
+    require(isinstance(jobs, dict) and set(jobs) == {'image-prep', 'build', 'axis', 'flake', 'aggregate'},
+            'nightly must have exactly the read-only producer, axes and aggregate')
+    require(all(job.get('permissions') == {'contents': 'read'} and
+                'continue-on-error' not in job and 'container' not in job and 'services' not in job and
+                isinstance(job.get('steps'), list) and job.get('timeout-minutes') for job in jobs.values()),
+            'nightly jobs must be required with read-only permissions')
+    require(jobs['build'].get('needs') == 'image-prep' and
+            jobs['axis'].get('needs') == ['image-prep', 'build'] and
+            jobs['flake'].get('needs') == ['image-prep', 'build'] and
+            jobs['aggregate'].get('needs') == ['image-prep', 'build', 'axis', 'flake'] and
+            jobs['aggregate'].get('if') == 'always()', 'nightly job dependencies')
+    matrix = jobs['axis'].get('strategy', {})
+    require(matrix.get('fail-fast') is False and matrix.get('matrix') ==
+            {'accel': ['tcg', 'kvm'], 'shard': [1, 2, 3, 4]}, 'nightly matrix requires four shards per accelerator')
+    require(not re.search(r'(?im)^\s*(workflow_run|pull_request_target):', text) and
+            '--fixture-base' not in text and not re.search(r'(?i)\b(?:retry|retries)\b', text),
+            'nightly forbids untrusted triggers, fixture bases and retries')
+    uses = []
+    for name, job in jobs.items():
+        for step in job['steps']:
+            require(isinstance(step, dict) and 'continue-on-error' not in step,
+                    'nightly step must not mask failure')
+            if 'uses' in step:
+                uses.append(step['uses'])
+                if step['uses'].startswith('actions/checkout@'):
+                    require(step.get('with', {}).get('persist-credentials') is False,
+                            'nightly checkout must not persist credentials')
+            for field in ('run', 'shell', 'env', 'with'):
+                value = str(step.get(field, ''))
+                require('secrets.' not in value and 'github.token' not in value and
+                        'packages: write' not in value and 'contents: write' not in value,
+                        'nightly must not receive credentials or publication grants')
+                if field == 'run':
+                    require('${{' not in value, 'nightly dispatch expressions belong in env')
+            if 'run' in step:
+                require(step.get('shell', 'bash') == 'bash', 'nightly steps require bash with pipefail')
+    require(uses and all(re.fullmatch(r'actions/(checkout|download-artifact|upload-artifact)@[a-f0-9]{40}', str(action))
+                         for action in uses) and
+            all(text.count(f'uses: {action}') == uses.count(action) for action in set(uses)),
+            'nightly actions must be first-party and SHA pinned')
+    def step(job, title):
+        found = [s for s in jobs[job]['steps'] if s.get('name') == title]
+        require(len(found) == 1, f'nightly missing {title}')
+        return found[0]
+    require('ci/image-job.sh prepare' in step('image-prep', 'Fetch or build read-only image')['run'] and
+            'ci/image-job.sh publish' not in text and
+            './ci/run.sh make all iso' in step('build', 'Build once')['run'] and
+            'ci-artifact.py create' in step('build', 'Build once')['run'],
+            'nightly must build one verified artifact without publication')
+    for name in ('build', 'axis', 'flake'):
+        require('ci/image-job.sh receive' in step(name, 'Verify image')['run'] and
+                'ci/image-job.sh fetch' in step(name, 'Verify image')['run'] and
+                step(name, 'Verify image')['env']['IMAGE_REF'] == '${{ needs.image-prep.outputs.ref }}',
+                'nightly image must be verified for each consumer')
+    axis = step('axis', 'Test full shard')
+    require(axis['env'].get('RORTHOX_ACCEL') == '${{ matrix.accel }}' and
+            axis['env'].get('RORTHOX_IMAGE_ID') == '${{ steps.image-id.outputs.id }}' and
+            '--shard "$SHARD/4" -j 2' in axis['run'] and
+            'ci-artifact.py extract' in axis['run'] and '--results' in axis['run'] and
+            step('axis', 'Enable KVM device').get('if') == "matrix.accel == 'kvm'" and
+            'exit 1' in step('axis', 'Enable KVM device')['run'] and
+            'RORTHOX_ACCEL: auto' not in text,
+            'nightly KVM must be forced and fail without a device')
+    hunt = step('flake', 'Three serial TCG runs on one CPU')
+    require(hunt['env'].get('RORTHOX_ACCEL') == 'tcg' and
+            hunt['env'].get('RORTHOX_IMAGE_ID') == '${{ steps.image-id.outputs.id }}' and
+            'Cpus_allowed_list' in hunt['run'] and 'taskset -c "$cpu"' in hunt['run'] and
+            'RORTHOX_CPUSET=$cpu' in hunt['run'] and
+            'for i in 1 2 3; do' in hunt['run'] and '-j 1 --results' in hunt['run'] and
+            'else status=$?' in hunt['run'] and 'iteration-$i/status.txt' in hunt['run'] and
+            'ci-artifact.py extract' in hunt['run'] and
+            'timing-refresh.py --current scripts/test-timings.json --out' in
+            step('flake', 'Candidate timing weights')['run'],
+            'nightly flake hunt must keep all three single-CPU serial results')
+    require('scripts/ci-nightly.py' in step('aggregate', 'Check parity and flake hunt')['run'] and
+            all(step('aggregate', 'Check parity and flake hunt')['env'][f'{name}_RESULT'] ==
+                '${{ needs.' + name.lower().replace('_', '-') + '.result }}'
+                for name in ('BUILD', 'AXIS', 'FLAKE')) and
+            step('aggregate', 'Check parity and flake hunt')['env'].get('IMAGE_RESULT') ==
+            '${{ needs.image-prep.result }}', 'nightly aggregate must check all jobs')
+
+
 if __name__ == '__main__':
     try:
-        lint(pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else '.github/workflows/build.yml').read_text())
+        path = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else '.github/workflows/build.yml')
+        (lint_nightly if path.name == 'nightly.yml' else lint)(path.read_text())
     except (Invalid, OSError, StopIteration) as e:
         print(f'workflow lint: {e}', file=sys.stderr)
         sys.exit(1)
