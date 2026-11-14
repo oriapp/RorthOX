@@ -1,6 +1,7 @@
 /*
  * The real page tables of paging.c, with the real process_malloc/process_free on top: default
- * identity maps are supervisor-only, a user page opens its PDE and nothing next to it, freeing
+ * identity maps are supervisor-only with page zero absent (PTE 0 is 0, PDE 0 present), nothing
+ * maps virtual 0 present again, a user page opens its PDE and nothing next to it, freeing
  * restores a supervisor identity page, a failed malloc leaves no user page behind, the loaded
  * directory is never changed, and every constructor failure unwinds. Entries are compared as
  * (entry & 0xFFFFF007) with PWT, PCD, PS and G (0x198) clear; A and D (0x60) are ignored.
@@ -9,7 +10,8 @@
  * A mapping is all or nothing: paging_set and paging_map_range refuse a leaf under a missing or
  * 4 MiB PDE whatever the new value (user, supervisor or not present), a range that touches such
  * a PDE anywhere (first, middle or only its last page), a NULL or loaded directory, a virtual or
- * physical range that wraps past 4 GiB and a negative count, and then no PDE or PTE has changed.
+ * physical range that wraps past 4 GiB, a negative count and flags above bit 11, and then no PDE
+ * or PTE has changed.
  * A failed process_malloc changes no entry at all, and process_free keeps a page it could not
  * revoke (ownership and backing). Cases that crash or hang on a broken paging.c run in a child.
  */
@@ -93,7 +95,8 @@ static int entry_is(uint32_t entry, uint32_t want)
 
 static uint32_t addr(const void *p) { return (uint32_t)(unsigned long)p; }
 
-// Every PDE points to its own live, page-aligned table; every PTE maps its address to itself.
+// Every PDE points to its own live, page-aligned table; every PTE maps its address to itself,
+// except PTE 0: page zero is absent, the whole entry 0 (no frame, no flags).
 static int default_map_ok(uint32_t *directory, uint32_t pde_flags, uint32_t pte_flags, const char *who)
 {
     int bad = 0;
@@ -108,6 +111,11 @@ static int default_map_ok(uint32_t *directory, uint32_t pde_flags, uint32_t pte_
         for (uint32_t j = 0; j < TOTAL_TABLES; j++)
         {
             uint32_t want = (i << 22) | (j << 12) | pte_flags;
+            if (i == 0 && j == 0)
+            {
+                if (table[0] != 0 && bad++ < 3) printf("  %s: PTE 0 is %#x, expected 0 (page zero absent)\n", who, table[0]);
+                continue;
+            }
             if (!entry_is(table[j], want) && bad++ < 3)
             {
                 printf("  %s: PTE %#x is %#x, expected %#x\n", who, (i << 22) | (j << 12), table[j], want);
@@ -205,7 +213,8 @@ static void constructor_cases(void)
     struct paging_4gb_chunk *chunk = new_directory();
     uint32_t *d = paging_4gb_chunk_get_directory(chunk);
     check(kalloc_calls() == TOTAL_TABLES + 2 && kalloc_live() == TOTAL_TABLES + 2, "new: directory, 1024 tables and the chunk");
-    check(default_map_ok(d, P | W, P | W, "default"), "default map: identity, present, writable, supervisor-only");
+    check(default_map_ok(d, P | W, P | W, "default"),
+          "default map: identity, present, writable, supervisor-only; page zero absent, PDE 0 present");
     check(entry_is(pte(d, 0x80000000u), 0x80000000u | P | W) && entry_is(pte(d, 0xFFFFF000u), 0xFFFFF000u | P | W),
           "identity above 0x80000000 and at 0xfffff000");
     check(!translates(d, 0x00100000u, 0) && !translates(d, 0x00B8000u, 0) && !translates(d, 0xFFFFF000u, 0),
@@ -415,6 +424,17 @@ static void range_cases(void)
     range_refused(a, 0x00400800u, phys, 2, P | W | U, "range: unaligned virtual address refused, nothing changed");
     range_refused(a, 0x00400000u, phys + 0x800, 2, P | W | U, "range: unaligned physical address refused, nothing changed");
 
+    // Flags above bit 11 would land in the frame address: refused. Bit 11 itself (AVL) is a flag.
+    range_refused(a, 0x00400000u, phys, 1, P | W | 0x1000, "range: flag bit 12 refused, nothing changed");
+    range_refused(a, 0x00400000u, phys, 2, P | W | U | 0x1000, "range: flag bit 12 (user) refused, nothing changed");
+    range_refused(a, 0x00400000u, phys, 1, (int)(0x80000000u | P | W), "range: flag bit 31 refused, nothing changed");
+    copy_directory(d, saved_a);
+    uint32_t allowed_avl[] = {0x00400000u};
+    check(paging_map_range(a, (void *)0x00400000, (void *)(unsigned long)phys, 1, P | W | 0x800) == 0 &&
+          pte(d, 0x00400000u) == (phys | P | W | 0x800) && changed_entries(d, saved_a, allowed_avl, 1) == 0,
+          "range: flag bit 11 (AVL) accepted, exactly that leaf");
+    restore_directory(d, saved_a);
+
     // The loaded directory is never changed.
     paging_switch(a);
     range_refused(a, line - PAGE, phys, 2, P | W | U, "range: loaded directory (user): refused, nothing changed");
@@ -455,6 +475,53 @@ static void range_cases(void)
     paging_free_4gb(a);
     paging_free_4gb(b);
     check(kalloc_live() == 0 && kalloc_bad_frees() == 0, "range: both directories freed exactly once");
+}
+
+// Nothing maps virtual page 0 present again: paging_set and paging_map_range refuse a present
+// value there, whatever the frame and the other flags, and nothing changes (a range starting at 0
+// writes none of its later pages either). Not-present values and page 1 are still accepted.
+static void page_zero_cases(void)
+{
+    kalloc_init();
+    kalloc_set_alignment(PAGE);
+    struct paging_4gb_chunk *a = new_directory(), *b = new_directory();
+    uint32_t *d = paging_4gb_chunk_get_directory(a);
+    paging_switch(b);
+    char what[160];
+    static const int present[] = {P | W, P, P | W | U, P | U};
+    static const char *const names[] = {"supervisor", "read-only supervisor", "user", "read-only user"};
+    for (int v = 0; v < 4; v++)
+    {
+        static const uint32_t frames[] = {0, 0x00005000u, 0x12340000u};
+        for (int f = 0; f < 3; f++)
+        {
+            copy_directory(d, saved_a);
+            int res = paging_set(d, 0, frames[f] | (uint32_t)present[v]);
+            int changed = changed_entries(d, saved_a, 0, 0);
+            host_snprintf_what(what, sizeof(what), "page zero: paging_set %s frame %#x refused, nothing changed",
+                               names[v], frames[f]);
+            if (res != -EINVARG || changed) printf("  %s: returned %d, %d entries changed\n", what, res, changed);
+            check(res == -EINVARG && changed == 0, what);
+            restore_directory(d, saved_a);
+        }
+        host_snprintf_what(what, sizeof(what), "page zero: range of 1 (%s) refused, nothing changed", names[v]);
+        range_refused(a, 0, 0, 1, present[v], what);
+        host_snprintf_what(what, sizeof(what), "page zero: range of 3 from 0 (%s) refused, pages 1 and 2 untouched", names[v]);
+        range_refused(a, 0, 0x12340000u, 3, present[v], what);
+    }
+    check(pte(d, 0) == 0, "page zero: PTE 0 still 0 after the refusals");
+
+    copy_directory(d, saved_a);
+    check(paging_set(d, 0, 0) == 0 && paging_map_range(a, 0, 0, 1, U | W) == 0 && pte(d, 0) == (U | W) &&
+          paging_set(d, 0, 0) == 0 && pte(d, 0) == 0 && changed_entries(d, saved_a, 0, 0) == 0,
+          "page zero: not-present values accepted, PDE 0 unchanged");
+    uint32_t allowed[] = {PAGE, (uint32_t)-1};
+    check(paging_map_range(a, (void *)PAGE, (void *)0x12340000, 1, P | W | U) == 0 &&
+          entry_is(pte(d, PAGE), 0x12340000u | P | W | U) && pte(d, 0) == 0 &&
+          changed_entries(d, saved_a, allowed, 2) == 0, "page zero: page 1 can still be mapped, PTE 0 stays 0");
+    paging_free_4gb(a);
+    paging_free_4gb(b);
+    check(kalloc_live() == 0 && kalloc_bad_frees() == 0, "page zero: both directories freed exactly once");
 }
 
 static struct process process;
@@ -538,6 +605,7 @@ int main(void)
     constructor_cases();
     paging_set_cases();
     range_cases();
+    page_zero_cases();
     process_cases();
     printf("page-tables: %d of %d failed\n", failed, cases);
     return failed != 0;

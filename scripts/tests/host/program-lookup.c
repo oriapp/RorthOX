@@ -152,6 +152,13 @@ int process_terminate(struct process *process)
     return 0;
 }
 
+// Only syscall 9 asks; it is not under test here.
+struct process *process_get(int process_id)
+{
+    printf("process_get() called unexpectedly\n");
+    exit(4);
+}
+
 void task_next()
 {
 }

@@ -20,6 +20,8 @@ extern "C" {
 
 // Each chunk owns its directory and all 1024 page tables; none are shared.
 // Free only after leaving its CR3. The kernel chunk lives for the whole boot.
+// paging_new_4gb maps all 4 GiB to themselves except page zero (not present).
+// Its PDE stays present for the rest of the first 4 MiB.
 struct paging_4gb_chunk
 {
     uint32_t *directory_entry;
@@ -33,13 +35,13 @@ void enable_paging();
 // Reloading task CR3 invalidates translations before return; no global pages,
 // CR4.PGE stays 0. paging_set refuses the currently loaded directory.
 // paging_set and paging_map_range refuse (-EINVARG, nothing written) a NULL or
-// loaded directory, an unaligned address, and a leaf under a not-present or
-// 4 MiB PDE, whatever the new PTE value. A present user leaf sets U in its PDE;
-// no call clears it. paging_map_range checks the whole range (every PDE it
-// touches, negative counts, wrap of virt or phys) before its first write, so a
-// failure changes nothing; count 0 with valid arguments writes nothing and
-// returns 0. That holds only while nothing else changes the directory
-// meanwhile: IF=0, one CPU, directory not loaded.
+// loaded directory, an unaligned address, a present value at virtual 0, and a
+// leaf under a not-present or 4 MiB PDE, whatever the new PTE value. A present
+// user leaf sets U in its PDE; no call clears it. paging_map_range checks the
+// whole range (every PDE it touches, negative counts, wrap of virt or phys)
+// before its first write, so a failure changes nothing; count 0 with valid
+// arguments writes nothing and returns 0. That holds only while nothing else
+// changes the directory meanwhile: IF=0, one CPU, directory not loaded.
 int paging_set(uint32_t *directory, void *virt, uint32_t val);
 bool paging_is_aligned(void *addr);
 

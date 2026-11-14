@@ -31,6 +31,12 @@ struct paging_4gb_chunk *paging_new_4gb(uint8_t flags)
         total_tables++;
     }
 
+    // Page zero is not present in any directory, so a NULL access faults (#PF, CR2 = 0)
+    // instead of reading the real-mode interrupt table. The rest of the first 4 MiB stays
+    // mapped, so PDE 0 stays present.
+    uint32_t *first_table = (uint32_t *)(directory[0] & 0xFFFFF000);
+    first_table[0] = 0;
+
     struct paging_4gb_chunk *chunk_4gb = kzalloc(sizeof(struct paging_4gb_chunk));
     if (!chunk_4gb)
     {
@@ -115,10 +121,16 @@ void *paging_align_to_lower_page(void *addr)
 
 // A leaf may only be written in an inactive directory, through a present PDE that points to a
 // 4 KiB page table (PS clear). Checked before the table address is followed, whatever the new
-// PTE value is: a missing or 4 MiB PDE holds no table address to write through.
-static int paging_check_leaf(uint32_t *directory, uint32_t virt)
+// PTE value is: a missing or 4 MiB PDE holds no table address to write through. Page zero may
+// only be written not present: it stays unmapped (see paging_new_4gb).
+static int paging_check_leaf(uint32_t *directory, uint32_t virt, uint32_t val)
 {
     if (!directory || directory == current_directory || (virt % PAGING_PAGE_SIZE))
+    {
+        return -EINVARG;
+    }
+
+    if (virt == 0 && (val & PAGING_IS_PRESENT))
     {
         return -EINVARG;
     }
@@ -186,7 +198,7 @@ int paging_map_range(struct paging_4gb_chunk *directory, void *virt, void *phys,
     uint32_t *entries = directory->directory_entry;
     for (uint32_t i = 0; i <= last; i++)
     {
-        int res = paging_check_leaf(entries, v + i * PAGING_PAGE_SIZE);
+        int res = paging_check_leaf(entries, v + i * PAGING_PAGE_SIZE, (p + i * PAGING_PAGE_SIZE) | (uint32_t)flags);
         if (res < 0)
         {
             return res;
@@ -238,7 +250,7 @@ out:
 
 int paging_set(uint32_t *directory, void *virt, uint32_t val)
 {
-    int res = paging_check_leaf(directory, (uint32_t)virt);
+    int res = paging_check_leaf(directory, (uint32_t)virt, val);
     if (res < 0)
     {
         return res;

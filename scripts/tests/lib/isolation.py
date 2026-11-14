@@ -9,9 +9,10 @@ attack <socket> <map> <kernel elf> <offsets> <probe elf> <results> <tag> <op> <t
     vector 14, error code 0x5 (read, fetch) or 0x7 (write), CR2 = target, saved CS ring 3, the
     faulting task is the probe and CR3 its directory. At that point "info mem" (the CPU's own
     view of the probe's directory) must give ring 3 exactly the probe's stack, ELF segments and
-    live allocations, everything else present, supervisor-only and writable. Then
-    interrupt_handler gets the frame, process_terminate gets the probe's process with the
-    kernel directory loaded (whose "info mem" has no user page at all), returns 0 and the probe's
+    live allocations, everything else from 0x1000 up present, supervisor-only and writable, and
+    page zero absent. Then interrupt_handler gets the frame, process_terminate gets the probe's
+    process with the kernel directory loaded (whose "info mem" has no user page at all and starts
+    at 0x1000 too), returns 0 and the probe's
     slot and task are gone.
     op s: no exception: the probe hands the target to syscalls and exits normally.
     Options: box=<hex> (required), pde_u=0|1 (the target PDE's U bit), pte=supervisor|user-ro,
@@ -130,9 +131,10 @@ class Attack:
 
     @staticmethod
     def expected_map(user):
-        """user: [(start, end, prot)] -> full 4 GiB list with "-rw" gaps, merged like info mem."""
+        """user: [(start, end, prot)] -> the list from 0x1000 to 4 GiB with "-rw" gaps, merged like
+        info mem. Page zero is absent in every directory, so info mem lists nothing below 0x1000."""
         out = []
-        at = 0
+        at = PAGE
         for start, end, prot in sorted(user):
             if start > at:
                 out.append([at, start, "-rw"])
@@ -357,7 +359,7 @@ class Attack:
         kernel_dir = r.read32(r.read32(self.kernel["kernel_chunk"]))
         cr3 = r.control_registers()["cr3"]
         got = self.info_mem()
-        want = [(0, 1 << 32, "-rw")]
+        want = [(PAGE, 1 << 32, "-rw")]
         self.add("kernel_map", cr3 == kernel_dir and got == want,
                  "cr3 %#x (kernel directory %#x), info mem %s" % (cr3, kernel_dir, self.show(got)))
         ret = r.read32(r.reg("esp"))

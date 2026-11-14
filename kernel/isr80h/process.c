@@ -198,7 +198,15 @@ void *isr80h_command8_get_program_arguments(struct interrupt_frame *frame)
 
 void *isr80h_command9_exit(struct interrupt_frame *frame)
 {
-    struct process *process = task_current()->process;
+    // Like the fault path: only end a process that still owns this task and its slot.
+    struct task *task = task_current();
+    if (!task || !task->process || task->process->task != task ||
+        process_get(task->process->id) != task->process)
+    {
+        PANIC("exit: Invalid exiting task", __FILE__, __LINE__);
+    }
+
+    struct process *process = task->process;
     int res = process_terminate(process);
     if (res < 0)
     {

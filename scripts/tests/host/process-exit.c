@@ -13,6 +13,9 @@
  *   exit     syscall 9: the child ends and the caller runs
  *   stop     syscall 9 with an invalid file type stops the kernel (PANIC) with nothing changed and
  *            never runs another task
+ *   orphan   syscall 9 from a task its process doesn't own any more (the process's slot holds
+ *            something else, or the process has another task) stops the kernel the same way,
+ *            before ending anything
  *   revoke   one revocation of the child's allocations fails during process_terminate (each in
  *            turn): no allocation is left once the page directory is gone
  *   discard  a launch whose argument copy runs out of memory, with one revocation of the copies
@@ -30,6 +33,7 @@
 #include "config.h"
 #include "status.h"
 #include "memory/memory.h"
+#include "string/string.h"
 #include "memory/paging/paging.h"
 #include "fs/file.h"
 #include "task/task.h"
@@ -54,6 +58,8 @@ static struct command_argument args[3];
 static struct process *stop_child;
 static struct host_snapshot stop_before;
 static struct process stop_copy;
+// The PANIC message a stop case expects, if it checks one.
+static const char *stop_message;
 static int unchanged(const char *what, struct process *child, const struct host_snapshot *before, const struct process *copy);
 
 void __real_PANIC(const char *msg, const char *file, int line);
@@ -61,6 +67,11 @@ void __wrap_PANIC(const char *msg, const char *file, int line)
 {
     printf("PANIC: %s\n", msg);
     int bad = stop_child && unchanged("stop: at the PANIC", stop_child, &stop_before, &stop_copy);
+    if (stop_message && strncmp(msg, stop_message, 100))
+    {
+        printf("stop: PANIC message is not \"%s\"\n", stop_message);
+        bad = 1;
+    }
     fflush(0);
     _exit(bad ? 1 : 3);
 }
@@ -281,6 +292,36 @@ static int stop_case(int elf)
     return 1;
 }
 
+// variant 0: the child's id names an empty slot; 1: the running task is a copy of the child's
+// task, so the child points to another task.
+static int orphan_case(int elf, int variant)
+{
+    static struct task stale;
+    struct process *child = setup(elf);
+    if (variant == 0)
+    {
+        child->id = RORTHOX_MAX_PROCESSES - 1;
+    }
+    else
+    {
+        memcpy(&stale, child->task, sizeof(stale));
+        current_task = &stale;
+    }
+    host_snapshot_take(&stop_before, message, sizeof(message));
+    memcpy(&stop_copy, child, sizeof(stop_copy));
+    stop_child = child;
+    stop_message = "exit: Invalid exiting task";
+    host_task_return_armed = 1;
+    if (!setjmp(host_task_return_jump))
+    {
+        isr80h_command9_exit(0);
+        printf("orphan (%s) %d: syscall 9 returned\n", kind(elf), variant);
+        return 1;
+    }
+    printf("orphan (%s) %d: another task runs\n", kind(elf), variant);
+    return 1;
+}
+
 static int revoke_case(int elf, int n)
 {
     char what[80];
@@ -390,6 +431,8 @@ int main(int argc, char **argv)
         run(fault, elf, 0, 0, "fault");
         run(exit_, elf, 0, 0, "exit");
         run(stop, elf, 0, 3, "stop");
+        run(orphan_case, elf, 0, 3, "orphan");
+        run(orphan_case, elf, 1, 3, "orphan");
         reached = 0;
         for (int n = 1; n <= 16; n++) run(revoke_case, elf, n, 0, "revoke");
         if (reached < 4)
