@@ -3,12 +3,13 @@
 frame <gdb socket> <kernel.map> <results file>
     QEMU waits at reset. Break at the first task_return (the shell's first start), then for each test
     pattern write it into the saved registers.flags (with distinct values in the other fields),
-    single-step the real task_return up to its iretd and check the frame it built:
+    run the real task_return from its entry to a breakpoint on its iretd and check the frame it built:
         EFLAGS = (saved & 0x00250dd5) | 0x202
     (CF PF AF ZF SF TF DF OF RF AC ID kept, IF and bit 1 set, IOPL, NT, VM, VIF, VIP and the
     reserved bits clear), EIP/CS/ESP/SS and the general registers from the struct, and DS..GS
     loaded with SS. The iretd is never executed: after each pattern the registers, the stack and
     the struct are put back, and the debugger detaches at task_return so the boot goes on as usual.
+    (No single steps: under KVM a step after the debugger moved eip back would run freely.)
 
 entry <gdb socket> <kernel.map> <results file> <flagstest.elf>
     Attached after flagstest got its key: wait until it spins in wait_for_debugger, release it, then
@@ -39,6 +40,8 @@ def frame_mode(sock, map_path, result_path):
     config = read_config("build/config/rorthox-config.h", "build/config/rorthox-config.inc")
     symbols, _ = read_map(map_path)
     task_return = symbols["task_return"]
+    # task_return ends with its iretd, right before restore_general_purpose_registers.
+    end = symbols["restore_general_purpose_registers"]
 
     r = Rsp(sock)
     r.add_breakpoint(task_return)
@@ -48,6 +51,13 @@ def frame_mode(sock, map_path, result_path):
     res.add("at_task_return", ok, "stopped at %#x" % eip)
     if not ok:
         raise SystemExit(1)
+    code = r.read(task_return, end - task_return) if task_return < end <= task_return + 256 else b""
+    iretd = task_return + len(code) - 1
+    ok = code.count(b"\xcf") == 1 and code.endswith(b"\xcf")
+    res.add("iretd_found", ok, "task_return %#x..%#x: %s" % (task_return, end, code.hex()))
+    if not ok:
+        raise SystemExit(1)
+    r.add_breakpoint(iretd)
 
     entry = r.regs()
     arg = r.read32(entry["esp"] + 4)
@@ -59,7 +69,7 @@ def frame_mode(sock, map_path, result_path):
           (arg, original["ip"], original["cs"], original["flags"], original["esp"], original["ss"]), flush=True)
     res.add("first_task_flags_zero", original["flags"] == 0, "saved flags %#x" % original["flags"])
 
-    failures = {"frame_flags": [], "frame_fields": [], "frame_registers": [], "frame_segments": [], "reached_iretd": []}
+    failures = {"frame_flags": [], "frame_fields": [], "frame_registers": [], "frame_segments": [], "stopped_at_iretd": []}
     for k, pattern in enumerate(PATTERNS):
         values = dict(original)
         values.update({"edi": 0x11110000 + k, "esi": 0x22220000 + k, "ebp": 0x33330000 + k,
@@ -69,13 +79,15 @@ def frame_mode(sock, map_path, result_path):
         r.write(arg, struct.pack("<12I", *[values[f] for f in FIELDS]))
         r.set_regs(entry)
 
-        for _ in range(200):
-            if r.read(r.reg("eip"), 1) == b"\xcf":    # iretd
-                break
-            r.step()
-        else:
-            failures["reached_iretd"].append("pattern %#010x: no iretd within 200 steps" % pattern)
-            continue
+        try:
+            eip = r.cont(10)
+        except RspError as e:
+            eip = None
+            print("  pattern %#010x: %s" % (pattern, e), flush=True)
+        if eip != iretd:
+            failures["stopped_at_iretd"].append("pattern %#010x: stopped at %s, iretd at %#x" %
+                                                (pattern, "nothing" if eip is None else "%#x" % eip, iretd))
+            break
 
         now = r.regs()
         ip, cs, flags, esp, ss = struct.unpack("<5I", r.read(now["esp"], 20))
@@ -103,6 +115,7 @@ def frame_mode(sock, map_path, result_path):
     r.write(arg, saved)
     r.write(stack_lo, stack)
     r.set_regs(entry)
+    r.remove_breakpoint(iretd)
     if [r.reg(n) for n in REGS] != [entry[n] for n in REGS] or r.read(arg, 48) != saved:
         raise SystemExit("could not put task_return's entry state back")
     r.detach()

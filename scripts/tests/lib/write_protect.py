@@ -155,8 +155,9 @@ def wp_mode(sock, map_path, shell_path, result_path, tag):
         value = struct.unpack("<I", before)[0] ^ 0xFFFFFFFF
         r.set_reg("eax", value)
         r.write(handler, b"\xa3" + struct.pack("<I", dest))
-        stops = {stub14: "int14", symbols["interrupt_handler"]: "interrupt_handler",
-                 symbols["PANIC"]: "PANIC", symbols["PAUSE"]: "PAUSE", after: "after the store"}
+        # Four hardware breakpoints at most (KVM): interrupt_handler takes the place of the #PF stub
+        # and the instruction after the store once the stub is reached.
+        stops = {stub14: "int14", after: "after the store", symbols["PANIC"]: "PANIC", symbols["PAUSE"]: "PAUSE"}
         for addr in stops:
             r.add_breakpoint(addr)
 
@@ -175,6 +176,10 @@ def wp_mode(sock, map_path, shell_path, result_path, tag):
                 "error %#x eip %#x cs %#x (want 0x3 %#x %#x)" % (frame[0], frame[1], frame[2], handler, kernel_cs))
         RES.add("pf_cr2", cr2 == dest, "cr2 %#x, dest %#x" % (cr2, dest))
 
+        for addr in (stub14, after):
+            r.remove_breakpoint(addr)
+        r.add_breakpoint(symbols["interrupt_handler"])
+        stops[symbols["interrupt_handler"]] = "interrupt_handler"
         esp = r.reg("esp")
         eip = run_to(r, 10)
         if eip == symbols["interrupt_handler"]:

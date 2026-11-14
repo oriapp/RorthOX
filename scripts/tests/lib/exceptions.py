@@ -25,8 +25,9 @@ early <socket> <map> <results> [nested]
     exception stub, PANIC("Kernel exception"), PAUSE, CR3 untouched. "nested": also put a ud2 at
     PANIC's first instruction; the second fault must go straight to PAUSE.
 nmi <socket> <map> <results>
-    The kernel is halted after a panic. Inject an NMI: it must enter the NMI stub and go straight
-    back to PAUSE, with no other exception and no PANIC.
+    The kernel is halted after a panic. Inject an NMI: it must enter the NMI stub, reach
+    interrupt_handler with vector 2 once and go straight back to PAUSE, with no other exception
+    (it would reach interrupt_handler with its own vector) and no PANIC.
 kpf <socket> <map> <results>
     The shell is idle in its getkey syscall. Break at isr80h_handler, clear the present bit of the
     PTE for KPF_ADDRESS in the shell's directory and put "mov eax, [KPF_ADDRESS]" at
@@ -522,6 +523,8 @@ def early_mode(sock, map_path, result_path, nested=None):
             bail()
 
         if nested:
+            # Not a breakpoint any more once it is a ud2: the second #UD is caught at the stub.
+            r.remove_breakpoint(panic)
             r.write(panic, b"\x0f\x0b")
             eip = run_to(r, None, 10)
             frame = struct.unpack("<3I", r.read(r.reg("esp"), 12))
@@ -546,23 +549,36 @@ def early_mode(sock, map_path, result_path, nested=None):
 def nmi_mode(sock, map_path, result_path):
     setup(map_path, result_path)
     pause = SYMBOLS["PAUSE"]
+    handler = SYMBOLS["interrupt_handler"]
     try:
         r = connect(sock)
         eip = r.reg("eip")
         RES.add("halted_before_nmi", pause <= eip < pause + 8, "eip %#x, PAUSE at %#x" % (eip, pause))
-        others = [stub(v) for v in range(32) if v != 2]
-        for addr in [stub(2), pause, SYMBOLS["PANIC"]] + others:
+        # Four hardware breakpoints at most (KVM). Any other exception also reaches
+        # interrupt_handler, with its own vector.
+        names = {stub(2): "int2", handler: "interrupt_handler", SYMBOLS["PANIC"]: "PANIC", pause: "PAUSE"}
+        for addr in names:
             r.add_breakpoint(addr)
         r.monitor("nmi")
         eip = run_to(r, None, 10)
         frame = struct.unpack("<3I", r.read(r.reg("esp"), 12))
         RES.add("nmi_stub", eip == stub(2) and pause <= frame[0] < pause + 8 and
                 frame[1] == CONFIG["KERNEL_CODE_SELECTOR"],
-                "stopped at %s, frame %s" % (where(eip), ["%#x" % w for w in frame]))
+                "stopped at %s, frame %s" % (names.get(eip, where(eip)), ["%#x" % w for w in frame]))
         if eip != stub(2):
             bail()
+        esp = r.reg("esp")
         eip = run_to(r, None, 10)
-        RES.add("nmi_straight_to_pause", eip == pause, "stopped at %s" % where(eip))
+        if eip == handler:
+            vector, f, _, words = handler_frame(r)
+            RES.add("nmi_handler_vector", vector == 2 and f == esp - 36 and words[9] == frame[0],
+                    "vector %d frame %#x (want %#x) ip %#x" % (vector, f, esp - 36, words[9]))
+            eip = run_to(r, None, 10)
+        else:
+            RES.add("nmi_handler_vector", False, "interrupt_handler not reached, stopped at %s" %
+                    names.get(eip, where(eip)))
+        RES.add("nmi_straight_to_pause", eip == pause, "stopped at %s%s" %
+                (names.get(eip, where(eip)), " again" if eip in (stub(2), handler) else ""))
         r.detach()
     except (RspError, OSError) as e:
         fail_session(e)

@@ -6,8 +6,8 @@
 # QEMU starts stopped with its gdbstub on a Unix socket, on a copy of bin/os.bin with
 # programs/flagstest added (bin/os.bin itself must not change).
 # 1. scripts/tests/lib/task_flags.py frame: at the first task_return, writes 36 saved-flags
-#    patterns into the task's registers one after the other, runs the real task_return up to its
-#    iretd each time and checks the frame it built: EFLAGS = (saved & 0x00250dd5) | 0x202, and the
+#    patterns into the task's registers one after the other, runs the real task_return to a
+#    breakpoint on its iretd each time and checks the frame it built: EFLAGS = (saved & 0x00250dd5) | 0x202, and the
 #    other fields and registers from the saved state. Then it rewinds and lets the boot go on.
 # 2. In the shell, flagtest.elf (flagstest.elf copied under an 8.3 name: the FAT16 driver has no
 #    long names) prints "flagstest: armed" and waits for a key, then spins until task_flags.py
@@ -81,7 +81,8 @@ e="$OUT/entry-result.txt"
 check "frame session finished without errors"             "$OUT/frame-status.txt" "exit=0" line
 check "stopped at the first task_return"                   "$f" "PASS at_task_return" line
 check "first task starts with saved flags 0"               "$f" "PASS first_task_flags_zero" line
-check "task_return reached its iretd for every pattern"    "$f" "PASS reached_iretd" line
+check "iretd found at the end of task_return"              "$f" "PASS iretd_found" line
+check "task_return stopped at its iretd for every pattern" "$f" "PASS stopped_at_iretd" line
 check "iret EFLAGS = (saved & 0x00250dd5) | 0x202"         "$f" "PASS frame_flags" line
 check "iret EIP/CS/ESP/SS from the saved registers"        "$f" "PASS frame_fields" line
 check "general registers from the saved registers"         "$f" "PASS frame_registers" line

@@ -204,6 +204,7 @@ run_kpf() {
     check "nmi: debugger session finished without errors"        "$D/nmi-status.txt" "exit=0" line
     check "nmi: halted before the NMI"                           "$n" "PASS halted_before_nmi" line
     check "nmi: NMI entered its stub from the halt loop"         "$n" "PASS nmi_stub" line
+    check "nmi: interrupt_handler got vector 2 and the frame"    "$n" "PASS nmi_handler_vector" line
     check "nmi: went straight back to PAUSE, no other exception" "$n" "PASS nmi_straight_to_pause" line
     check "nmi: CPU halted again"                                "$D/halt-after-nmi.txt" "halted" line
     check "nmi: interrupts still off"                            "$D/halt-after-nmi.txt" "interrupts off" line

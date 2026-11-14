@@ -73,9 +73,10 @@ def main():
         if not segment:
             raise RspError("missing segment cache: " + name)
         _, base, limit, attr = (int(x, 16) for x in segment.groups())
-        # QEMU puts the CPU-set descriptor accessed bit at bit 8 of this word.
+        # Compare G, D/B, L, AVL, P, DPL, S and the type without its accessed bit: the CPU may set
+        # that bit, and QEMU under KVM shows no limit[19:16] here (the limit column is checked).
         require("join_" + name + "_flat", base == 0 and limit == 0xFFFFFFFF
-                and attr & ~0x100 == (0xCF9A00 if code else 0xCF9200))
+                and attr & 0x00F0FE00 == (0x00C09A00 if code else 0x00C09200))
     require("join_stack", regs["esp"] == top and regs["ebp"] == top)
     require("join_if0_pg0", not regs["eflags"] & EFLAGS_IF and not cr0 & 0x80000000)
 
