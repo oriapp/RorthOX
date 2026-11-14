@@ -84,6 +84,11 @@ def lint(text):
         for name, job in parsed.items():
             require(isinstance(job, dict) and isinstance(job.get('steps'), list),
                     'invalid workflow steps')
+            if name == 'result':
+                require('continue-on-error' not in job and
+                        all('continue-on-error' not in step for step in job['steps']
+                            if isinstance(step, dict) and step.get('name') == 'Check every job'),
+                        'aggregate must not mask failure')
             if name in ('build', 'test', 'image-prep'):
                 require('continue-on-error' not in job, 'required job must not mask failure')
                 require(all('continue-on-error' not in step for step in job['steps'] if isinstance(step, dict)),
@@ -133,6 +138,9 @@ def lint(text):
             'needs: [image-prep, build]' in jobs['test'] and
             re.search(r'^      fail-fast: false[ \t]*$', jobs['test'], re.M) and 'shard: [1, 2, 3, 4]' in jobs['test'],
             'required jobs must consume the image and four independent shards')
+    require(not re.search(r'^    continue-on-error:', jobs['result'], re.M) and
+            not re.search(r'^        continue-on-error:', jobs['result'].split('      - name: Check every job', 1)[-1], re.M),
+            'aggregate must not mask failure')
     require('needs: [build, test]' in jobs['result'] and re.search(r'^    if: always\(\)$', jobs['result'], re.M)
             and 'scripts/ci-result.py' in jobs['result'], 'aggregate must run after failure')
     require('shell: bash # Fail the step when prepare fails' in jobs['image-prep'],
@@ -148,8 +156,11 @@ def lint(text):
                 './configure.sh' not in body, f'{name}: legacy toolchain path')
     require('    continue-on-error:' not in jobs['image-prep'],
             'image preparation must be required')
-    require(not any(re.search(r'(?:secrets\.|github\.token\b)', body, re.I)
-                    for name, body in jobs.items() if name != 'image'),
+    # Context references must not put credentials in the workflow or read-only jobs.
+    # github.ref and other non-secret fields are allowed; whole-context exports are not.
+    outside = text.split('jobs:', 1)[0] + ''.join(body for name, body in jobs.items() if name != 'image')
+    require(not re.search(r'\bsecrets\b|\bgithub\s*\[|\bgithub\.token\b|'
+                          r'\btoJSON\s*\(\s*github\b', outside, re.I),
             'credentials outside publication')
     require('retention-days: 1' in jobs['image-prep'], 'candidate archive retention too long')
     require(text.count('secrets.') == 1 and 'GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}' in jobs['image'] and
@@ -160,7 +171,7 @@ def lint(text):
             jobs['image'].index('docker logout ghcr.io') and
             'docker run' not in jobs['image'][jobs['image'].index('docker logout ghcr.io'):],
             'publication must validate before login and always log out')
-    require('needs: [image-prep, build, test]' in jobs['image'] and
+    require(re.search(r'^    needs: \[image-prep, build, test\]$', jobs['image'], re.M) and
             'cancel-in-progress: false' in jobs['image'] and
             'group: image-${{ needs.image-prep.outputs.key }}' in jobs['image'],
             'publication must serialize on the input hash')

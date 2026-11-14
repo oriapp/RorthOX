@@ -44,6 +44,13 @@ def safe(value):
     return (set(value) == {'name', 'image', 'workspaceFolder', 'workspaceMount', 'remoteUser', 'containerEnv'}
             and set(value['containerEnv']) == {'RORTHOX_IN_IMAGE'})
 assert safe(item)
+assert {key: value for key, value in item.items() if key != 'image'} == {
+    'name': 'RorthOX build',
+    'workspaceFolder': '/work',
+    'workspaceMount': 'source=${localWorkspaceFolder},target=/work,type=bind',
+    'remoteUser': 'ubuntu',
+    'containerEnv': {'RORTHOX_IN_IMAGE': '1'},
+}
 for key in ('runArgs', 'privileged', 'devices', 'extensions', 'customizations', 'mounts'):
     assert not safe({**item, key: True}), key
 PY
@@ -98,7 +105,10 @@ for i in "${!expected[@]}"; do
     [ "${actual[i]}" = "${expected[i]}" ] || fail "docker argv[$i]: ${actual[i]}"
 done
 ( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/default-argv"; unset RORTHOX_IN_IMAGE RORTHOX_IMAGE_REF
-  bash ci/run.sh true )
+  bash ci/run.sh true ) 2> "$tmp/current-warning"
+if grep -q 'warning: checkout image inputs differ from ci/image.ref' "$tmp/current-warning"; then
+    fail 'current checkout warned about stale image inputs'
+fi
 mapfile -d '' -t default_args < "$tmp/default-argv"
 [ "${default_args[${#default_args[@]}-2]}" = "$ref" ] || fail 'default image differs from recorded digest'
 # Changing an image input must warn for the locally pinned digest, without blocking it.
