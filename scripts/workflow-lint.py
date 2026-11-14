@@ -436,7 +436,8 @@ def lint_nightly(text):
             trigger['workflow_dispatch'] is None and
             trigger['push'] == {'branches': ['features'], 'paths': [
                 '.github/workflows/nightly.yml', 'scripts/timing-refresh.py',
-                'scripts/tests/timing-refresh.sh', 'scripts/ci-nightly.py', 'scripts/ci-parity.py']},
+                'scripts/tests/timing-refresh.sh', 'scripts/ci-nightly.py', 'scripts/ci-parity.py',
+                'scripts/tcg_only.py']},
             'nightly triggers must be scoped')
     require(doc.get('concurrency', {}).get('group') ==
             "nightly-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}" and

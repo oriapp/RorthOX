@@ -4,6 +4,11 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 OUT=${RORTHOX_TEST_ROOT:-build/tests}/ci-nightly
 mkdir -p "$OUT"
+# The aggregate lists the tracked tests with git, so it needs a git checkout (a source archive has none).
+if ! git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+    echo "ci-nightly: skipped, not a git checkout"
+    exit 77
+fi
 python3 -B - "$PWD" "$OUT" <<'PY'
 import json
 import pathlib
