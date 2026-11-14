@@ -219,10 +219,11 @@ def lint(text):
         return bool(re.search(r'^          ' + re.escape(field) + r': ' + re.escape(value) + r'$', step, re.M))
 
     require(re.search(r'^    needs: \[image-prep, build, test\]$', kvm, re.M) and
-            re.search(r"^    if: always\(\) && github.event_name == 'push' && github.repository == 'oriapp/RorthOX' && needs.build.result == 'success'$", kvm, re.M) and
+            re.search(r"^    if: \$\{\{ \(!cancelled\(\)\) && github.event_name == 'push' && github.repository == 'oriapp/RorthOX' && needs.build.result == 'success' \}\}$", kvm, re.M) and
             'ci/image-job.sh receive' in image_step and 'ci/image-job.sh fetch' in image_step and
             step_field(image_step, 'IMAGE_MODE', '${{ needs.image-prep.outputs.mode }}') and
             step_field(test_step, 'RORTHOX_IMAGE_ID', '${{ steps.image-id.outputs.id }}') and
+            step_field(parity_step, 'RORTHOX_IMAGE_ID', '${{ steps.image-id.outputs.id }}') and
             step_field(extract_step, 'MANIFEST_SHA256', '${{ needs.build.outputs.manifest }}') and
             step_field(extract_step, 'RORTHOX_IMAGE_ID', '${{ steps.image-id.outputs.id }}') and
             step_field(test_step, 'MANIFEST_SHA256', '${{ needs.build.outputs.manifest }}') and
@@ -240,7 +241,11 @@ def lint(text):
             'if: always()' in download_step and
             'if: always()' in parity_step and
             'scripts/ci-parity.py build/tests/runs/tcg-shards build/tests/runs/kvm-1 build/tests/runs/kvm-2 build/tests/runs/kvm-3' in parity_step and
-            'cp -R "$RUNNER_TEMP/tcg-results/." build/tests/runs/tcg-shards/' in parity_step and
+            bool(re.search(r'^            source="\$RUNNER_TEMP/tcg-results/results-\$i/results\.json"$', parity_step, re.M)) and
+            bool(re.search(r'^              cp "\$source" "build/tests/runs/tcg-shards/results-\$i/results\.json"$', parity_step, re.M)) and
+            'for i in 1 2 3 4; do' in parity_step and
+            re.findall(r'^\s+cp\b[^\n]*', parity_step, re.M) ==
+            ['              cp "$source" "build/tests/runs/tcg-shards/results-$i/results.json"'] and
             bool(re.search(r'^          bash ci/kvm-diagnostics\.sh host \"\$before\" \"\$after\"$', host_step, re.M)) and
             'name: kvm-results' in kvm and
             re.search(r'^      - name: Upload KVM results\n        timeout-minutes: \d+\n        if: always\(\)$', kvm, re.M),
@@ -271,6 +276,7 @@ def lint(text):
         require(isinstance(parsed_image, dict) and isinstance(parsed_test, dict) and
                 parsed_image.get('env', {}).get('IMAGE_MODE') == '${{ needs.image-prep.outputs.mode }}' and
                 parsed_test.get('env', {}).get('RORTHOX_IMAGE_ID') == '${{ steps.image-id.outputs.id }}' and
+                parsed_parity.get('env', {}).get('RORTHOX_IMAGE_ID') == '${{ steps.image-id.outputs.id }}' and
                 parsed_extract.get('env', {}).get('MANIFEST_SHA256') == '${{ needs.build.outputs.manifest }}' and
                 parsed_extract.get('env', {}).get('RORTHOX_IMAGE_ID') == '${{ steps.image-id.outputs.id }}' and
                 parsed_test.get('env', {}).get('MANIFEST_SHA256') == '${{ needs.build.outputs.manifest }}' and

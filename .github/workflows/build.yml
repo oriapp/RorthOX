@@ -282,7 +282,7 @@ jobs:
   # This is diagnostic only. Its failures are visible in its logs and artifact, not in the required result.
   kvm:
     needs: [image-prep, build, test]
-    if: always() && github.event_name == 'push' && github.repository == 'oriapp/RorthOX' && needs.build.result == 'success'
+    if: ${{ (!cancelled()) && github.event_name == 'push' && github.repository == 'oriapp/RorthOX' && needs.build.result == 'success' }}
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -378,11 +378,17 @@ jobs:
       - name: Compare KVM and TCG results
         timeout-minutes: 2
         if: always()
+        env:
+          RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}
         run: |
           mkdir -p build/tests/runs/tcg-shards
-          if [ -d "$RUNNER_TEMP/tcg-results" ]; then
-            cp -R "$RUNNER_TEMP/tcg-results/." build/tests/runs/tcg-shards/
-          fi
+          for i in 1 2 3 4; do
+            source="$RUNNER_TEMP/tcg-results/results-$i/results.json"
+            if [ -f "$source" ]; then
+              mkdir -p "build/tests/runs/tcg-shards/results-$i"
+              cp "$source" "build/tests/runs/tcg-shards/results-$i/results.json"
+            fi
+          done
           status=0
           ./ci/run.sh python3 -B scripts/ci-parity.py build/tests/runs/tcg-shards build/tests/runs/kvm-1 build/tests/runs/kvm-2 build/tests/runs/kvm-3 build/tests/runs/parity-summary.md || status=1
           if [ -f build/tests/runs/parity-summary.md ]; then

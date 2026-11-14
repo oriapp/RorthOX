@@ -22,7 +22,7 @@ def load(path, accelerator):
 
         with open(path, encoding='utf-8') as stream:
             data = json.load(stream, object_pairs_hook=unique)
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, OverflowError, RecursionError) as error:
         raise Invalid(f'cannot read results: {path}: {error}') from error
     if not isinstance(data, dict) or data.get('accelerator') != accelerator:
         raise Invalid(f'invalid accelerator: {path}')
@@ -44,9 +44,16 @@ def load(path, accelerator):
     return found
 
 
-def escape(text):
-    """GitHub workflow-command data, bounded after escaping."""
-    return str(text).replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A').replace(':', '%3A')[:3500]
+def escape(text, property=False):
+    """Escape workflow-command data; property delimiters are not message delimiters."""
+    value = str(text).replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+    if property:
+        value = value.replace(':', '%3A').replace(',', '%2C')
+    return value[:3500]
+
+
+def markdown(text):
+    return ''.join(f'&#{ord(c)};' if c in '&|<>[]!`\\*_~#@\r\n' else c for c in text)
 
 
 def emit(message, bad=False):
@@ -76,11 +83,6 @@ def main(args):
                                    f'KVM {actual[0] if actual else "missing"}')
     # The runner has one result per test, not individual check IDs. Compare these
     # result sets, including skipped tests, and reject incomplete/duplicate reports.
-    if differences:
-        emit(f'KVM/TCG parity differs in {len(differences)} test/run pairs: ' +
-             '; '.join(differences[:12]) + ('; ...' if len(differences) > 12 else ''), True)
-    else:
-        emit(f'KVM/TCG parity OK: {len(tcg)} test results, three full KVM runs vs four TCG shards')
     ratios = []
     for name in tcg:
         base = tcg[name][1]
@@ -96,23 +98,28 @@ def main(args):
              '', 'Slowest KVM/TCG ratios (per-test seconds):', '', '| Test | KVM run | KVM | TCG | Ratio |',
              '| --- | ---: | ---: | ---: | ---: |']
     for ratio, name, number, kvm, base in ratios[:10]:
-        safe = ''.join(f'&#{ord(c)};' if c in '&|<>[]!`\\*_~#@\r\n' else c for c in name)
+        safe = markdown(name)
         lines.append(f'| {safe[:160]} | {number} | {kvm:.1f} | {base:.1f} | {ratio:.2f} |')
     if differences:
         lines += ['', 'Differing tests (first 12):']
-        lines += ['- ' + escape(item).replace('|', '&#124;') for item in differences[:12]]
+        lines += ['- ' + markdown(item) for item in differences[:12]]
     summary = '\n'.join(lines) + '\n'
-    print(summary)
     if len(args) == 5:
         with open(args[4], 'w', encoding='utf-8') as out:
             out.write(summary[:6000])
+    print(summary)
+    if differences:
+        emit(f'KVM/TCG parity differs in {len(differences)} test/run pairs: ' +
+             '; '.join(differences[:12]) + ('; ...' if len(differences) > 12 else ''), True)
+    else:
+        emit(f'KVM/TCG parity OK: {len(tcg)} test results, three full KVM runs vs four TCG shards')
     return int(bool(differences))
 
 
 if __name__ == '__main__':
     try:
         code = main(sys.argv[1:])
-    except Invalid as error:
-        emit(f'KVM/TCG parity error: {error}', True)
+    except (Invalid, OSError, UnicodeError, ValueError, OverflowError, RecursionError) as error:
+        emit(f'KVM/TCG parity error: {ascii(str(error))}', True)
         code = 1
     sys.exit(code)
