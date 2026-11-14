@@ -498,7 +498,11 @@ failed tests' output and logs within its limits, and a failing test fails only i
 shard's reports and annotations.
 `debugger-step` checks the tests' own gdbstub helper against a fake stub, without QEMU: QEMU can report a single
 step as finished without having run the instruction, so stepping off a breakpoint is retried a few times and then
-fails instead of hitting the same breakpoint twice.
+fails instead of hitting the same breakpoint twice. A second fake follows what QEMU 8.2's source does under KVM (not
+yet checked on a KVM host): registers and memory come from a copy that only a full register read refreshes, there
+are at most 4 hardware breakpoints, and a single step after the debugger moved `eip` runs on freely. The helper
+reads all registers once after every stop, refuses a fifth breakpoint and such a step, and steps off a breakpoint
+with interrupts masked for that one step.
 `screen-waits` checks the tests' screen waits and cleanup without QEMU: on scripted screens (a typed command's echo,
 the step before's result, a half printed row, a scroll half done) the old ways to wait (a substring, a count of rows)
 accept too early, the new ones wait for the step's own rows on one screen and give up when they never come; and a

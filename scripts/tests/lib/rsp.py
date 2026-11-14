@@ -6,6 +6,12 @@ commands, then detaches so the guest runs on. Every operation has a timeout, and
 unexpected (an error reply, an unsupported packet, a stop that isn't a breakpoint, QEMU going away)
 raises RspError, so a test can't pass by accident.
 
+The client works the same with TCG and KVM. With KVM, QEMU's "p"/"P"/"m"/"M" use a copy of the CPU
+state that only "g" brings up to date: after every stop the first register or memory access sends
+one "g". KVM has 4 hardware breakpoints, so a fifth one is refused here too. A single step after the
+debugger moved eip runs freely under KVM, so it is refused. Stepping off a breakpoint with IF set
+masks IF for that one step, so the step can't go into an interrupt handler.
+
 Only the Python standard library is used.
 """
 
@@ -20,6 +26,13 @@ REGS = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi",
 
 EFLAGS_DF = 0x400
 EFLAGS_IF = 0x200
+
+MAX_BREAKPOINTS = 4     # debug registers DR0..DR3: KVM refuses a fifth hardware breakpoint
+
+# Stepping off a breakpoint with IF masked is wrong for instructions that read or change IF or that
+# run an interrupt: pushf popf iretd sti cli int3 int n into icebp hlt pop ss (and mov ss, 0x8E /2).
+IF_OPCODES = {0x9C, 0x9D, 0xCF, 0xFB, 0xFA, 0xCC, 0xCD, 0xCE, 0xF1, 0xF4, 0x17}
+PREFIXES = {0x26, 0x2E, 0x36, 0x3E, 0x64, 0x65, 0x66, 0x67, 0xF0, 0xF2, 0xF3}
 
 
 class RspError(Exception):
@@ -43,6 +56,9 @@ class Rsp:
         self.buf = b""
         self.op_timeout = 20.0
         self.breakpoints = set()
+        self.synced = False         # "g" was sent since the guest last ran
+        self.stop_eip = None        # eip at the last stop, from that "g"
+        self.eip_moved = False      # the debugger set eip to something else since the last stop
         # QEMU stops the guest when a debugger connects; "?" returns the stop reason.
         self.stop_reply = self.request("?")
 
@@ -65,10 +81,20 @@ class Rsp:
         self.buf = self.buf[1:]
         return b
 
+    def _stopped(self):
+        """The guest runs or stops: the next register or memory access syncs again."""
+        self.synced = False
+        self.stop_eip = None
+        self.eip_moved = False
+
     def _send_raw(self, data):
+        if data == b"\x03":
+            self._stopped()
         self.sock.sendall(data)
 
     def _send_packet(self, payload):
+        if payload[:1] in ("c", "s", "?", "D"):
+            self._stopped()
         body = payload.encode("latin-1")
         frame = b"$" + body + b"#" + ("%02x" % (sum(body) & 0xFF)).encode()
         deadline = time.monotonic() + self.op_timeout
@@ -131,13 +157,29 @@ class Rsp:
 
     # --- registers and memory --------------------------------------------------------------
 
+    def _sync(self):
+        """One "g" after each stop: with KVM, QEMU reads the CPU state only for "g" ("p", "P", "m"
+        and "M" use its last copy, a "P" before it would be lost and "m" would use an old CR3)."""
+        if self.synced:
+            return
+        reply = self.request("g")
+        if len(reply) < 8 * len(REGS) or reply.startswith("E"):
+            raise RspError("reading the registers failed: %r" % reply[:40])
+        self.synced = True
+        if self.stop_eip is None:
+            self.stop_eip = struct.unpack("<I", bytes.fromhex(reply[64:72]))[0]
+
     def reg(self, name):
+        self._sync()
         reply = self.request("p%x" % REGS.index(name))
         if len(reply) < 8 or reply.startswith("E"):
             raise RspError("reading %s failed: %r" % (name, reply))
         return struct.unpack("<I", bytes.fromhex(reply[:8]))[0]
 
     def set_reg(self, name, value):
+        self._sync()
+        if name == "eip":
+            self.eip_moved = value & 0xFFFFFFFF != self.stop_eip
         self.expect_ok("P%x=%s" % (REGS.index(name), struct.pack("<I", value & 0xFFFFFFFF).hex()))
 
     def regs(self):
@@ -149,6 +191,7 @@ class Rsp:
                 self.set_reg(name, values[name])
 
     def read(self, addr, length):
+        self._sync()
         data = bytearray()
         while length > 0:
             n = min(length, 2048)
@@ -161,6 +204,7 @@ class Rsp:
         return bytes(data)
 
     def write(self, addr, data):
+        self._sync()
         while data:
             chunk = data[:1024]
             self.expect_ok("M%x,%x:%s" % (addr, len(chunk), chunk.hex()))
@@ -176,6 +220,10 @@ class Rsp:
     # --- execution -------------------------------------------------------------------------
 
     def add_breakpoint(self, addr):
+        if len(self.breakpoints) >= MAX_BREAKPOINTS:
+            raise RspError("hardware breakpoint at %#x: %d are installed already (%s), KVM has %d" %
+                           (addr, len(self.breakpoints), " ".join("%#x" % a for a in sorted(self.breakpoints)),
+                            MAX_BREAKPOINTS))
         reply = self.request("Z1,%x,1" % addr)
         if reply != "OK":
             raise RspError("hardware breakpoint at %#x refused: %r" % (addr, reply))
@@ -192,6 +240,10 @@ class Rsp:
         return reply
 
     def step(self):
+        # KVM arms the single step for the eip it had, before QEMU gives it the debugger's eip:
+        # the step would run freely from the new one.
+        if self.eip_moved:
+            raise RspError("single step after the debugger moved eip from %#x" % self.stop_eip)
         return self._check_stop(self.request("s"))
 
     # QEMU (seen with 8.2.2) can end a single step before the instruction ran and still report it
@@ -207,6 +259,33 @@ class Rsp:
         raise RspError("stepping off the breakpoint at %#x: eip %#x before, %#x after %d steps" %
                        (eip, eip, now, self.STEP_OFF_TRIES))
 
+    def _opcode(self, eip):
+        """(opcode, the byte after it) at eip, after the prefixes."""
+        for i in range(14):
+            op = self.read(eip + i, 1)[0]
+            if op not in PREFIXES:
+                return op, self.read(eip + i + 1, 1)[0]
+        raise RspError("only prefixes at %#x" % eip)
+
+    def _step_off_masked(self, eip):
+        """Step off a breakpoint with IF clear for the step, so an interrupt that is pending (a key
+        sent while the guest was stopped) is not taken inside the step. Under KVM it would be,
+        with the step's TF in the saved flags."""
+        flags = self.reg("eflags")
+        if not flags & EFLAGS_IF:
+            self._step_off(eip)
+            return
+        op, modrm = self._opcode(eip)
+        if op in IF_OPCODES or (op == 0x8E and (modrm >> 3) & 7 == 2):
+            raise RspError("can't step off the breakpoint at %#x with IF set: opcode %#04x uses IF or "
+                           "delays interrupts" % (eip, op))
+        cs = self.reg("cs")
+        self.set_reg("eflags", flags & ~EFLAGS_IF)
+        self._step_off(eip)
+        if self.reg("cs") != cs:
+            raise RspError("stepping off the breakpoint at %#x went into an exception handler with IF masked" % eip)
+        self.set_reg("eflags", self.reg("eflags") | EFLAGS_IF)
+
     def cont(self, timeout, on_running=None):
         """Continue until a breakpoint hits; returns the new eip. on_running() is called after the
         continue packet is acknowledged; the guest may not run yet at that point."""
@@ -214,7 +293,7 @@ class Rsp:
         if eip in self.breakpoints:
             # QEMU would stop again on the same instruction: step past it first.
             self.remove_breakpoint(eip)
-            self._step_off(eip)
+            self._step_off_masked(eip)
             self.add_breakpoint(eip)
         self._send_packet("c")
         if on_running:
@@ -237,6 +316,9 @@ class Rsp:
         while True:
             reply = self._read_packet(self.op_timeout)
             if reply == "OK":
+                # "info registers" makes QEMU read the CPU state, like "g".
+                if command.split() == ["info", "registers"]:
+                    self.synced = True
                 return "".join(out)
             if reply.startswith("O") and reply != "OK":
                 out.append(bytes.fromhex(reply[1:]).decode("latin-1"))

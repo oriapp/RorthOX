@@ -6,6 +6,12 @@
 # only, no QEMU: scripts/tests/lib/rsp_step.py runs Rsp.cont() against a fake gdbstub where the
 # first step stalls (one stop per breakpoint, both breakpoints back in place), where steps always
 # move, and where no step moves (cont() fails within a few steps instead of continuing).
+# The same client has to work under KVM, where QEMU's gdbstub behaves differently: registers and
+# memory are read from a copy only "g" refreshes (a register write before it is lost, memory goes
+# through an old CR3), there are 4 hardware breakpoints, and a step after the debugger moved eip
+# runs freely. A fake with those rules checks that the client syncs after every kind of stop,
+# refuses a fifth breakpoint and a step after an eip change, and steps off a breakpoint with IF
+# masked (refusing the instructions where that would change what runs).
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -17,7 +23,7 @@ mkdir -p "$OUT"
 RESULTS="$OUT/results.txt"
 : > "$RESULTS"
 
-echo "debugger-step: Rsp.cont() against a fake gdbstub"
+echo "debugger-step: the gdbstub client against a fake gdbstub"
 if timeout 60 python3 -B scripts/tests/lib/rsp_step.py "$RESULTS" > "$OUT/check.log" 2>&1; then
     status=0
 else
@@ -34,6 +40,21 @@ check "first step stalls: breakpoint put back before continuing" "$RESULTS" "PAS
 check "no step moves: cont() fails naming the breakpoint"       "$RESULTS" "PASS stuck_fails" line
 check "no step moves: gives up within a few steps"              "$RESULTS" "PASS stuck_bounded" line
 check "no step moves: the guest is not continued"               "$RESULTS" "PASS stuck_not_continued" line
+check "KVM copy: each stop's eip is read after a sync"           "$RESULTS" "PASS kvm_stale_read" line
+check "KVM copy: a register write at a stop reaches the guest"   "$RESULTS" "PASS kvm_lost_write" line
+check "KVM copy: memory goes through the stop's own CR3"         "$RESULTS" "PASS kvm_memory_cr3" line
+check "KVM copy: a test's own continue and break-in sync too"    "$RESULTS" "PASS kvm_raw_stop" line
+check "KVM copy: only info registers counts as a sync"          "$RESULTS" "PASS kvm_monitor" line
+check "a fifth hardware breakpoint is refused before the stub"   "$RESULTS" "PASS bp_limit_fifth_refused" line
+check "a removed breakpoint frees its slot, step-off with four"  "$RESULTS" "PASS bp_limit_slot_reused" line
+check "the KVM fake refuses a fifth breakpoint itself"           "$RESULTS" "PASS kvm_bp_limit" line
+check "no single step after the debugger moved eip"             "$RESULTS" "PASS moved_eip_step_refused" line
+check "continuing from a moved eip still works"                 "$RESULTS" "PASS moved_eip_cont_runs" line
+check "eip moved back to the stop: stepping works again"         "$RESULTS" "PASS moved_back_steps" line
+check "IF set: the step off a breakpoint runs with IF clear"     "$RESULTS" "PASS if_masked_in_step" line
+check "IF set: IF is back when the guest continues"             "$RESULTS" "PASS if_restored" line
+check "IF set: sti/pushf/int/mov ss/popf are not stepped off"    "$RESULTS" "PASS if_opcodes_refused" line
+check "IF clear: a pushf is stepped off as usual"                "$RESULTS" "PASS if_clear_steps" line
 if [ "$failures" -ne 0 ]; then
     echo "debugger-step: $failures check(s) failed" >&2
     exit 1
