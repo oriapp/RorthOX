@@ -14,8 +14,17 @@ int main(int argc, char const *argv[])
         rorthox_terminal_readline(buf, sizeof(buf), true);
 
         print("\n");
-        
-        rorthox_system_run(buf);
+
+        int words = rorthox_command_word_count(buf);
+        if (words > RORTHOX_MAX_COMMAND_ARGUMENTS)
+        {
+            printf("Too many words (maximum %i).\n", RORTHOX_MAX_COMMAND_ARGUMENTS);
+            continue;
+        }
+        if (words > 0)
+        {
+            rorthox_system_run(buf);
+        }
     }
     return 0;
 }

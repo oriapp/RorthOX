@@ -43,7 +43,11 @@ void *rorthox_free(void *ptr);
 
 // Blocks until a byte or special key is available; keep the result in an int.
 int rorthox_getkeyblock();
+// Counts ASCII-space-separated words, stopping at RORTHOX_MAX_COMMAND_ARGUMENTS + 1.
+int rorthox_command_word_count(const char *command);
+// The caller owns the returned list; failure returns NULL, never a partial list.
 struct command_argument *rorthox_parse_command(const char *command, int max);
+void rorthox_free_command(struct command_argument *command);
 
 // Keeps the whole echoed line visible, including after the screen scrolls.
 #define RORTHOX_READLINE_ECHO_LIMIT 1023

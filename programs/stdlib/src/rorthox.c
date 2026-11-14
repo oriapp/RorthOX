@@ -1,11 +1,49 @@
 #include "rorthox.h"
 #include "string.h"
 
+void rorthox_free_command(struct command_argument *command)
+{
+    while (command)
+    {
+        struct command_argument *next = command->next;
+        rorthox_free(command);
+        command = next;
+    }
+}
+
+int rorthox_command_word_count(const char *command)
+{
+    int count = 0;
+    if (!command)
+    {
+        return 0;
+    }
+
+    while (*command)
+    {
+        if (*command == ' ')
+        {
+            command++;
+            continue;
+        }
+        if (++count > RORTHOX_MAX_COMMAND_ARGUMENTS)
+        {
+            return count;
+        }
+        while (*command && *command != ' ')
+        {
+            command++;
+        }
+    }
+    return count;
+}
+
 struct command_argument *rorthox_parse_command(const char *command, int max)
 {
     struct command_argument *root_command = 0;
     char scommand[1025];
-    if (max >= (int) sizeof(scommand))
+    if (!command || max >= (int) sizeof(scommand) ||
+        rorthox_command_word_count(command) > RORTHOX_MAX_COMMAND_ARGUMENTS)
     {
         return 0;
     }
@@ -33,7 +71,8 @@ struct command_argument *rorthox_parse_command(const char *command, int max)
         struct command_argument *new_command = rorthox_malloc(sizeof(struct command_argument));
         if (!new_command)
         {
-            break; // or goto out?
+            rorthox_free_command(root_command);
+            return 0;
         }
 
         strncpy(new_command->argument, token, sizeof(new_command->argument));
@@ -168,6 +207,11 @@ void rorthox_terminal_readline(char *out, int max, bool output_while_typing)
 
 int rorthox_system_run(const char *command)
 {
+    if (!command || rorthox_command_word_count(command) > RORTHOX_MAX_COMMAND_ARGUMENTS)
+    {
+        return -1;
+    }
+
     char buf[1024];
     strncpy(buf, command, sizeof(buf));
     struct command_argument *root_command_argument = rorthox_parse_command(buf, sizeof(buf));
@@ -176,5 +220,7 @@ int rorthox_system_run(const char *command)
         return -1;
     }
 
-    return rorthox_system(root_command_argument);
+    int res = rorthox_system(root_command_argument);
+    rorthox_free_command(root_command_argument);
+    return res;
 }

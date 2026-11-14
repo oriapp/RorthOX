@@ -65,7 +65,9 @@ Everything in this list is checked by `make test` or was run in QEMU.
   types digits right away as before, whatever state the BIOS or GRUB left the keyboard in. The driver keeps track of
   it: with it off, the keypad digits and the decimal point type nothing, while keypad `+ - * /` and Enter still work. The arrows, Home, End, Insert, Delete, Page Up and Page Down arrive as their own key codes,
   0x100-0x109 (`KEY_*` in `config.mk`), whatever the Num Lock state. Print Screen and Pause type nothing.
-- **Shell:** reads a line, splits it into words and runs the first word as a program (`blank.elf hello world`).
+- **Shell:** reads a line, splits it at spaces and runs the first word as a program (`blank.elf hello world`).
+  Commands may have up to 32 words, including the program name; longer commands print the limit and run nothing.
+  Command lists are freed after use; running out of memory while parsing runs nothing, not a partial command.
   While typing, Left/Right, Home/End, Backspace and Delete work anywhere in the line; Up, Down, Insert and the page
   keys are ignored. There are no built-in commands.
 - **Program lookup:** syscalls 6 and 7 (and so the shell) look a bare program name (no `/` or `:`) up in the
@@ -666,8 +668,8 @@ isolate every resource or protect against every kernel bug.
   against speculative-execution reads like Meltdown.
   The IDT gates and the TSS descriptor are DPL 0, except the syscall and the `int3`/`into` debugging traps, so a program
   can't raise an IRQ or another exception vector with `int`: it gets a #GP instead.
-- **Command length.** A command with more than 32 words (program name included) is refused. The shell doesn't print
-  errors, so it just shows a new prompt.
+- **Command length.** A command with more than 32 words (program name included) is refused. The shell prints the
+  maximum and returns to the prompt. Other command errors still produce no diagnostic.
 - **Resources.** There's no per-process memory limit: one program can take most of the kernel heap. Raw programs
   must be 1 byte to 1 MiB; ELF files get a kernel buffer as big as the file.
 - **Keyboard.** The per-process key queue holds 1024 unread keys; more are dropped. The keyboard LEDs aren't set,
