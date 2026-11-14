@@ -48,8 +48,8 @@ Everything in this list is checked by `make test` or was run in QEMU.
   can access its own zeroed page padding directly, though syscalls reject that padding. CR0.WP is on, so the kernel
   also faults when it writes to a read-only mapping, such as a program's read-only ELF pages. (Syscalls don't write
   through program mappings at all: their copies check the target's permissions first and refuse read-only memory.)
-  Page zero (0x0-0xFFF) is not mapped in any page directory. A program that touches it is ended as before; a NULL
-  access in the kernel is now a page fault that halts the kernel.
+  Page zero (0x0-0xFFF) is not mapped in any page directory. A program that touches it is ended as before; once
+  paging is on, a kernel access through a NULL pointer (to an offset below 4 KiB) is a page fault that halts the kernel.
 - **Tasks:** 12 process slots, a round-robin task switch on every timer tick, command-line arguments passed to
   `main(argc, argv)`.
 - **Sleeping:** a program can call `sleep(milliseconds)` (syscall 12). Only that program blocks: the scheduler skips
@@ -666,9 +666,9 @@ isolate every resource or protect against every kernel bug.
 - **Kernel memory protection is incomplete.** CR0.WP is on, but it only covers the mapping the kernel writes
   through: kernel identity aliases remain writable, even for physical backing of read-only ELF pages. There is no
   SMEP to stop kernel execution from user pages, no SMAP to stop kernel reads of them, and no NX. Kernel code is
-  writable too. Page zero is unmapped, so a kernel NULL access stops the kernel with a page fault, but a stray kernel
-  pointer into any other address is not caught. `malloc` returns
-  physical heap addresses; the layout is not hidden.
+  writable too. Page zero is unmapped, so a kernel NULL access stops the kernel with a page fault when it lands in the
+  first 4 KiB (a NULL struct pointer with a larger field offset, or any other stray kernel pointer, is not caught).
+  `malloc` returns physical heap addresses; the layout is not hidden.
   Kernel memory and other processes' memory stay mapped (supervisor-only) in every process, so nothing guards
   against speculative-execution reads like Meltdown.
   The IDT gates and the TSS descriptor are DPL 0, except the syscall and the `int3`/`into` debugging traps, so a program
