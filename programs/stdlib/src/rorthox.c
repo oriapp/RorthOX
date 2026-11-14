@@ -42,13 +42,16 @@ struct command_argument *rorthox_parse_command(const char *command, int max)
 {
     struct command_argument *root_command = 0;
     char scommand[1025];
-    if (!command || max >= (int) sizeof(scommand) ||
-        rorthox_command_word_count(command) > RORTHOX_MAX_COMMAND_ARGUMENTS)
+    if (!command || max >= (int) sizeof(scommand))
     {
         return 0;
     }
 
     strncpy(scommand, command, sizeof(scommand));
+    if (rorthox_command_word_count(scommand) > RORTHOX_MAX_COMMAND_ARGUMENTS)
+    {
+        return 0;
+    }
     char *token = strtok(scommand, " ");
     if (!token)
     {
@@ -207,13 +210,17 @@ void rorthox_terminal_readline(char *out, int max, bool output_while_typing)
 
 int rorthox_system_run(const char *command)
 {
-    if (!command || rorthox_command_word_count(command) > RORTHOX_MAX_COMMAND_ARGUMENTS)
+    if (!command)
     {
         return -1;
     }
 
     char buf[1024];
     strncpy(buf, command, sizeof(buf));
+    if (rorthox_command_word_count(buf) > RORTHOX_MAX_COMMAND_ARGUMENTS)
+    {
+        return -1;
+    }
     struct command_argument *root_command_argument = rorthox_parse_command(buf, sizeof(buf));
     if (!root_command_argument)
     {
