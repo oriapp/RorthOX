@@ -27,7 +27,9 @@ At the rendezvous, with the guest stopped, it checks:
                         saved there (task ids only go up, so a shell started again has a new one)
 Options: save=<file> writes the first task, its process and its task id; screen=<file> writes the VGA text
 screen as it is at the stop (the screen can't be halfway through a scroll there); memory=<hex address>,
-<hex bytes>,<file> writes those bytes of memory as they are at the stop (e.g. the VGA page with its colours).
+<hex bytes>,<file> writes those bytes of memory as they are at the stop (e.g. the VGA page with its colours);
+monitor=<file>,<command> writes what that QEMU monitor command prints at the stop (e.g. "info pic": no
+interrupt handler is halfway through there, so every EOI the kernel sends is out).
 Then it detaches and the guest runs on. Run it only while no other debugger is attached.
 """
 
@@ -164,6 +166,11 @@ def main():
             data = r.read(int(address, 16), int(length, 16))
             with open(path, "wb") as f:
                 f.write(data)
+        if "monitor" in args:
+            path, command = args["monitor"].split(",", 1)
+            text = r.monitor(command)
+            with open(path, "w") as f:
+                f.write(text)
         r.detach()
     except (RspError, OSError) as e:
         res.add("%s_session" % tag, False, str(e))

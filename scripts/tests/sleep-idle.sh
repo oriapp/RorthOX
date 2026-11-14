@@ -21,9 +21,12 @@
 # sti; hlt; cli; ret (fb f4 fa c3).
 # A stop can land while the CPU is not halted: in the IRQ stub or handler for a tick or key that
 # just ended the halt, in task_next's loop around the halt, or (first look) before the program's
-# sleep call. Such a sample is kept as busy-<n>.txt and the VM runs on and is sampled again, up
-# to SAMPLE_TRIES times. Every look must end in a halted sample, and the checks above (and the
-# stack pointer comparisons) use only that one.
+# sleep call. With KVM it can also land halted with a tick in service (isr=01): QEMU has
+# acknowledged the tick at the PIC for the halted CPU, but the CPU has not taken it yet. Such a
+# sample is kept as busy-<n>.txt and the VM runs on and is sampled again, up to SAMPLE_TRIES
+# times. Every look must end in a halted sample, and the checks above (and the stack pointer
+# comparisons) use only that one. An IRQ the kernel never acknowledges stays in service in
+# every sample.
 #
 # Env: BOOT_TIMEOUT=60   STEP_TIMEOUT=60   SAMPLE_TRIES=20
 
@@ -99,18 +102,18 @@ sample() {
     qemu_cmd "cont"
 }
 
-# snap <name>: sample into snap-<name>/ until the CPU is halted (HLT=1), at most
-# SAMPLE_TRIES times. A halted sample is final whatever else it shows (idle_ok judges it); the
-# only halt the kernel has is IRQ_ON_AND_PAUSE (and PANIC). After the last try the sample stays
-# as it is, so idle_ok fails it as not halted.
+# snap <name>: sample into snap-<name>/ until the CPU is halted (HLT=1) with nothing in service
+# at the master PIC (isr=00), at most SAMPLE_TRIES times. Such a sample is final whatever else it
+# shows (idle_ok judges it); the only halt the kernel has is IRQ_ON_AND_PAUSE (and PANIC). After
+# the last try the sample stays as it is, so idle_ok fails it (not halted, or an IRQ in service).
 snap() {
     local name="$1" d="$OUT/snap-$1" try
     rm -rf "$d"
     mkdir -p "$d"
     for ((try = 1; ; try++)); do
         sample "$d"
-        grep -q 'HLT=1' "$d/monitor.txt" && break
-        echo "  $name: sample $try not halted ($(grep -oE '(EIP|ESP|EFL)=[0-9a-f]*|CPL=[0-3]' "$d/monitor.txt" |
+        grep -q 'HLT=1' "$d/monitor.txt" && grep -qE '^pic0: .* isr=00 ' "$d/monitor.txt" && break
+        echo "  $name: sample $try not halted or IRQ in service ($(grep -o 'HLT=[01]' "$d/monitor.txt" | head -n 1) $(grep -oE '(EIP|ESP|EFL)=[0-9a-f]*|CPL=[0-3]' "$d/monitor.txt" |
             head -n 4 | tr '\n' ' ')$(grep -oE '^pic0: .* isr=[0-9a-f]*' "$d/monitor.txt" | grep -o 'isr=[0-9a-f]*'))"
         ((try < SAMPLE_TRIES)) || break
         mv "$d/monitor.txt" "$d/busy-$try.txt"

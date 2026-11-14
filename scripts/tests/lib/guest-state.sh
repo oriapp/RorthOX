@@ -9,7 +9,9 @@
 #                                  last task (at=last) with the expected number of tasks (tasks=1),
 #                                  check the task list, slots and keyboard owner, then let the guest
 #                                  run on. Writes "PASS/FAIL <tag>_..." lines to <results> and its
-#                                  output to <results>.log; returns 1 if a check failed.
+#                                  output to <results>.log; returns 1 if a check failed. Options
+#                                  that save state at the stop (screen=, memory=, monitor=): see
+#                                  guest_state.py.
 # Every wait is bounded (timeout=, default 20 s). Don't call it while another debugger (a test's own
 # python script) is attached to the same QEMU: one connection at a time. Keys must be sent after it
 # returns (QEMU drops key presses while the guest is stopped).
