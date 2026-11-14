@@ -503,6 +503,11 @@ shard or timings file runs nothing.
 headers and missing files. `ci-image` checks the minimal build context, digest and container launch boundary;
 `ci-image-job` checks archive integrity and publication order. `workflow` checks action pins, job permissions and
 triggers, plus the final job's handling of failed, missing and malformed shard reports, without QEMU.
+`select-tests` runs the CI test selector on throwaway git repositories, one row per rule: documentation only,
+tests (with the tests that run them), shared helpers, sources, deleted and renamed tests, type changes,
+symlinks, submodules, `.gitattributes`, odd file names, empty diffs, missing or rewritten history, pull request
+merge bases, `main` pushes and scheduled runs, each with the exact test list and output it must give. It also
+fails when a test in `scripts/tests/` runs another one that a change to that one wouldn't select.
 `reports` checks the reports with small scripts: they agree with the run, `junit.xml` parses back, test names with
 Markdown, XML and control characters are escaped, the summary keeps to its size limit, `failed/` holds only the
 failed tests' output and logs within its limits, and a failing test fails only its own shard and shows up in that
