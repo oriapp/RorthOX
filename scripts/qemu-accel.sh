@@ -1,33 +1,49 @@
 # The accelerator for every QEMU the tests start. Sourced by scripts/qemu-lib.sh and scripts/run-tests.sh.
 #
 #   RORTHOX_ACCEL=tcg    QEMU's own CPU emulation, TCG (the default)
-#   RORTHOX_ACCEL=kvm    KVM, with QEMU's PIC and PIT (kernel-irqchip=off: the same device models as TCG).
+#   RORTHOX_ACCEL=kvm    KVM with the split irqchip: only the local APIC is in the kernel, the PIC
+#                        (isa-i8259), PIT (isa-pit) and I/O APIC are QEMU's own models, as under TCG.
+#                        QEMU 8.0 and later refuse kernel-irqchip=off with KVM ("KVM does not support
+#                        userspace APIC"). The PIC's interrupts reach the CPU through the local APIC's
+#                        LINT0, which SeaBIOS sets to ExtINT, the same path the default in-kernel PIC uses.
 #                        If a QEMU can't start with KVM, the run fails; it never falls back to TCG.
-#   RORTHOX_ACCEL=auto   KVM if a QEMU started with it reports "kvm support: enabled", else TCG
+#   RORTHOX_ACCEL=auto   KVM if a QEMU started with it works (see accel_probe), else TCG
 #
 # The choice is made once, before the first test (by the runner) or before a test's first QEMU (a test
 # run on its own), and passed on as RORTHOX_ACCEL=tcg|kvm with RORTHOX_ACCEL_REASON. A test that
 # fails under KVM is never run again under TCG. QEMU_FLAGS may not choose an accelerator or a CPU;
 # QEMU_CPU (default qemu32) is the CPU model.
 #
-# Needs only $QEMU (default qemu-system-i386), timeout and grep.
+# Needs only $QEMU (default qemu-system-i386), grep and coreutils (timeout, head, tail, cut, sort, tr).
 
-ACCEL_KVM_OPTS="kvm,kernel-irqchip=off"
+ACCEL_KVM_OPTS="kvm,kernel-irqchip=split"
 
-# accel_probe: 0 if a QEMU with KVM starts and its monitor says "kvm support: enabled". Sets accel_why.
+# accel_probe: 0 if a QEMU with KVM starts, its monitor says "kvm support: enabled" and its device
+# tree has QEMU's own PIC and PIT (isa-i8259, isa-pit), not the in-kernel ones (kvm-i8259, kvm-pit).
+# Sets accel_why and accel_probe_details (QEMU's output without the device tree, cut to 1200).
 accel_probe() {
-    local out status line
-    out=$(printf 'info kvm\nquit\n' | timeout "${RORTHOX_ACCEL_PROBE_TIMEOUT:-30}" "${QEMU:-qemu-system-i386}" \
+    local out status rest line devices
+    out=$(printf 'info kvm\ninfo qtree\nquit\n' | timeout "${RORTHOX_ACCEL_PROBE_TIMEOUT:-30}" "${QEMU:-qemu-system-i386}" \
         -accel "$ACCEL_KVM_OPTS" -cpu "${QEMU_CPU:-qemu32}" -m 16 -display none -nodefaults -no-user-config \
         -serial none -S -monitor stdio 2>&1)
     status=$?
-    accel_probe_details=${out:0:1200}
+    # info qtree prints "bus: ..." and indented lines; "dev: <type>, id ..." names each device.
+    devices=$(grep -oE 'dev: [a-z0-9-]*(i8259|pit|ioapic),' <<< "$out" | cut -c 6- | tr -d , | LC_ALL=C sort | tr '\n' ' ')
+    devices=${devices% }
+    rest=$(grep -vE '^(bus: |[[:space:]])' <<< "$out")
+    accel_probe_details=${rest:0:1200}
     if [ "$status" -eq 0 ] && grep -q 'kvm support: enabled' <<< "$out"; then
-        accel_why="a QEMU with -accel $ACCEL_KVM_OPTS reported kvm support: enabled"
-        return 0
+        if [[ " $devices " == *" isa-i8259 "* && " $devices " == *" isa-pit "* &&
+              " $devices " != *" kvm-i8259 "* && " $devices " != *" kvm-pit "* ]]; then
+            accel_why="a QEMU with -accel $ACCEL_KVM_OPTS reported kvm support: enabled ($devices)"
+            return 0
+        fi
+        accel_why="a QEMU with -accel $ACCEL_KVM_OPTS ran with KVM, but not with QEMU's PIC and PIT (${devices:-none in info qtree})"
+        return 1
     fi
-    # QEMU's own reason is its last message, e.g. "failed to initialize kvm: Permission denied".
-    line=$(tr -d '\r' <<< "$out" | grep -v '^(qemu)' | grep . | tail -n 1)
+    # QEMU's own reason is its last message, e.g. "failed to initialize kvm: Permission denied"; at
+    # most 1000 bytes of it, so the reason and the CI annotation made from it stay short.
+    line=$(tr -d '\r' <<< "$rest" | grep -v '^(qemu)' | grep . | tail -n 1 | head -c 1000)
     accel_why="a QEMU with -accel $ACCEL_KVM_OPTS did not run with KVM (exit $status${line:+: $line})"
     return 1
 }
@@ -43,7 +59,9 @@ accel_select() {
         kvm)
             if ! accel_probe; then
                 if [ "${GITHUB_ACTIONS:-}" = true ]; then
-                    local message="RORTHOX_ACCEL=kvm, but KVM doesn't work here: $accel_why"
+                    # At most 1500 bytes before escaping (QEMU's line in accel_why is already cut to 1000).
+                    local message
+                    message=$(printf '%s' "RORTHOX_ACCEL=kvm, but KVM doesn't work here: $accel_why" | head -c 1500)
                     message=${message//'%'/'%25'}
                     message=${message//$'\r'/'%0D'}
                     message=${message//$'\n'/'%0A'}

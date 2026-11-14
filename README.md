@@ -434,10 +434,12 @@ and end, a test keeps at most 8 MiB and a run 64 MiB, and `index.txt` next to th
 out. `--results DIR` puts the run's directory at DIR (new or empty) instead of `build/tests/runs/`.
 
 `RORTHOX_ACCEL` picks the accelerator for every QEMU the tests start: `tcg` (the default), `kvm`, or `auto`
-(KVM if a QEMU started with it reports `kvm support: enabled`, else TCG). The runner decides once, before the
-first test, and never runs a failed test again under TCG; with `kvm` and no working KVM it exits 2 and runs
-nothing. KVM runs use `-accel kvm,kernel-irqchip=off`, so the PIC and PIT are the same QEMU models as under TCG,
-and a test fails if one of its QEMUs didn't report KVM. `QEMU_CPU` sets the CPU model (default `qemu32`), and
+(KVM if a QEMU started with it reports `kvm support: enabled` and has QEMU's own PIC and PIT, else TCG). The
+runner decides once, before the first test, and never runs a failed test again under TCG; with `kvm` and no
+working KVM it exits 2 and runs nothing. KVM runs use `-accel kvm,kernel-irqchip=split`: only the local APIC is
+in the kernel, so the PIC and PIT are the same QEMU models as under TCG (`isa-i8259` and `isa-pit` in
+`info qtree`, which the KVM check looks for; QEMU 8.0 and later refuse `kernel-irqchip=off` with KVM), and a
+test fails if one of its QEMUs didn't report KVM. `QEMU_CPU` sets the CPU model (default `qemu32`), and
 `QEMU_FLAGS` may not choose the accelerator or the CPU. The KVM path is checked with a stand-in for QEMU
 (`accelerator`) and has not yet run on a KVM host.
 

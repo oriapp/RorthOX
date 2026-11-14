@@ -6,10 +6,13 @@
 #    probe runs, and "info kvm" is not sent.
 # 2. QEMU_FLAGS that choose the accelerator or the CPU (-accel, --accel, -enable-kvm, accel= in
 #    -machine/-M, -cpu) are refused before QEMU starts; ordinary flags are not.
-# 3. kvm where KVM doesn't work (QEMU can't open /dev/kvm, or the probe hangs): qemu_start and the
-#    runner stop with a message that says why, start no guest and run no test.
-# 4. kvm where it works: exactly one "-accel kvm,kernel-irqchip=off", no tcg, "info kvm" is the first
-#    monitor command; a QEMU that then doesn't say "kvm support: enabled" fails in qemu_stop, and the
+# 3. kvm where KVM doesn't work (QEMU can't open /dev/kvm, the probe hangs, or KVM runs with the
+#    in-kernel PIC and PIT): qemu_start and the runner stop with a message that says why, start no
+#    guest and run no test. QEMU's reason is cut to 1000 bytes and the CI annotation to 1500.
+# 4. kvm where it works: the probe asks "info kvm" and "info qtree" (isa-i8259 and isa-pit, as the
+#    stand-in, like QEMU 8.2, gives only with kernel-irqchip=split and refuses kernel-irqchip=off);
+#    exactly one "-accel kvm,kernel-irqchip=split", no tcg, "info kvm" is the guest's first monitor
+#    command; a QEMU that then doesn't say "kvm support: enabled" fails in qemu_stop, and the
 #    runner fails a test with a monitor.log without it (but not one with it).
 # 5. auto: a failed or hanging probe gives TCG with the reason, decided before the first test starts;
 #    a working probe gives KVM, and a test that fails under it fails, it doesn't run again.
@@ -39,13 +42,22 @@ expect() { if eval "$2"; then ok "$1"; else fail "$1"; fi; }
 FAKE="$OUT/fake-qemu"
 cat > "$FAKE" << 'EOF'
 #!/usr/bin/env bash
-# Stand-in for QEMU. FAKE_KVM: denied (QEMU can't use KVM), hang, ok, fallback (QEMU runs, but not
-# with KVM, as with accel=kvm:tcg) or guest-off (the probe works, a guest then reports KVM disabled).
+# Stand-in for QEMU. FAKE_KVM: denied (QEMU can't use KVM), long (the same with a 5000-byte reason),
+# hang, ok, fallback (QEMU runs, but not with KVM, as with accel=kvm:tcg), guest-off (the probe works,
+# a guest then reports KVM disabled), in-kernel (KVM with the in-kernel PIC and PIT even with
+# kernel-irqchip=split) or many (as in-kernel, with 400 PITs). Like QEMU 8.2 under KVM:
+# kernel-irqchip=off is refused ("KVM does not support userspace APIC"), split gives QEMU's
+# isa-i8259/isa-pit/ioapic, on (the default) the in-kernel kvm-i8259/kvm-pit/kvm-ioapic.
+# FAKE_DEVICES, if set, is the list of devices info qtree shows instead.
 # Logs "start <args>" and every monitor command to FAKE_QEMU_LOG.
 if [ "${1:-}" = --version ]; then echo "QEMU emulator version 0.0.0 (stand-in)"; exit 0; fi
-kvm=no guest=no
+kvm=no guest=no irqchip=on
 for a in "$@"; do
-    case "$a" in kvm*) kvm=yes ;; file=*) guest=yes ;; esac
+    case "$a" in
+        kvm*) kvm=yes
+              case "$a" in *kernel-irqchip=*) irqchip=${a##*kernel-irqchip=}; irqchip=${irqchip%%,*} ;; esac ;;
+        file=*) guest=yes ;;
+    esac
 done
 { printf 'start'; printf ' %s' "$@"; printf '\n'; } >> "$FAKE_QEMU_LOG"
 if [ $kvm = yes ]; then
@@ -54,11 +66,24 @@ if [ $kvm = yes ]; then
             echo "Could not access KVM kernel module: Permission denied" >&2
             echo "fake-qemu: failed to initialize kvm: Permission denied" >&2
             exit 1 ;;
+        long)
+            printf 'fake-qemu: failed to initialize kvm: %s\n' "$(head -c 5000 /dev/zero | tr '\0' x)" >&2
+            exit 1 ;;
         hang) exec sleep 60 ;;
     esac
+    if [ "$irqchip" = off ]; then
+        echo "fake-qemu: KVM does not support userspace APIC" >&2
+        exit 1
+    fi
 fi
+pic=isa-i8259 pit=isa-pit ioapic=ioapic pits=1
+if [ $kvm = yes ] && { [ "$irqchip" != split ] || [ "$FAKE_KVM" = in-kernel ] || [ "$FAKE_KVM" = many ]; }; then
+    pic=kvm-i8259 pit=kvm-pit ioapic=kvm-ioapic
+fi
+[ "${FAKE_KVM:-}" = many ] && pits=400
 answer="kvm support: disabled"
-if [ $kvm = yes ] && { [ "$FAKE_KVM" = ok ] || { [ "$FAKE_KVM" = guest-off ] && [ $guest = no ]; }; }; then
+if [ $kvm = yes ] && { [ "$FAKE_KVM" = ok ] || [ "$FAKE_KVM" = in-kernel ] || [ "$FAKE_KVM" = many ] ||
+                       { [ "$FAKE_KVM" = guest-off ] && [ $guest = no ]; }; }; then
     answer="kvm support: enabled"
 fi
 while IFS= read -r line; do
@@ -66,6 +91,17 @@ while IFS= read -r line; do
     echo "monitor $line" >> "$FAKE_QEMU_LOG"
     case "$line" in
         "info kvm") echo "$answer" ;;
+        "info qtree")
+            if [ -n "${FAKE_DEVICES:-}" ]; then
+                printf 'bus: main-system-bus\n'
+                for d in $FAKE_DEVICES; do printf '  dev: %s, id ""\n' "$d"; done
+                continue
+            fi
+            printf 'bus: main-system-bus\n  type System\n  dev: %s, id ""\n    gpio-in "" 24\n' "$ioapic"
+            printf '      dev: isa-pcspk, id ""\n'
+            for ((i = 0; i < pits; i++)); do printf '          dev: %s, id ""\n' "$pit"; done
+            printf '          dev: %s, id ""\n            master = true\n' "$pic"
+            printf '          dev: %s, id ""\n            master = false\n' "$pic" ;;
         pmemsave* | screendump*) f=${line#*\"}; f=${f%\"}; head -c 4000 /dev/zero | tr '\0' ' ' > "$f" ;;
         quit) exit 0 ;;
     esac
@@ -129,14 +165,55 @@ expect "a hanging probe ends after its timeout: exit 2" \
 boot kvm-fallback RORTHOX_ACCEL=kvm FAKE_KVM=fallback
 expect "a QEMU that starts but not with KVM: exit 2" \
     '[ $status -eq 2 ] && grep -q "KVM doesn.t work here: .*exit 0: kvm support: disabled" "$log" && ! guest_args > /dev/null'
+boot kvm-in-kernel RORTHOX_ACCEL=kvm FAKE_KVM=in-kernel
+expect "KVM with the in-kernel PIC and PIT: exit 2, names the devices" \
+    '[ $status -eq 2 ] && ! guest_args > /dev/null &&
+     grep -Fq "KVM doesn'\''t work here: a QEMU with -accel kvm,kernel-irqchip=split ran with KVM, but not with QEMU'\''s PIC and PIT (kvm-i8259 kvm-i8259 kvm-ioapic kvm-pit)" "$log"'
+# annotate <mode>: accel_select with forced KVM as in a GitHub job; stdout in ann-<mode>.out, stderr in .err.
+annotate() {
+    ( export QEMU="$FAKE" FAKE_QEMU_LOG="$OUT/ann-$1.qemu" RORTHOX_ACCEL=kvm FAKE_KVM=$1 GITHUB_ACTIONS=true \
+          RORTHOX_ACCEL_PROBE_TIMEOUT=2
+      accel_select ) > "$OUT/ann-$1.out" 2> "$OUT/ann-$1.err"
+    status=$?
+}
+prefix="::error title=KVM unavailable::"
+qline="fake-qemu: failed to initialize kvm: "   # the start of the stand-in's long line
+annotate long
+expect "a 5000-byte reason: QEMU's line cut to 1000 bytes, one annotation of at most 1500" \
+    '[ $status -eq 1 ] && [ $(wc -l < "$OUT/ann-long.out") -eq 1 ] && [ "$(head -c ${#prefix} "$OUT/ann-long.out")" = "$prefix" ] &&
+     [ $(wc -c < "$OUT/ann-long.out") -le $((${#prefix} + 1501)) ] && [ $(wc -l < "$OUT/ann-long.err") -eq 1 ] &&
+     [ "$(grep -o "x\{100,\}" "$OUT/ann-long.err" | tr -d "\n" | wc -c)" -eq $((1000 - ${#qline})) ] &&
+     grep -q "failed to initialize kvm: xxxxxxxxxx" "$OUT/ann-long.out"'
+annotate many
+expect "400 in-kernel PITs: one annotation of at most 1500 bytes" \
+    '[ $status -eq 1 ] && [ $(wc -l < "$OUT/ann-many.out") -eq 1 ] && [ "$(head -c ${#prefix} "$OUT/ann-many.out")" = "$prefix" ] &&
+     [ $(wc -c < "$OUT/ann-many.out") -eq $((${#prefix} + 1501)) ] && grep -q "PIC and PIT (kvm-i8259 kvm-i8259 kvm-ioapic kvm-pit kvm-pit" "$OUT/ann-many.out"'
 
 echo "4. kvm where it works"
 boot kvm-ok RORTHOX_ACCEL=kvm FAKE_KVM=ok
-expect "one -accel kvm,kernel-irqchip=off, no tcg, -cpu qemu32" \
-    '[ $status -eq 0 ] && [ $(count -accel) -eq 1 ] && [ "$(after -accel)" = kvm,kernel-irqchip=off ] &&
+expect "one -accel kvm,kernel-irqchip=split, no tcg, -cpu qemu32" \
+    '[ $status -eq 0 ] && [ $(count -accel) -eq 1 ] && [ "$(after -accel)" = kvm,kernel-irqchip=split ] &&
      [ $(count tcg) -eq 0 ] && [ "$(after -cpu)" = qemu32 ]'
-expect "info kvm is the guest's first monitor command" \
-    '[ "$(sed -n "/^start .*file=/,\$p" "$qlog" | grep -m1 "^monitor")" = "monitor info kvm" ]'
+expect "the probe asks info kvm, then info qtree, then quits" \
+    '[ "$(sed -n "1,/^start .*file=/p" "$qlog" | grep "^monitor" | tr "\n" ";")" = "monitor info kvm;monitor info qtree;monitor quit;" ]'
+expect "info kvm is the guest's first monitor command, info qtree is not sent to it" \
+    '[ "$(sed -n "/^start .*file=/,\$p" "$qlog" | grep -m1 "^monitor")" = "monitor info kvm" ] &&
+     ! sed -n "/^start .*file=/,\$p" "$qlog" | grep -q "info qtree"'
+( export QEMU="$FAKE" FAKE_QEMU_LOG="$OUT/probe.qemu" FAKE_KVM=ok
+  accel_probe && printf '%s\n---\n%s\n' "$accel_why" "$accel_probe_details" ) > "$OUT/probe.txt" 2>&1
+probe=$?
+expect "the probe's reason names the PIC, PIT and I/O APIC; its details leave out the device tree" \
+    '[ $probe -eq 0 ] && [ "$(sed -n 1p "$OUT/probe.txt")" = "a QEMU with -accel kvm,kernel-irqchip=split reported kvm support: enabled (ioapic isa-i8259 isa-i8259 isa-pit)" ] &&
+     grep -Fxq "kvm support: enabled" "$OUT/probe.txt" && ! grep -q "dev: \|^bus: " "$OUT/probe.txt"'
+: > "$OUT/devices.txt"
+for devices in "isa-i8259 isa-i8259 ioapic" "isa-pit ioapic" "isa-i8259 isa-i8259 isa-pit kvm-pit" "kvm-i8259 isa-i8259 isa-pit" ""; do
+    ( export QEMU="$FAKE" FAKE_QEMU_LOG="$OUT/devices.qemu" FAKE_KVM=ok FAKE_DEVICES="${devices:-none}"
+      accel_probe
+      echo "$?: $accel_why" ) >> "$OUT/devices.txt" 2>&1
+done
+expect "the probe refuses KVM without both isa-i8259 and isa-pit, or with kvm-i8259 or kvm-pit" \
+    '[ "$(grep -c "^1: a QEMU with -accel kvm,kernel-irqchip=split ran with KVM, but not with QEMU.s PIC and PIT (" "$OUT/devices.txt")" -eq 5 ] &&
+     grep -Fq "PIT (none in info qtree)" "$OUT/devices.txt" || { sed "s/^/    /" "$OUT/devices.txt"; false; }'
 boot kvm-guest-off RORTHOX_ACCEL=kvm FAKE_KVM=guest-off
 expect "a guest without kvm support: enabled fails in qemu_stop" \
     '[ $status -eq 1 ] && grep -q "FAIL QEMU did not run with KVM" "$log"'
@@ -197,7 +274,7 @@ echo "4. the runner, kvm: the monitor.log of every QEMU"
 run runner-kvm RORTHOX_ACCEL=kvm FAKE_KVM=ok -- "$fx/vm.sh" "$fx/order.sh"
 expect "every monitor.log says kvm support: enabled: passes" \
     '[ $status -eq 0 ] && grep -Fxq "=== 2 passed, 0 failed, 0 skipped" "$log" && grep -Fxq "test RORTHOX_ACCEL=kvm" "$qlog" &&
-     [ "$(grep "^start" "$qlog" | grep -vc file=)" -eq 1 ] && [ "$(grep -c "^start .*-accel kvm,kernel-irqchip=off .*file=" "$qlog")" -eq 1 ]'
+     [ "$(grep "^start" "$qlog" | grep -vc file=)" -eq 1 ] && [ "$(grep -c "^start .*-accel kvm,kernel-irqchip=split .*file=" "$qlog")" -eq 1 ]'
 run runner-guest-off RORTHOX_ACCEL=kvm FAKE_KVM=guest-off -- "$fx/order.sh"
 expect "a guest that didn't run with KVM: qemu_stop fails the test" \
     '[ $status -eq 1 ] && grep -q "FAIL QEMU did not run with KVM (no .kvm support: enabled. in .*001-order/vm/monitor.log)" "$log"'
@@ -209,9 +286,12 @@ run runner-tcg-missing RORTHOX_ACCEL=tcg 'FIXTURE_MONITOR=nothing\n' -- "$fx/vm.
 expect "under tcg the monitor.log is not checked" '[ $status -eq 0 ]'
 
 echo "5. auto"
-for mode in denied hang fallback; do
+for mode in denied hang fallback in-kernel; do
     run "auto-$mode" RORTHOX_ACCEL=auto FAKE_KVM=$mode -- "$fx/order.sh" "$fx/order.sh"
-    case $mode in denied) why="Permission denied" ;; hang) why="exit 124" ;; fallback) why="exit 0: kvm support: disabled" ;; esac
+    case $mode in
+        denied) why="Permission denied" ;; hang) why="exit 124" ;; fallback) why="exit 0: kvm support: disabled" ;;
+        in-kernel) why="ran with KVM, but not with QEMU.s PIC and PIT (kvm-i8259 kvm-i8259 kvm-ioapic kvm-pit)" ;;
+    esac
     expect "auto, probe $mode: TCG, one probe before the first test, the reason in the report" \
         '[ $status -eq 0 ] && [ "$(grep "^start" "$qlog" | grep -vc file=)" -eq 1 ] && [ "$(sed -n 1p "$qlog" | cut -c1-5)" = start ] &&
          [ "$(grep -c "^test RORTHOX_ACCEL=tcg$" "$qlog")" -eq 2 ] && [ "$(grep -c "^start .*-accel tcg .*file=" "$qlog")" -eq 2 ] &&
