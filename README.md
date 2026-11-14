@@ -648,8 +648,8 @@ isolate every resource or protect against every kernel bug.
   `-EINVARG` until the file is long enough again.
 - **No FPU state per process.** x87 registers aren't saved or reset between tasks.
 - **Fixed memory layout.** The kernel heap is at 16 MiB and the machine needs 128 MiB of RAM; there's no BIOS
-  memory map, and the one GRUB passes is ignored. The boot sector loads the kernel to 1 MiB before `_start` enables
-  A20, so it relies on the firmware having A20 on (QEMU's does).
+  memory map, and the one GRUB passes is ignored. The boot sector turns A20 on itself before it loads the kernel to
+  1 MiB, with the fast A20 port (0x92) only; on a machine where that port doesn't work it stops instead of booting.
 - **Shared clock.** Every process can read the same delivered tick counter; timing is not isolated between processes.
 - **Sleep timing.** A sleep is counted in 10 ms timer ticks as they arrive, not in calibrated time: it is at least
   `ceil(ms / 10) + 2` ticks, so even `sleep(1)` waits 3 ticks. Under QEMU's TCG a late tick can make a sleep

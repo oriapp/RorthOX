@@ -127,6 +127,23 @@ for i in "${!forced_args[@]}"; do
 done
 [ "$probe" = 1 ] || fail 'KVM probe timeout not forwarded'
 [[ " ${forced_args[*]} " == *' RORTHOX_ACCEL=kvm '* ]] || fail 'forced KVM not forwarded'
+# Check the access predicates separately from the character-device predicate.
+# Root ignores file modes, but the normal build user cannot read this fixture.
+if [ "$(id -u)" -ne 0 ]; then
+    touch "$tmp/denied-kvm"
+    chmod 000 "$tmp/denied-kvm"
+    sed -e 's|\[ -c /dev/kvm \]|[ -c /dev/null ]|' \
+        -e "s|\[ -r /dev/kvm \]|[ -r $tmp/denied-kvm ]|" \
+        -e "s|\[ -w /dev/kvm \]|[ -w $tmp/denied-kvm ]|" ci/run.sh > "$unusable_script"
+    ( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/denied-argv" RORTHOX_IMAGE_REF="$digest"
+      export RORTHOX_ACCEL=auto
+      unset RORTHOX_IN_IMAGE RORTHOX_TEST_ROOT
+      bash "$unusable_script" true )
+    mapfile -d '' -t denied_args < "$tmp/denied-argv"
+    for i in "${!denied_args[@]}"; do
+        [ "${denied_args[i]}" != --device ] || fail 'inaccessible KVM device forwarded'
+    done
+fi
 [ "${default_args[${#default_args[@]}-2]}" = "$ref" ] || fail 'default image differs from recorded digest'
 # Changing an image input must warn for the locally pinned digest, without blocking it.
 mkdir -p "$tmp/stale/ci"
