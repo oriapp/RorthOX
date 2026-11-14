@@ -78,17 +78,30 @@ def lint(text):
             raise Invalid(f'invalid workflow YAML: {error}') from error
         require(isinstance(document, dict) and isinstance(document.get('jobs'), dict),
                 'invalid workflow jobs')
-        for job in document['jobs'].values():
+        parsed = document['jobs']
+        require(set(parsed) == {'build', 'test', 'image-prep', 'image', 'result'},
+                'unexpected workflow job')
+        for name, job in parsed.items():
             require(isinstance(job, dict) and isinstance(job.get('steps'), list),
                     'invalid workflow steps')
+            if name in ('build', 'test', 'image-prep'):
+                require('continue-on-error' not in job, 'required job must not mask failure')
+                require(all('continue-on-error' not in step for step in job['steps'] if isinstance(step, dict)),
+                        'required step must not mask failure')
             for step in job['steps']:
                 require(isinstance(step, dict), 'invalid workflow step')
                 require('${{' not in str(step.get('run', '')), 'expression inside run')
+        require(parsed['build'].get('needs') == 'image-prep' and
+                parsed['test'].get('needs') == ['image-prep', 'build'] and
+                parsed['image'].get('needs') == ['image-prep', 'build', 'test'] and
+                parsed['result'].get('needs') == ['build', 'test'] and
+                parsed['test'].get('strategy', {}).get('fail-fast') is False,
+                'invalid job dependencies or shard strategy')
     # Only block-style, unaliased YAML keys are supported by the fallback lint.
     require(not re.search(r'^\s*(?:-\s*)?["\'][^\r\n]*?["\']\s*:', text, re.M),
             'quoted YAML mapping keys are not supported')
-    require(not re.search(r'^\s*(?:-\s*)?run\s+:', text, re.M),
-            'spaced run key is not supported')
+    require(not re.search(r'^\s*(?:-\s*)?[A-Za-z_][A-Za-z_0-9-]*\s+:', text, re.M),
+            'spaced YAML key is not supported')
     require(not re.search(r'^\s*(?:-\s*)?[?!]', text, re.M),
             'explicit keys and YAML tags are not supported')
     require(not re.search(r'^\s*-\s*\{', text, re.M), 'flow-mapping step')
@@ -118,7 +131,7 @@ def lint(text):
     require('./ci/run.sh make all iso' in jobs['build'], 'production build must run in image')
     require('needs: image-prep' in jobs['build'] and
             'needs: [image-prep, build]' in jobs['test'] and
-            'fail-fast: false' in jobs['test'] and 'shard: [1, 2, 3, 4]' in jobs['test'],
+            re.search(r'^      fail-fast: false[ \t]*$', jobs['test'], re.M) and 'shard: [1, 2, 3, 4]' in jobs['test'],
             'required jobs must consume the image and four independent shards')
     require('needs: [build, test]' in jobs['result'] and re.search(r'^    if: always\(\)$', jobs['result'], re.M)
             and 'scripts/ci-result.py' in jobs['result'], 'aggregate must run after failure')
@@ -133,8 +146,11 @@ def lint(text):
                 f'{name}: unverified image or host workload')
         require('sudo apt-' not in body and 'actions/cache@' not in body and
                 './configure.sh' not in body, f'{name}: legacy toolchain path')
-    require(not re.search(r'^  image-prep:\n    continue-on-error:', text, re.M),
+    require('    continue-on-error:' not in jobs['image-prep'],
             'image preparation must be required')
+    require(not any(re.search(r'(?:secrets\.|github\.token\b)', body, re.I)
+                    for name, body in jobs.items() if name != 'image'),
+            'credentials outside publication')
     require('retention-days: 1' in jobs['image-prep'], 'candidate archive retention too long')
     require(text.count('secrets.') == 1 and 'GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}' in jobs['image'] and
             not any('secrets.' in body for name, body in jobs.items() if name != 'image'),
@@ -144,7 +160,7 @@ def lint(text):
             jobs['image'].index('docker logout ghcr.io') and
             'docker run' not in jobs['image'][jobs['image'].index('docker logout ghcr.io'):],
             'publication must validate before login and always log out')
-    require('needs: image-prep' in jobs['image'] and
+    require('needs: [image-prep, build, test]' in jobs['image'] and
             'cancel-in-progress: false' in jobs['image'] and
             'group: image-${{ needs.image-prep.outputs.key }}' in jobs['image'],
             'publication must serialize on the input hash')

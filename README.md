@@ -516,7 +516,7 @@ is optional: without it `fat-write` and `file-syscalls` say they skip that one c
 
 The build image is published at `ghcr.io/oriapp/rorthox-build`. Its content tag
 hashes `ci/Dockerfile` and `configure.sh`; `ci/image.ref` records the public digest.
-Docker is required for the image quick start. From the repository root, build and
+Docker is required for the image quick start. The checkout must reside on a Linux filesystem (under WSL, not `/mnt/c`): the tests use FIFOs. From the repository root, build and
 run all tests with one command:
 
 ```sh
@@ -547,11 +547,11 @@ uploads a production archive with file checksums. Four fresh jobs verify that
 same-run archive and run one shard each without rebuilding production files;
 `results-1` through `results-4` carry JUnit, JSON, summaries and bounded failed
 logs. The aggregate runs even if a required job fails and requires all four
-shards. Only trusted branch pushes may publish a tag; publication is separate
-from the required result and checks tool versions, not the full suite, before
-publishing. A changed image can be published even when its required suite later
-fails: never promote that digest to `ci/image.ref` until the suite is green;
-repair the inputs or remove the failed tag. A third same-input trusted push
+shards. Only trusted branch pushes may publish a tag; publication waits for the required
+build and all four test shards to pass, then checks tool versions before publishing.
+The digest recorded in `ci/image.ref` is a local quick-start/devcontainer pin;
+CI chooses by the input hash instead. A changed image that fails the suite is
+not published. Update `ci/image.ref` after a successful publication. A third same-input trusted push
 while publication is queued may replace an older pending publication job.
 
 ## Project layout

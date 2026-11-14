@@ -193,7 +193,7 @@ jobs:
   # Publication is separate from the required read-only image handoff.
   image:
     continue-on-error: true
-    needs: image-prep
+    needs: [image-prep, build, test]
     if: github.event_name == 'push' && github.repository == 'oriapp/RorthOX' && (github.ref == 'refs/heads/features' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
     timeout-minutes: 45 # Step limits total 41 minutes.
@@ -249,6 +249,10 @@ jobs:
         run: |
           echo "ref=$IMAGE_REF" >> "$GITHUB_OUTPUT"
           echo "Already public: $IMAGE_REF" >> "$GITHUB_STEP_SUMMARY"
+          recorded=$(grep -v '^#' ci/image.ref | head -n 1)
+          if [ "$IMAGE_REF" != "$recorded" ]; then
+            echo "Note: published image differs from ci/image.ref; update the recorded digest after validation." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   result:
     needs: [build, test]

@@ -36,6 +36,17 @@ if bash ci/image-key.sh --context "$tmp/context" >/dev/null 2>&1; then fail 'non
 # The published digest is shared with the devcontainer.
 ref=$(grep -v '^#' ci/image.ref | head -n1)
 [[ "$ref" =~ ^ghcr\.io/oriapp/rorthox-build@sha256:[0-9a-f]{64}$ ]] || fail 'invalid reference'
+python3 -B - <<'PY' || fail 'unsafe devcontainer keys'
+import json
+from pathlib import Path
+item = json.loads(Path('.devcontainer/devcontainer.json').read_text())
+def safe(value):
+    return (set(value) == {'name', 'image', 'workspaceFolder', 'workspaceMount', 'remoteUser', 'containerEnv'}
+            and set(value['containerEnv']) == {'RORTHOX_IN_IMAGE'})
+assert safe(item)
+for key in ('runArgs', 'privileged', 'devices', 'extensions', 'customizations', 'mounts'):
+    assert not safe({**item, key: True}), key
+PY
 [ "$(python3 -B -c 'import json; print(json.load(open(".devcontainer/devcontainer.json"))["image"])')" = "$ref" ] || fail 'devcontainer reference differs from image.ref'
 [ "$(python3 -B -c 'import json; print(json.load(open(".devcontainer/devcontainer.json"))["containerEnv"]["RORTHOX_IN_IMAGE"])')" = 1 ] || fail 'devcontainer must run commands directly in image'
 [ "$(grep -c '^FROM ' ci/Dockerfile)" -eq 2 ] || fail 'unexpected image stages'
@@ -90,6 +101,16 @@ done
   bash ci/run.sh true )
 mapfile -d '' -t default_args < "$tmp/default-argv"
 [ "${default_args[${#default_args[@]}-2]}" = "$ref" ] || fail 'default image differs from recorded digest'
+# Changing an image input must warn for the locally pinned digest, without blocking it.
+mkdir -p "$tmp/stale/ci"
+cp ci/Dockerfile ci/image-key.sh ci/run.sh ci/image.ref "$tmp/stale/ci/"
+cp configure.sh "$tmp/stale/"
+printf '\n# local input change\n' >> "$tmp/stale/ci/Dockerfile"
+( cd "$tmp/stale" || exit 1
+  export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/stale-argv"
+  unset RORTHOX_IN_IMAGE RORTHOX_IMAGE_REF
+  bash ci/run.sh true ) 2> "$tmp/stale-warning" || fail 'stale image blocked'
+grep -q 'warning: checkout image inputs differ from ci/image.ref' "$tmp/stale-warning" || fail 'missing stale image warning'
 if ( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/argv" RORTHOX_IMAGE_REF=ghcr.io/oriapp/rorthox-build@sha256:0000000000000000000000000000000000000000000000000000000000000000
      bash ci/run.sh true ) >/dev/null 2>&1; then
     fail 'zero digest accepted'

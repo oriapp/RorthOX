@@ -25,6 +25,7 @@ with tempfile.TemporaryDirectory() as temp:
         workflow.write_text(text)
         for path in (None, no_yaml):
             env = os.environ.copy()
+            env.pop('GITHUB_ACTIONS', None)  # Only the explicit Actions probe requires PyYAML.
             if path is not None:
                 env['PYTHONPATH'] = str(path)
             result = subprocess.run(['python3', '-B', str(lint), str(workflow)], cwd=root,
@@ -62,6 +63,53 @@ with tempfile.TemporaryDirectory() as temp:
         mutated = text.replace(old, new, 1)
         print('checking', tag, flush=True)
         run(mutated, False)
+    # Every security rule must reject a realistic change in both parser modes.
+    expr = '${{ github.event.inputs.arg }}'
+    build_run = 'run: |\n          ./ci/run.sh make all iso'
+    negatives = (
+        ('unpinned', 'actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f', 'actions/upload-artifact@v6'),
+        ('credentials', 'persist-credentials: false', 'persist-credentials: true'),
+        ('other-run', 'name: production\n          path:', 'name: production\n          run-id: 12\n          path:'),
+        ('skipped-aggregate', '    if: always()\n    runs-on:', '    if: success()\n    runs-on:'),
+        ('permissions', 'permissions: {}', 'permissions:\n  contents: write'),
+        ('extra-grant', '      contents: read', '      contents: read\n      id-token: write'),
+        ('publication-gate', "github.repository == 'oriapp/RorthOX' && ", ''),
+        ('publish-not-advisory', '  image:\n    continue-on-error: true\n', '  image:\n'),
+        ('publish-no-step-timeout', '      - name: Publish only after validation\n        timeout-minutes: 20\n', '      - name: Publish only after validation\n'),
+        ('prep-permission', '  image-prep:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 120 # Cold candidate builds have a 100-minute step limit.\n    permissions:\n      contents: read\n', '  image-prep:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 120 # Cold candidate builds have a 100-minute step limit.\n    permissions:\n      contents: read\n      packages: write\n'),
+        ('secret-in-test', '          SHARD: ${{ matrix.shard }}\n', '          SHARD: ${{ matrix.shard }}\n          T: ${{ secrets.GITHUB_TOKEN }}\n'),
+        ('duplicate-secret', '          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}', '          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          EXTRA: ${{ secrets.GITHUB_TOKEN }}'),
+        ('token-in-build', '    needs: image-prep', '    needs: image-prep\n    env:\n      T: ${{ github.token }}'),
+        ('no-logout-always', '        if: always()\n        run: docker logout ghcr.io', '        run: docker logout ghcr.io'),
+        ('run-after-logout', '          echo "ref=$IMAGE_REF" >> "$GITHUB_OUTPUT"\n', '          echo "ref=$IMAGE_REF" >> "$GITHUB_OUTPUT"\n          docker run --rm "$IMAGE_REF" true\n'),
+        ('publish-early', '    needs: [image-prep, build, test]\n    if: github.event_name', '    needs: image-prep\n    if: github.event_name'),
+        ('spaced-coe', '        id: image-id\n', '        id: image-id\n        continue-on-error : true\n'),
+        ('late-prep-coe', '  image-prep:\n    runs-on: ubuntu-24.04', '  image-prep:\n    runs-on: ubuntu-24.04\n    continue-on-error: true'),
+        ('commented-fast', '      fail-fast: false', '      fail-fast: true # fail-fast: false'),
+        ('dash-run', '      - name: Build and package', '      - run: echo "' + expr + '"\n      - name: Build and package'),
+        ('next-line-run', build_run, 'run:\n          echo "' + expr + '"'),
+        ('keep-run', build_run, 'run: |+\n          echo "' + expr + '"'),
+        ('indent-run', build_run, 'run: |2\n          echo "' + expr + '"'),
+        ('fold-run', build_run, 'run: >+\n          echo "' + expr + '"'),
+        ('continued-run', build_run, 'run: ./ci/run.sh make all iso\n            echo "' + expr + '"'),
+        ('quoted-run', '        with:\n          persist-credentials: false', '        "with":\n          persist-credentials: false'),
+        ('spaced-run', '        run: |', '        run : echo "' + expr + '"'),
+        ('flow-run', '      - name: Build and package', '      - {name: Build and package, run: "echo ' + expr + '"}\n      - name: Build and package'),
+        ('alias-run', '      - name: Build and package', '      - name: Label\n        value: &cmd "echo ' + expr + '"\n      - run: *cmd\n      - name: Build and package'),
+        ('quoted-space-run', build_run, '"run" : echo "' + expr + '"'),
+        ('escaped-key-run', build_run, '"r\x75n": echo "' + expr + '"'),
+        ('explicit-key-run', build_run, '? run\n        : echo "' + expr + '"'),
+        ('tagged-key-run', build_run, '!!str run: echo "' + expr + '"'),
+        ('escaped-hex-run', build_run, r'run: "echo $\x7b{ github.event.inputs.arg }}"'),
+        ('escaped-line-run', build_run, 'run: "echo $\\n          {{ github.event.inputs.arg }}"'),
+        ('nextline-escaped-run', build_run, 'run:\n          "echo $\x7b{ github.event.inputs.arg }}"'),
+        ('comment-escaped-run', build_run, 'run: # c\n          "echo $\x7b{ github.event.inputs.arg }}"'),
+        ('verbatim-tag-run', build_run, 'run: !<tag:yaml.org,2002:str> "echo $\x7b{ github.event.inputs.arg }}"'),
+    )
+    for tag, old, new in negatives:
+        assert old in text and new != old, tag
+        print('checking', tag, flush=True)
+        run(text.replace(old, new, 1), False)
     env = os.environ.copy()
     env['GITHUB_ACTIONS'] = 'true'
     env['PYTHONPATH'] = str(no_yaml)

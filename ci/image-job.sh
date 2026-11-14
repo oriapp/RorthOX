@@ -11,6 +11,14 @@ fail() { echo "image: $*" >&2; exit 1; }
 record() { printf '%s=%s\n' "$1" "$2" >> "$out"; }
 # Docker pull resolves a tag to its registry digest, including an OCI index with attestations.
 # Read that identity from the local image rather than a child of manifest inspect --verbose.
+retry_registry() {
+    local attempt
+    for attempt in 1 2 3; do
+        if "$@"; then return 0; fi
+        [ "$attempt" -eq 3 ] || sleep "$attempt"
+    done
+    return 1
+}
 public_digest() {
     docker image inspect --format '{{json .RepoDigests}}' "$tag" | python3 -c '
 import json, re, sys
@@ -43,8 +51,8 @@ validate() {
 case "${1:-}" in
     prepare)
         record key "$key"
-        if docker manifest inspect "$tag" >/dev/null 2>&1; then
-            docker pull "$tag"
+        if retry_registry docker manifest inspect "$tag" >/dev/null 2>&1; then
+            retry_registry docker pull "$tag"
             ref=$(public_digest) || fail 'public tag has no unambiguous digest'
             hash=$(docker image inspect --format '{{index .Config.Labels "org.rorthox.image.input-hash"}}' "$ref")
             [ "$hash" = "$key" ] || fail 'published image has the wrong input hash'
@@ -69,7 +77,7 @@ case "${1:-}" in
     fetch)
         ref=${IMAGE_REF:?IMAGE_REF is required}
         [[ "$ref" =~ ^ghcr\.io/oriapp/rorthox-build@sha256:[0-9a-f]{64}$ ]] || fail 'invalid digest reference'
-        docker pull "$ref"
+        retry_registry docker pull "$ref"
         id=$(docker image inspect --format '{{.Id}}' "$ref")
         [[ "$id" =~ ^sha256:[0-9a-f]{64}$ ]] || fail 'invalid image ID'
         hash=$(docker image inspect --format '{{index .Config.Labels "org.rorthox.image.input-hash"}}' "$id")

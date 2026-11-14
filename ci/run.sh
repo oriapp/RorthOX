@@ -23,6 +23,11 @@ if [ -n "${RORTHOX_IMAGE_ID:-}" ]; then
     fi
 else
     ref=${RORTHOX_IMAGE_REF:-$(grep -v '^#' "$root/ci/image.ref" | head -n1)}
+    recorded_key=$(sed -nE 's/^# Published image for input hash ([0-9a-f]{64})\.$/\1/p' "$root/ci/image.ref")
+    if [ -z "${RORTHOX_IMAGE_REF:-}" ] && [ -n "$recorded_key" ] &&
+       [ "$(bash "$root/ci/image-key.sh")" != "$recorded_key" ]; then
+        echo 'warning: checkout image inputs differ from ci/image.ref; local image may be outdated' >&2
+    fi
     if [[ ! "$ref" =~ ^ghcr\.io/oriapp/rorthox-build@sha256:[0-9a-f]{64}$ ]] ||
        [[ "$ref" == *'@sha256:0000000000000000000000000000000000000000000000000000000000000000' ]]; then
         echo 'error: no published image digest; set RORTHOX_IMAGE_REF to a verified digest' >&2
