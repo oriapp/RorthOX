@@ -4,7 +4,8 @@
  * scripts/tests/argument-oom.sh). The heap is scripts/tests/host/kalloc.c.
  *
  * The file layer serves one file from memory and can fail its n-th fopen, fstat or fread. The
- * paging layer gives every page directory one allocation, can fail its n-th mapping, remembers
+ * paging layer gives every page directory one allocation, can fail its n-th mapping (a failed
+ * mapping changes nothing, like the real paging_map_range) or its n-th revocation, remembers
  * which live allocations each directory maps, and notes when a directory is freed after memory
  * it maps, when a freed directory is used, and every directory loaded with paging_switch().
  * task_return() jumps back to the check through host_task_return_jump.
@@ -30,12 +31,16 @@ extern int host_fail_open_at;
 extern int host_fail_stat_at;
 extern int host_fail_read_at;
 extern int host_fail_map_at;
+// Revocations are the supervisor identity maps process_free makes; they are not mappings.
+extern int host_fail_unmap_at;
 // Calls so far, and 1 once the chosen call failed.
 extern int host_open_calls;
 extern int host_stat_calls;
 extern int host_read_calls;
 extern int host_map_calls;
+extern int host_unmap_calls;
 extern int host_failed;
+extern int host_unmap_failed;
 // Files open right now.
 extern int host_open_files;
 

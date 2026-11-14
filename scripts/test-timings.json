@@ -48,6 +48,7 @@
     "scripts/tests/pit.sh": 0.1,
     "scripts/tests/print-oom.sh": 6.4,
     "scripts/tests/printc.sh": 4.5,
+    "scripts/tests/process-exit.sh": 0.6,
     "scripts/tests/process-release.sh": 6.9,
     "scripts/tests/program-arguments.sh": 26.0,
     "scripts/tests/program-lookup-config.sh": 1.6,

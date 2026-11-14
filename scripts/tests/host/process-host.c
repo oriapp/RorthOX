@@ -24,11 +24,14 @@ int host_fail_open_at;
 int host_fail_stat_at;
 int host_fail_read_at;
 int host_fail_map_at;
+int host_fail_unmap_at;
 int host_open_calls;
 int host_stat_calls;
 int host_read_calls;
 int host_map_calls;
+int host_unmap_calls;
 int host_failed;
+int host_unmap_failed;
 int host_open_files;
 int host_paging_problems;
 char host_paging_problem[160];
@@ -82,9 +85,9 @@ void host_file_serve(const void *data, int size)
 
 void host_reset(void)
 {
-    host_fail_open_at = host_fail_stat_at = host_fail_read_at = host_fail_map_at = 0;
-    host_open_calls = host_stat_calls = host_read_calls = host_map_calls = 0;
-    host_failed = 0;
+    host_fail_open_at = host_fail_stat_at = host_fail_read_at = host_fail_map_at = host_fail_unmap_at = 0;
+    host_open_calls = host_stat_calls = host_read_calls = host_map_calls = host_unmap_calls = 0;
+    host_failed = host_unmap_failed = 0;
     host_short_read_at = 0;
     host_read_error = -EIO;
     host_read_bytes = 0;
@@ -269,14 +272,26 @@ int paging_map_to(struct paging_4gb_chunk *directory, void *virt, void *phys, vo
     }
     if (flags == (PAGING_IS_PRESENT | PAGING_IS_WRITEABLE) && virt == phys)
     {
-        // Supervisor identity restoration revokes ownership (free or failed map), never fails.
+        // Supervisor identity restoration revokes a user mapping (process_free). A failed map
+        // changes nothing, so there is never anything to revoke after one.
+        if (++host_unmap_calls == host_fail_unmap_at)
+        {
+            host_unmap_failed = 1;
+            return -EINVARG;
+        }
+        int revoked = 0;
         for (int i = 0; i < mapping_count; i++)
         {
             if (mappings[i].directory == directory && mappings[i].virt == virt)
             {
                 mappings[i] = mappings[--mapping_count];
                 i--;
+                revoked++;
             }
+        }
+        if (!revoked)
+        {
+            problem("revoked a range that was never mapped (a failed map leaves nothing to undo)");
         }
         return 0;
     }

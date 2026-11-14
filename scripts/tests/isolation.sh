@@ -6,6 +6,9 @@
 # process_free on top of it): default identity maps are present, writable and supervisor-only, a
 # user page opens its PDE and no neighbour, free restores a supervisor identity page, a failed
 # malloc leaves no user page, the loaded directory is never changed, constructor failures unwind.
+# Mappings are all or nothing: a leaf under a missing or 4 MiB PDE (any value), a range touching
+# such a PDE anywhere, a NULL or loaded directory, a wrapping range or a negative count is refused
+# with no PDE or PTE changed, and a page whose revocation is refused stays owned and allocated.
 #
 # QEMU part: fault.elf (programs/faulttest) runs as a probe: it checks that its own data, stack,
 # allocation and code work, prints its mailbox and waits. scripts/tests/lib/isolation.py finds
