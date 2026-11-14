@@ -3,12 +3,14 @@
 # Process memory isolation: ring 3 reaches only its own pages.
 #
 # Host part: scripts/tests/host/page-tables.c runs the real paging.c (and process_malloc/
-# process_free on top of it): default identity maps are present, writable and supervisor-only, a
+# process_free on top of it): default identity maps are present, writable and supervisor-only with
+# page zero absent (PTE 0 is 0, PDE 0 present), nothing maps virtual 0 present again, a
 # user page opens its PDE and no neighbour, free restores a supervisor identity page, a failed
 # malloc leaves no user page, the loaded directory is never changed, constructor failures unwind.
 # Mappings are all or nothing: a leaf under a missing or 4 MiB PDE (any value), a range touching
-# such a PDE anywhere, a NULL or loaded directory, a wrapping range or a negative count is refused
-# with no PDE or PTE changed, and a page whose revocation is refused stays owned and allocated.
+# such a PDE anywhere, a NULL or loaded directory, a wrapping range, a negative count or flags
+# above bit 11 are refused with no PDE or PTE changed, and a page whose revocation is refused stays
+# owned and allocated.
 #
 # QEMU part: fault.elf (programs/faulttest) runs as a probe: it checks that its own data, stack,
 # allocation and code work, prints its mailbox and waits. scripts/tests/lib/isolation.py finds
@@ -16,8 +18,9 @@
 # follows what the CPU and the kernel do: a user #PF on exactly the probe's instruction, error
 # 0x5 (read or call) or 0x7 (write), CR2 = target, from ring 3, in the probe's task and directory,
 # the probe's whole map as the CPU sees it ("info mem": only its stack, ELF segments and live
-# allocations are user pages), interrupt_handler's frame, process_terminate on the probe's
-# process under the kernel directory (no user page at all), then the probe's slot and task gone.
+# allocations are user pages, and nothing is mapped below 0x1000), interrupt_handler's frame,
+# process_terminate on the probe's process under the kernel directory (no user page at all, page
+# zero absent too), then the probe's slot and task gone.
 #   k*: kernel text (call), kernel data, heap table (read, write), VGA, boot stack, TSS entry stack
 #       (read, write), 0x7fff000 and 0xfffff000 (PDEs with no user page), the pages around the
 #       user stack and after the program (PDEs with user pages: the neighbours stay supervisor)

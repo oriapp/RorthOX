@@ -40,6 +40,7 @@
     "scripts/tests/keyboard-symbols.sh": 6.0,
     "scripts/tests/load-unwind.sh": 0.2,
     "scripts/tests/multiboot-header.sh": 0.1,
+    "scripts/tests/null-page.sh": 8.4,
     "scripts/tests/open-oom.sh": 67.3,
     "scripts/tests/panic-screen.sh": 0.1,
     "scripts/tests/panic.sh": 3.1,
