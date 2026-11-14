@@ -31,6 +31,7 @@ def main(args):
             if source.is_file():
                 (target / 'results.json').write_bytes(source.read_bytes())
     parity_summary = pathlib.Path('build/ci/nightly/parity.md')
+    parity_summary.unlink(missing_ok=True)   # never show an earlier run's parity table
     parity = subprocess.run(['python3', '-B', 'scripts/ci-parity.py',
                              str(prepared / 'tcg'), str(prepared / 'kvm'),
                              str(expected_file), str(parity_summary)], capture_output=True, text=True)

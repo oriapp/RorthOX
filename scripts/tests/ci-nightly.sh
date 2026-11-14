@@ -38,7 +38,9 @@ with tempfile.TemporaryDirectory(dir=sys.argv[2]) as directory:
                            cwd=root, capture_output=True, text=True)
         assert (p.returncode == 0) == ok, (label, p.returncode, p.stdout, p.stderr)
         assert ('::notice::' if ok else '::error::') in p.stdout, (label, p.stdout)
-        assert summary.exists() and '## KVM / TCG parity' in summary.read_text(), label
+        assert summary.exists() and '## Nightly flake hunt' in summary.read_text(), label
+        if ok:
+            assert '## KVM / TCG parity' in summary.read_text(), label
         if row:
             assert row in summary.read_text(), (label, row)
     check('green', True, '| scripts/smoke.sh | 3/3 |')
@@ -47,6 +49,8 @@ with tempfile.TemporaryDirectory(dir=sys.argv[2]) as directory:
     (flake / 'iteration-2/status.txt').write_text('0\n')
     save(flake / 'iteration-2/results.json', 'tcg', expected, 'scripts/smoke.sh')
     check('failed test', False, '| scripts/smoke.sh | 2/3 |')
+    save(flake / 'iteration-2/results.json', 'tcg', expected[1:])
+    check('partial test list', False, 'Iteration 2: invalid or missing report')
     save(flake / 'iteration-2/results.json', 'tcg', expected)
     save(axis / 'axis-kvm-1/results.json', 'kvm', expected[0::4], expected[0])
     check('KVM failure', False)
