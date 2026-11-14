@@ -95,7 +95,7 @@ repo.mkdir()
 git(repo, 'init', '-q', '-b', 'main')
 git(repo, 'config', 'core.symlinks', 'true')
 TESTS = ('pic', 'heap', 'heap-oom', 'argument-oom', 'elf-unwind', 'open-oom', 'exceptions', 'tss-io',
-         'select-tests', 'ci-parity', 'workflow')
+         'select-tests', 'ci-parity', 'workflow', 'ci-nightly')
 baseline = {
     'README.md': 'readme\n', 'docs/a.md': 'a\n', 'docs/sub/b.md': 'b\n', 'kernel/kernel.c': 'int x;\n',
     'kernel/boot/boot.asm': 'nop\n', 'programs/blank/blank.c': 'int y;\n', 'programs/stdlib/src/stdio.c': '\n',
@@ -173,7 +173,7 @@ ANY = r'.'
 
 def T(*names):
     if 'smoke' in names:
-        names = (*names, 'select-tests', 'ci-parity', 'workflow')
+        names = (*names, 'select-tests', 'ci-parity', 'workflow', 'ci-nightly')
     return ['scripts/smoke.sh' if n == 'smoke' else f'scripts/tests/{n}.sh' for n in names]
 
 

@@ -15,8 +15,8 @@ root = pathlib.Path(sys.argv[1])
 with tempfile.TemporaryDirectory(dir=sys.argv[2]) as directory:
     work = pathlib.Path(directory)
     axis, flake, summary = work / 'axis', work / 'flake', work / 'summary.md'
-    expected = ['scripts/smoke.sh'] + sorted(str(p) for p in (root / 'scripts/tests').glob('*.sh'))
-    expected = [name.replace(str(root) + '/', '') for name in expected]
+    tracked = subprocess.check_output(['git', 'ls-files', '-z', '--', ':(glob)scripts/tests/*.sh'], cwd=root)
+    expected = ['scripts/smoke.sh'] + sorted(p.decode('utf-8') for p in tracked.split(b'\0') if p)
     def save(path, accel, names, failed=None):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({'accelerator': accel, 'selected': len(names), 'tests': [
@@ -34,11 +34,12 @@ with tempfile.TemporaryDirectory(dir=sys.argv[2]) as directory:
     (flake / 'test-timings.json').write_text('{}\n')
     def check(label, ok, row=None, jobs=('success',) * 4):
         summary.unlink(missing_ok=True)
-        p = subprocess.run(['python3', '-B', 'scripts/ci-nightly.py', str(axis), str(flake), str(summary), *jobs],
+        p = subprocess.run(['python3', '-B', 'scripts/ci-nightly.py', str(axis), str(flake), str(summary), str(work / 'staging'), *jobs],
                            cwd=root, capture_output=True, text=True)
         assert (p.returncode == 0) == ok, (label, p.returncode, p.stdout, p.stderr)
         assert ('::notice::' if ok else '::error::') in p.stdout, (label, p.stdout)
         assert summary.exists() and '## Nightly flake hunt' in summary.read_text(), label
+        assert (work / 'staging/expected.txt').read_text().splitlines() == expected, label
         if ok:
             assert '## KVM / TCG parity' in summary.read_text(), label
         if row:

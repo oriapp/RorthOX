@@ -618,7 +618,7 @@ the head of the most recent successful push run on the same non-main branch with
 A change limited to README.md or docs/ still builds the disk and ISO, but runs
 no tests. Changes limited to top-level scripts/tests/*.sh (plus documentation)
 run the touched tests and smoke; heap-oom also runs argument-oom, elf-unwind and
-open-oom; exceptions also runs tss-io; kernel-exceptions, screen-waits and task-list also run test-isolation. Every subset also runs select-tests, ci-parity and workflow, which check the other tests. A deleted test, change to a shared
+open-oom; exceptions also runs tss-io; kernel-exceptions, screen-waits and task-list also run test-isolation. Every subset also runs select-tests, ci-parity, ci-nightly and workflow, which check the other tests. A deleted test, change to a shared
 host/ or lib/ helper, unknown path, missing history or non-ancestor push runs
 the full suite. Every push to main, manual run and scheduled run also runs the
 full suite. The selector publishes its mode, reason and chosen test list; an

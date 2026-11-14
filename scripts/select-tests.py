@@ -12,7 +12,7 @@ import sys
 
 # These checks read every top-level test and must run on every test-only change.
 META_TESTS = {'scripts/tests/select-tests.sh', 'scripts/tests/ci-parity.sh',
-              'scripts/tests/workflow.sh'}
+              'scripts/tests/workflow.sh', 'scripts/tests/ci-nightly.sh'}
 
 
 def successful_push_base(repo, repository, branch, head, token, opener=urllib.request.urlopen):

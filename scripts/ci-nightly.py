@@ -13,14 +13,16 @@ Invalid, escape, load, markdown = (getattr(parity_module, key) for key in ('Inva
 
 
 def main(args):
-    if len(args) != 7:
-        raise Invalid('usage: ci-nightly.py AXIS_DIR FLAKE_DIR SUMMARY IMAGE BUILD AXIS FLAKE')
-    axis, flake, summary = map(pathlib.Path, args[:3])
-    expected = ['scripts/smoke.sh'] + sorted(str(p) for p in pathlib.Path('scripts/tests').glob('*.sh'))
-    expected_file = pathlib.Path('build/ci/nightly/expected.txt')
+    if len(args) != 8:
+        raise Invalid('usage: ci-nightly.py AXIS_DIR FLAKE_DIR SUMMARY WORK_DIR IMAGE BUILD AXIS FLAKE')
+    axis, flake, summary, work = map(pathlib.Path, args[:4])
+    # Ignore untracked fixtures created by other tests running in parallel.
+    tracked = subprocess.check_output(['git', 'ls-files', '-z', '--', ':(glob)scripts/tests/*.sh'])
+    expected = ['scripts/smoke.sh'] + sorted(p.decode('utf-8') for p in tracked.split(b'\0') if p)
+    expected_file = work / 'expected.txt'
     expected_file.parent.mkdir(parents=True, exist_ok=True)
     expected_file.write_text('\n'.join(expected) + '\n')
-    prepared = pathlib.Path('build/ci/nightly/parity')
+    prepared = work / 'parity'
     if prepared.exists():
         shutil.rmtree(prepared)
     for accel in ('tcg', 'kvm'):
@@ -30,7 +32,7 @@ def main(args):
             source = axis / f'axis-{accel}-{number}' / 'results.json'
             if source.is_file():
                 (target / 'results.json').write_bytes(source.read_bytes())
-    parity_summary = pathlib.Path('build/ci/nightly/parity.md')
+    parity_summary = work / 'parity.md'
     parity_summary.unlink(missing_ok=True)   # never show an earlier run's parity table
     parity = subprocess.run(['python3', '-B', 'scripts/ci-parity.py',
                              str(prepared / 'tcg'), str(prepared / 'kvm'),
@@ -66,8 +68,8 @@ def main(args):
     for name in sorted(counts):
         lines.append(f'| {markdown(name)[:160]} | {counts[name]}/3 |')
     lines.append('')
-    lines.append('Jobs: ' + ', '.join(f'{name}={markdown(value)[:40]}' for name, value in zip(('image', 'build', 'axis', 'flake'), args[3:])))
-    if any(value != 'success' for value in args[3:]):
+    lines.append('Jobs: ' + ', '.join(f'{name}={markdown(value)[:40]}' for name, value in zip(('image', 'build', 'axis', 'flake'), args[4:])))
+    if any(value != 'success' for value in args[4:]):
         bad = True
     summary_text = '\n'.join(lines) + '\n'
     with summary.open('a', encoding='utf-8') as out:
@@ -75,7 +77,7 @@ def main(args):
             out.write(parity_summary.read_text(encoding='utf-8'))
         out.write(summary_text[:12000])
     failed = sum(count != 3 for count in counts.values())
-    print(('::error::' if bad else '::notice::') + escape(f'Nightly: {len(expected)} tests, {failed} below 3/3; parity {"failed" if parity.returncode else "OK"}; jobs {args[3:]}'))
+    print(('::error::' if bad else '::notice::') + escape(f'Nightly: {len(expected)} tests, {failed} below 3/3; parity {"failed" if parity.returncode else "OK"}; jobs {args[4:]}'))
     return int(bad)
 
 

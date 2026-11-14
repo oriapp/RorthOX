@@ -295,4 +295,4 @@ jobs:
           AXIS_RESULT: ${{ needs.axis.result }}
           FLAKE_RESULT: ${{ needs.flake.result }}
         run: |
-          python3 -B scripts/ci-nightly.py "$RUNNER_TEMP/axis" "$RUNNER_TEMP/flake" "$GITHUB_STEP_SUMMARY" "$IMAGE_RESULT" "$BUILD_RESULT" "$AXIS_RESULT" "$FLAKE_RESULT"
+          python3 -B scripts/ci-nightly.py "$RUNNER_TEMP/axis" "$RUNNER_TEMP/flake" "$GITHUB_STEP_SUMMARY" "build/ci/nightly" "$IMAGE_RESULT" "$BUILD_RESULT" "$AXIS_RESULT" "$FLAKE_RESULT"
