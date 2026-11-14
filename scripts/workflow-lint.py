@@ -184,7 +184,18 @@ def lint(text):
     kvm_steps = {name: body for name, body in
                  re.findall(r'^      - name: ([^\n]+)\n(.*?)(?=^      - |\Z)', kvm, re.M | re.S)}
     names = re.findall(r'^      - name: ([^\n]+)$', kvm, re.M)
-    require(len(names) == len(set(names)), 'duplicate KVM step name')
+    expected_names = [
+        'Enable the host KVM device if present',
+        'Verify the image for this revision',
+        'Extract KVM production build',
+        'Diagnose KVM in the image',
+        'Test with KVM',
+        'Add KVM test summary',
+        'Upload KVM results',
+    ]
+    # The fallback must reject differently spelled scalars with the same YAML name.
+    # Also disallow extra steps that could replace the tested build or its results.
+    require(names == expected_names, 'duplicate or unexpected KVM step name')
     image_step = kvm_steps.get('Verify the image for this revision', '')
     extract_step = kvm_steps.get('Extract KVM production build', '')
     diagnostic_step = kvm_steps.get('Diagnose KVM in the image', '')

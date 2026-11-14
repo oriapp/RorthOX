@@ -148,6 +148,8 @@ with tempfile.TemporaryDirectory() as temp:
             'permissions: {}\n# jobs: unrelated\nenv:\n  T: ${{ github.token }}\n', 1),
             'credentials outside publication'),
         ('kvm-image-id', kvm_change(credential_step, ''), 'KVM job must use the same verified image'),
+        ('kvm-diagnostic-image-id', kvm_change('      - name: Diagnose KVM in the image\n        timeout-minutes: 1\n        env:\n          RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}\n',
+            '      - name: Diagnose KVM in the image\n        timeout-minutes: 1\n        env:\n'), 'KVM job must use the same verified image'),
         ('kvm-manifest', kvm_change('build/ci/production.tar.gz "$MANIFEST_SHA256"',
             'build/ci/production.tar.gz "$(sha256sum build/ci/production.tar.gz | cut -c1-64)"'),
             'KVM job must use the same verified image'),
@@ -156,14 +158,14 @@ with tempfile.TemporaryDirectory() as temp:
             'KVM job must use the same verified image'),
         ('kvm-no-udev', kvm_change('            echo \'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"\' | sudo tee /etc/udev/rules.d/99-kvm4all.rules\n', ''),
             'KVM sudo is confined to device setup'),
-        ('kvm-privileged', kvm_change('      - name: Add KVM test summary\n        timeout-minutes: 2\n',
-            '      - name: Extra\n        timeout-minutes: 1\n        run: docker run --privileged --rm alpine true\n      - name: Add KVM test summary\n        timeout-minutes: 1\n'),
+        ('kvm-privileged', kvm_change('      - name: Add KVM test summary\n        timeout-minutes: 2\n        if: always()\n        run: |',
+            '      - name: Add KVM test summary\n        timeout-minutes: 2\n        if: always()\n        run: |\n          docker run --privileged --rm alpine true'),
             'KVM job must not run host Docker'),
         ('kvm-container-diagnostic', kvm_change('        run: ./ci/run.sh bash ci/kvm-diagnostics.sh container',
             '        run: echo skipped'),
             'KVM job must use the same verified image'),
         ('kvm-extract', kvm_change('      - name: Extract KVM production build',
-            '      - name: Unpack KVM production build'), 'KVM job must use the same verified image'),
+            '      - name: Unpack KVM production build'), 'duplicate or unexpected KVM step name'),
         ('kvm-test-timeout', kvm_change("          RORTHOX_TEST_TIMEOUT: '300'\n", ''),
             'KVM job must use the same verified image'),
         ('kvm-upload', kvm_change('      - name: Upload KVM results\n        timeout-minutes: 2\n        if: always()',
@@ -186,7 +188,7 @@ with tempfile.TemporaryDirectory() as temp:
         ('inline-binary-tag', kvm_change(credential_step, credential_step +
             '          T: [!!binary JHt7IHNlY3JldHMuR0lUSFVCX1RPS0VOIH19]\n'), 'YAML tags are not supported'),
         ('docker-create', kvm_change('          bash ci/kvm-diagnostics.sh host "$before" "$after"',
-            '            docker create alpine true'), 'KVM job must use the same verified image'),
+            '          bash ci/kvm-diagnostics.sh host "$before" "$after"\n          docker create alpine true'), 'KVM job must not run host Docker'),
         ('sudo-extra', kvm_change('            sudo udevadm settle',
             '            sudo chmod 0666 /var/run/docker.sock\n            sudo udevadm settle'), 'KVM sudo is confined to device setup'),
         ('host-script', kvm_change('          ./ci/run.sh ./scripts/run-tests.sh -j 2 --results build/tests/runs/kvm',
@@ -206,7 +208,19 @@ with tempfile.TemporaryDirectory() as temp:
             'escaped scalar requires YAML parser'),
         ('duplicate-kvm-step-name', kvm_change('      - name: Test with KVM\n        timeout-minutes: 31',
             '      - name: Test with KVM\n        timeout-minutes: 1\n        run: echo duplicate\n'
-            '      - name: Test with KVM\n        timeout-minutes: 30'), 'duplicate KVM step name'),
+            '      - name: Test with KVM\n        timeout-minutes: 30'), 'duplicate or unexpected KVM step name'),
+        ('quoted-kvm-step-name', kvm_change('      - name: Test with KVM\n        timeout-minutes: 31',
+            '      - name: "Test with KVM"\n        timeout-minutes: 1\n        run: echo duplicate\n'
+            '      - name: Test with KVM\n        timeout-minutes: 30'), 'duplicate or unexpected KVM step name'),
+        ('single-quoted-kvm-step-name', kvm_change('      - name: Test with KVM\n        timeout-minutes: 31',
+            "      - name: 'Test with KVM'\n        timeout-minutes: 1\n        run: echo duplicate\n"
+            '      - name: Test with KVM\n        timeout-minutes: 30'), 'duplicate or unexpected KVM step name'),
+        ('commented-kvm-step-name', kvm_change('      - name: Test with KVM\n        timeout-minutes: 31',
+            '      - name: Test with KVM # comment\n        timeout-minutes: 1\n        run: echo duplicate\n'
+            '      - name: Test with KVM\n        timeout-minutes: 30'), 'duplicate or unexpected KVM step name'),
+        ('spaced-kvm-step-name', kvm_change('      - name: Test with KVM\n        timeout-minutes: 31',
+            '      - name: Test with KVM \n        timeout-minutes: 1\n        run: echo duplicate\n'
+            '      - name: Test with KVM\n        timeout-minutes: 30'), 'duplicate or unexpected KVM step name'),
     )
     for tag, mutated, reason in cases:
         print('checking', tag, flush=True)
