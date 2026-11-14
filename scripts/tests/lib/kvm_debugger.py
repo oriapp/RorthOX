@@ -3,8 +3,9 @@
 kvm_debugger.py <socket> <kernel.map> <kernel disassembly> <shell elf> <debugcon log> <results> tcg|kvm
 
 The shell is idle, polling getkey. All checks run in one debugger session.
-  sync      at task_return: "p eip" before and after the first "g" is recorded (KVM may read a
-            stale copy before it; not checked). ebx set there is dead: at the "and" the guest's own
+  sync      the test's own "c" stops at task_return; the "p eip" sent right after that stop, before
+            any "g", and the one after the client's "g" are recorded (KVM may read a stale copy
+            before the "g"; not checked). ebx set there is dead: at the "and" the guest's own
             ebx (the registers pointer) is read. eax set at the "and" must reach the CPU: at the
             "push" it is (value & mask) | 0x202. Those two stops come from the test's own "c", so a
             register write and a memory read are the first accesses after them. The client sends
@@ -19,7 +20,10 @@ The shell is idle, polling getkey. All checks run in one debugger session.
             KVM without KVM_GUESTDBG_BLOCKIRQ; by default it masks them during a step).
             120 stops at the shell's "mov eax, SYSCALL_GETKEY" (ring 3, IF set); in each, a key
             byte is put into the keyboard controller (IRQ 1 pending), and continuing steps off to
-            the next instruction, the guest takes the key, and no #DB reaches the guest.
+            the next instruction with the key still pending right after the step (under KVM an
+            interrupt taken inside the step runs its whole handler and the step still ends at the
+            next instruction: only the controller shows it), the guest takes the key after that,
+            and no #DB reaches the guest.
   fault     ud2 at that breakpoint, a breakpoint at the #UD stub: under TCG the step stops at the
             stub and cont() raises; under KVM the step runs freely until that breakpoint (or on).
             Either way cont() must raise, not continue, within its timeout; what happened is printed.
@@ -38,11 +42,13 @@ STOPOFFS = 120
 
 
 class LoggedRsp(Rsp):
-    """Rsp that keeps every packet it sends and where each step off a breakpoint landed."""
+    """Rsp that keeps every packet it sends, where each step off a breakpoint landed and, when
+    obf is a list, the keyboard controller's output-buffer bit right after each step-off."""
 
     def __init__(self, *args):
         self.log = []
         self.landed = []
+        self.obf = None
         super().__init__(*args)
 
     def _send_packet(self, payload):
@@ -57,6 +63,8 @@ class LoggedRsp(Rsp):
     def _step_off(self, eip):
         super()._step_off(eip)
         self.landed.append((eip, self.reg("eip")))
+        if self.obf is not None:
+            self.obf.append(status(self) & 1)
 
 
 def unsynced_accesses(log):
@@ -109,9 +117,9 @@ def status(r):
     return int(m.group(1), 16)
 
 
-def raw_cont(r):
+def raw_cont(r, timeout=10):
     r._send_packet("c")
-    r._check_stop(r._read_packet(10))
+    r._check_stop(r._read_packet(timeout))
 
 
 def main():
@@ -128,13 +136,18 @@ def main():
     r = LoggedRsp(sock)
     try:
         # sync
+        if r.reg("eip") == task_return:     # attached right there: the "c" below would not move
+            r.step()
         r.add_breakpoint(task_return)
-        r.cont(30)
-        r.log.append("g")   # the raw "p" below comes before the sync on purpose: not counted
-        before = r.request("p8")
+        raw_cont(r, 30)
+        i = len(r.log)
+        before = r.request("p8")     # before any "g" on purpose: not counted in sync_g_first
+        raw_first = r.log[i - 1:i + 1] == ["c", "p8"]
+        del r.log[i]
         after = r.reg("eip")
         print("  sync: p eip before g %s, after g %#x" % (before, after))
         res.add("sync_stop", after == task_return, "stopped at %#x" % after)
+        res.add("sync_raw_p_first", raw_first, "packets around it: %s" % r.log[max(0, i - 3):i + 1])
         regs_ptr = r.read32(r.reg("esp") + 4)
         r.set_reg("ebx", SENTINEL_EBX)
         r.remove_breakpoint(task_return)
@@ -225,6 +238,7 @@ def main():
         pending = taken = 0
         bad = []
         r.landed = []
+        r.obf = []
         for i in range(STOPOFFS + 1):    # the first stop comes from elsewhere, then one step-off each
             try:
                 stop = r.cont(10)
@@ -240,12 +254,15 @@ def main():
             r.monitor("o 0x64 0xd2")    # write the keyboard output buffer: IRQ 1 as for a key
             r.monitor("o 0x60 0xaa")    # left shift released
             pending += status(r) & 1
-        last = r.landed
+        last, kept = r.landed, r.obf
+        r.obf = None
         off = [l for l in last if l != (getkey, getkey + 5)]
         res.add("stepoff_lands_next", not bad and len(last) == STOPOFFS and not off,
                 "%s; step-offs elsewhere: %s" % (bad, ["%#x->%#x" % l for l in off[:5]]))
         res.add("stepoff_keys", pending == STOPOFFS + 1 and taken == STOPOFFS,
                 "%d keys pending, %d taken" % (pending, taken))
+        res.add("stepoff_key_kept", len(kept) == STOPOFFS and all(kept),
+                "%d of %d step-offs left the key pending" % (sum(kept), len(kept)))
         text = open(debugcon, "rb").read().decode("latin-1")
         res.add("stepoff_no_guest_db", "exception:" not in text and "PANIC" not in text, "debugcon: %r" % text[-200:])
 

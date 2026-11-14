@@ -509,7 +509,8 @@ failed tests' output and logs within its limits, and a failing test fails only i
 shard's reports and annotations.
 `debugger-step` checks the tests' own gdbstub helper against a fake stub, without QEMU: QEMU can report a single
 step as finished without having run the instruction, so stepping off a breakpoint is retried a few times and then
-fails instead of hitting the same breakpoint twice. A second fake follows what QEMU 8.2's source does under KVM:
+fails instead of hitting the same breakpoint twice. A second fake follows what QEMU 8.2's source does under KVM
+(read from the source; on a KVM host only the breakpoint limit is checked so far, see `kvm-debugger`):
 registers and memory come from a copy that only a full register read refreshes, there are at most 4 hardware
 breakpoints, and a single step after the debugger moved `eip` runs on freely. The helper reads all registers once
 after every stop, refuses a fifth breakpoint, a second one at the same address and such a step, and steps off a
@@ -517,8 +518,12 @@ breakpoint with interrupts masked for that one step.
 `kvm-debugger` checks the same on QEMU's real gdbstub, under the accelerator the run uses: a full register read
 before any other access after each stop, a register written at a stop reaching the CPU, no fifth breakpoint (under
 KVM the stub must refuse one too), no step after `eip` was moved, 200 or more kernel steps of one instruction each,
-120 step-offs from a ring-3 breakpoint with a key waiting that land on the next instruction and raise no exception
-in the guest, and a step over a faulting instruction that stops the helper instead of letting it continue.
+120 step-offs from a ring-3 breakpoint with a key waiting that land on the next instruction with the key still
+waiting (under KVM an interrupt taken inside the step would run its whole handler and the step would still end
+there) and raise no exception in the guest, and a step over a faulting instruction that stops the helper instead of
+letting it continue. Of the stub's own KVM behaviour, only the refused fifth breakpoint is checked: the stale
+register copy is printed to `steps.txt` (the `eip` read right after a stop, before the full read), not checked,
+and a step after a moved `eip` is never sent, because the helper refuses it.
 `accelerator` checks `RORTHOX_ACCEL` with a stand-in for QEMU: the flags each setting gives QEMU, refused
 `QEMU_FLAGS`, the probe and the TCG choice before the first test, the KVM check of every monitor log, the reports,
 and that only the QEMU helpers start a guest and no test relies on `-d int` output unless it skips under KVM.

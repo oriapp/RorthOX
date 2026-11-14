@@ -7,7 +7,8 @@
 # this test checks the same on the real one, under the accelerator the run uses (RORTHOX_ACCEL).
 # scripts/tests/lib/kvm_debugger.py does the debugger side; its docstring lists the cases. Under
 # TCG the gdbstub has none of these traps, so there the test checks the client's own guards (the
-# packets it sends) and that a step off with a key pending lands on the next instruction. Under
+# packets it sends) and that a step off with a key pending lands on the next instruction without
+# taking the key (under KVM an interrupt inside the step would not change where it ends). Under
 # KVM the stub's answers are checked too (a fifth breakpoint refused), and the KVM-only behaviour
 # is recorded in steps.txt (a stale "p" before "g", a step over a faulting instruction).
 # Needs python3. Env: BOOT_TIMEOUT=60
@@ -57,6 +58,7 @@ touch "$R"
 check "debugger session finished without errors"             "$OUT/status.txt" "exit=0" line
 check "single steps let interrupts in (as KVM)"               "$R" "PASS sstep_irqs" line
 check "sync: stopped at task_return"                          "$R" "PASS sync_stop" line
+check "sync: the recorded p eip is the first packet after it" "$R" "PASS sync_raw_p_first" line
 check "sync: the next stop reads the guest's ebx"             "$R" "PASS sync_guest_ebx" line
 check "sync: a register written at a stop reaches the CPU"    "$R" "PASS sync_write_reached" line
 check "sync: g before any register or memory access"          "$R" "PASS sync_g_first" line
@@ -67,6 +69,7 @@ check "200+ ring-0 steps, one instruction each"               "$R" "PASS steps_o
 check "step-off breakpoint is mov eax, imm32"                 "$R" "PASS stepoff_insn" line
 check "IF set, key pending: step-offs land on the next insn"  "$R" "PASS stepoff_lands_next" line
 check "a key was pending in each stop and taken after it"     "$R" "PASS stepoff_keys" line
+check "the key is still pending right after each step-off"   "$R" "PASS stepoff_key_kept" line
 check "no exception in the guest from the step-offs"          "$R" "PASS stepoff_no_guest_db" line
 check "a step over ud2 ends, cont() raises"                   "$R" "PASS fault_step_ends" line
 finish kvm-debugger
