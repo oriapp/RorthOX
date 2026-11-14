@@ -297,7 +297,12 @@ for mode in denied hang fallback in-kernel; do
          [ "$(grep -c "^test RORTHOX_ACCEL=tcg$" "$qlog")" -eq 2 ] && [ "$(grep -c "^start .*-accel tcg .*file=" "$qlog")" -eq 2 ] &&
          [ "$(field accelerator)" = tcg ] && field accelerator_reason | grep -q "RORTHOX_ACCEL=auto: .*$why"'
 done
-run auto-ok RORTHOX_ACCEL=auto FAKE_KVM=ok -- "$fx/fails.sh"
+ run auto-setup-failed RORTHOX_ACCEL=auto RORTHOX_KVM_SETUP_FAILED=settle-failed FAKE_KVM=ok -- "$fx/order.sh"
+ expect "auto, failed host setup forces TCG without a probe and reports why" \
+     '[ $status -eq 0 ] && [ "$(field accelerator)" = tcg ] &&
+      field accelerator_reason | grep -q "host KVM device setup failed (settle-failed)" &&
+      ! grep -q "^start .*info kvm" "$qlog" && grep -q -- "-accel tcg" "$qlog"'
+ run auto-ok RORTHOX_ACCEL=auto FAKE_KVM=ok -- "$fx/fails.sh"
 expect "auto, KVM works: kvm; a test that fails under it ran once and failed" \
     '[ $status -eq 1 ] && [ "$(field accelerator)" = kvm ] && [ "$(grep -c "^test fails" "$qlog")" -eq 1 ] &&
      grep -Fxq "test fails RORTHOX_ACCEL=kvm" "$qlog" && grep -Fxq "=== 0 passed, 1 failed, 0 skipped" "$log"'

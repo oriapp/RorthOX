@@ -441,7 +441,7 @@ in the kernel, so the PIC and PIT are the same QEMU models as under TCG (`isa-i8
 `info qtree`, which the KVM check looks for; QEMU 8.0 and later refuse `kernel-irqchip=off` with KVM), and a
 test fails if one of its QEMUs didn't report KVM. `QEMU_CPU` sets the CPU model (default `qemu32`), and
 `QEMU_FLAGS` may not choose the accelerator or the CPU. The KVM path is checked with a stand-in for QEMU
-(`accelerator`) and has not yet run on a KVM host.
+(`accelerator`) and has run on a hosted KVM machine.
 
 Every test runs in a session of its own. The runner keeps what it prints in `output.log` in the test's directory
 and shows it when the test ends, each line behind the test's name (`[heap] heap: all checks passed`), so the
@@ -563,7 +563,9 @@ The default is `RORTHOX_ACCEL=tcg`. Set `RORTHOX_ACCEL=kvm` to require KVM, or
 as a retry after a test fails). The container receives `/dev/kvm` only when the host user can
 access it; the KVM probe checks whether QEMU really enabled it. The four required CI shards use `RORTHOX_ACCEL=auto` on pushes and pull requests: each
 runner enables access to `/dev/kvm`, probes KVM once, and records the chosen accelerator and reason
-in its report and a public shard notice. If KVM is unavailable or unusable, that shard runs TCG;
+in its report and a public shard notice. If device setup fails (including a timed-out udev settle),
+the shard warns and uses TCG even if KVM is otherwise accessible; if KVM is unavailable or unusable,
+it also runs TCG. Shard 1 additionally runs all tests that require TCG, under forced TCG;
 a failed test is never retried. The required result reports the accelerator of every shard. PR
 code already runs on the same hosted runners with device setup, so its accelerator policy is the
 same as a push, though either run can fall back independently. A later nightly workflow will
@@ -584,8 +586,8 @@ running the old published digest. The build job runs `make all iso` once and
 uploads a production archive with file checksums. Four fresh jobs verify that
 same-run archive and run one shard each without rebuilding production files;
 `results-1` through `results-4` carry JUnit, JSON, summaries and bounded failed
-logs. The aggregate runs even if a required job fails and requires all four
-shards. Only trusted branch pushes may publish a tag; publication waits for the required
+logs. The extra TCG-only results are in `results-1/tcg-only`; the aggregate runs
+even if a required job fails and requires all four shards and the TCG-only run. Only trusted branch pushes may publish a tag; publication waits for the required
 build and all four test shards to pass, then checks tool versions before publishing.
 The digest recorded in `ci/image.ref` is a local quick-start/devcontainer pin;
 CI chooses by the input hash instead. A changed image that fails the suite is
@@ -681,7 +683,7 @@ isolate every resource or protect against every kernel bug.
 - **Small things.** Kernel `vsprintf`/`sprintf` are unbounded (no code that runs calls them). The boot clock prints minutes and seconds without
   leading zeros.
 - **GRUB path is BIOS only.** No UEFI, and the ISO has only been booted in QEMU (not VirtualBox, not from USB).
-- **Tested only in QEMU** (8.2, TCG). It has never run on real hardware.
+- **Tested only in QEMU** (8.2, TCG and hosted KVM). It has never run on real hardware.
 
 ## Roadmap
 

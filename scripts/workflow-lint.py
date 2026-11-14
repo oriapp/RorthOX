@@ -174,28 +174,63 @@ def lint(text):
                 './configure.sh' not in body, f'{name}: legacy toolchain path')
     test = jobs['test']
     host = re.search(r'^      - name: Enable the host KVM device if present\n(.*?)(?=^      - |\Z)', test, re.M | re.S)
-    require(host is not None, 'required shard must prepare KVM device')
+    require(host is not None and test.count('      - name: Enable the host KVM device if present\n') == 1,
+            'required shard must prepare KVM device')
     allowed_sudo = [
-        "echo 'KERNEL==\"kvm\", GROUP=\"kvm\", MODE=\"0666\", OPTIONS+=\"static_node=kvm\"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules",
-        'sudo udevadm control --reload-rules',
-        'sudo udevadm trigger --name-match=kvm',
-        'sudo udevadm settle',
+        "echo 'KERNEL==\"kvm\", GROUP=\"kvm\", MODE=\"0666\", OPTIONS+=\"static_node=kvm\"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null || failed=udev-rule",
+        'if [ -z "$failed" ]; then sudo udevadm control --reload-rules || failed=reload-rules; fi',
+        'if [ -z "$failed" ]; then sudo udevadm trigger --name-match=kvm || failed=trigger; fi',
+        'if [ -z "$failed" ]; then sudo udevadm settle --timeout=30 || failed=settle; fi',
     ]
-    require([line.strip() for line in test.splitlines() if re.search(r'\bsudo\b', line)] == allowed_sudo and
+    # The full error-handled command must be present in the named step, nowhere else.
+    raw_sudo = [(name, line.strip()) for name, body in jobs.items()
+                for line in body.splitlines() if re.search(r'\bsudo\b', line)]
+    require(raw_sudo == [('test', line) for line in allowed_sudo] and
             all(('            ' + line) in host.group(1).splitlines() for line in allowed_sudo) and
-            'bash ci/kvm-diagnostics.sh host "$before" "$after"' in host.group(1),
+            'bash ci/kvm-diagnostics.sh host "$before" "$after"' in host.group(1) and
+            'RORTHOX_KVM_SETUP_FAILED=$failed failed' in host.group(1),
             'KVM sudo is confined to shard device setup')
+    if yaml is not None:
+        parsed_sudo = [(name, line.strip()) for name, job in parsed.items()
+                       for step in job['steps'] for line in str(step.get('run', '')).splitlines()
+                       if re.search(r'\bsudo\b', line)]
+        require(parsed_sudo == [('test', line) for line in allowed_sudo],
+                'KVM sudo is confined to shard device setup')
     require(re.search(r'^          RORTHOX_ACCEL: auto$', test, re.M) and
-            "RORTHOX_TEST_TIMEOUT: '300'" in test and
+            "RORTHOX_TEST_TIMEOUT: '300'" not in test and
             not re.search(r'\b(?:docker|rsync)\b', test, re.I) and
             not re.search(r'^    (?:container|services):', test, re.M),
             'required shards must select KVM once without host Docker or rsync')
+    # Only the named TCG-only step may force an accelerator; parsed run strings
+    # catch both inline assignments and exports hidden in a quoted YAML scalar.
+    tcg_step = re.search(r'^      - name: Test TCG-only boot cases\n(.*?)(?=^      - |\Z)', test, re.M | re.S)
+    require(tcg_step is not None and 'if: matrix.shard == 1' in tcg_step.group(1) and
+            '          RORTHOX_ACCEL: tcg' in tcg_step.group(1) and
+            'grep -lE ' in tcg_step.group(1) and
+            'qemu_require_tcg' in tcg_step.group(1) and
+            './ci/run.sh ./scripts/run-tests.sh --results build/tests/runs/tcg-only' in tcg_step.group(1) and
+            'build/tests/runs/tcg-only/results.json' in test and
+            'scripts/ci-result.py' in jobs['result'], 'required TCG-only run missing')
+    run_override = re.compile(r'\b(?:export\s+)?RORTHOX_ACCEL\s*=')
+    other_test = test.replace(tcg_step.group(0), '')
+    require(not run_override.search(other_test) and
+            not run_override.search(tcg_step.group(1).split('        run: |', 1)[-1]), 'shard must not override its accelerator')
     if yaml is not None:
+        require(all(not run_override.search(str(step.get('run', '')))
+                    for step in parsed['test']['steps']) and
+                all('RORTHOX_ACCEL' not in step.get('env', {})
+                    for step in parsed['test']['steps']
+                    if step.get('name') not in ('Verify and test', 'Test TCG-only boot cases')),
+                'shard must not override its accelerator')
         require('container' not in parsed['test'] and 'services' not in parsed['test'] and
                 sum(step.get('name') == 'Enable the host KVM device if present'
                     for step in parsed['test']['steps']) == 1 and
                 next(step for step in parsed['test']['steps'] if step.get('name') == 'Verify and test')
-                    .get('env', {}).get('RORTHOX_ACCEL') == 'auto',
+                    .get('env', {}).get('RORTHOX_ACCEL') == 'auto' and
+                sum(step.get('name') == 'Test TCG-only boot cases'
+                    for step in parsed['test']['steps']) == 1 and
+                next(step for step in parsed['test']['steps'] if step.get('name') == 'Test TCG-only boot cases')
+                    .get('env', {}).get('RORTHOX_ACCEL') == 'tcg',
                 'required shard KVM device setup or accelerator missing')
     require('    continue-on-error:' not in jobs['image-prep'],
             'image preparation must be required')

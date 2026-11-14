@@ -73,7 +73,10 @@ accel_select() {
             RORTHOX_ACCEL=kvm
             RORTHOX_ACCEL_REASON="RORTHOX_ACCEL=kvm: $accel_why" ;;
         auto)
-            if accel_probe; then RORTHOX_ACCEL=kvm; else RORTHOX_ACCEL=tcg; fi
+            if [ -n "${RORTHOX_KVM_SETUP_FAILED:-}" ]; then
+                RORTHOX_ACCEL=tcg
+                accel_why="host KVM device setup failed (${RORTHOX_KVM_SETUP_FAILED:0:80})"
+            elif accel_probe; then RORTHOX_ACCEL=kvm; else RORTHOX_ACCEL=tcg; fi
             RORTHOX_ACCEL_REASON="RORTHOX_ACCEL=auto: $accel_why" ;;
         *)
             echo "RORTHOX_ACCEL must be auto, tcg or kvm, not '$RORTHOX_ACCEL'" >&2

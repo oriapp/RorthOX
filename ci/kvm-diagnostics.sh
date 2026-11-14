@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bounded public diagnostics for the advisory KVM check.
+# Bounded public diagnostics for the required shard KVM probe.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 notice() {

@@ -37,7 +37,15 @@ with tempfile.TemporaryDirectory(dir=sys.argv[2]) as work:
     check(True, 'TCG-only 1')
     p = subprocess.run(['python3', '-B', str(root / 'scripts/ci-parity.py'), str(tcg),
                         *(str(run) for run in runs)], cwd=root, capture_output=True, text=True)
-    assert 'TCG 5.0s; KVM 4.0s, 4.0s, 4.0s; top 5:' in p.stdout, p.stdout
+    assert 'TCG 4.0s; KVM 4.0s, 4.0s, 4.0s; top 5:' in p.stdout, p.stdout
+    assert 'top 5: test-4 run 3:' in p.stdout and 'test-3 run 2:' in p.stdout, p.stdout
+    # A new caller makes the hard-coded TCG-only list stale before any report is read.
+    extra_caller = root / 'scripts/tests/ci-parity-caller.sh'
+    try:
+        extra_caller.write_text('qemu_require_tcg\n')
+        check(False, 'TCG-only test list stale')
+    finally:
+        extra_caller.unlink()
     save(runs[0] / 'results.json', 'kvm', [test(f'test-{i}') for i in (1, 2, 3, 4)] + [test(tcg_only, 'failed')])
     check(False, 'KVM 1 scripts/tests/boot-segments.sh: TCG passed, KVM failed')
     save(runs[0] / 'results.json', 'kvm', [test(f'test-{i}') for i in (1, 2, 3, 4)] + [test(tcg_only, 'skipped')])

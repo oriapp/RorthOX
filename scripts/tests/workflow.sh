@@ -123,17 +123,61 @@ with tempfile.TemporaryDirectory() as temp:
     # Required shards must not lose host device setup, select forced TCG or copy
     # arbitrary artifacts. Both YAML and parser-free lint reject these edits.
     shard_cases = (
-        ('no-shard-udev', '            sudo udevadm settle', '            echo no-device'),
+        ('no-shard-udev', '            if [ -z "$failed" ]; then sudo udevadm settle --timeout=30 || failed=settle; fi', '            echo no-device'),
         ('forced-shard-tcg', '          RORTHOX_ACCEL: auto', '          RORTHOX_ACCEL: tcg'),
         ('shard-rsync', '          ./ci/run.sh ./scripts/run-tests.sh --shard',
          '          rsync -a /tmp/x build/tests/\n          ./ci/run.sh ./scripts/run-tests.sh --shard'),
-        ('shard-sudo', '            sudo udevadm settle',
-         '            sudo chmod 0666 /var/run/docker.sock\n            sudo udevadm settle'),
+        ('shard-sudo', '            if [ -z "$failed" ]; then sudo udevadm settle --timeout=30 || failed=settle; fi',
+         '            sudo id\n            if [ -z "$failed" ]; then sudo udevadm settle --timeout=30 || failed=settle; fi'),
     )
     for tag, old, new in shard_cases:
         assert old in text, tag
         print('checking', tag, flush=True)
         run(text.replace(old, new, 1), False)
+    # Each payload targets one rule, not a second unrelated prohibition.
+    shard_run = '          ./ci/run.sh ./scripts/run-tests.sh --shard'
+    cases = (
+        ('host-unhandled-udev',
+         'if [ -z "$failed" ]; then sudo udevadm settle --timeout=30 || failed=settle; fi',
+         'if [ -z "$failed" ]; then sudo udevadm settle --timeout=30; fi', 'KVM sudo'),
+        ('host-no-settle-timeout', 'sudo udevadm settle --timeout=30',
+         'sudo udevadm settle', 'KVM sudo'),
+        ('sudo-other-job', '      - name: Build and package', '      - run: sudo id\n      - name: Build and package', 'KVM sudo'),
+        ('sudo-decoded', '      - name: Verify and test', '      - run: "su\\x64o id"\n      - name: Verify and test', 'KVM sudo'),
+        ('shard-docker', shard_run, '          docker create something\n' + shard_run, 'without host Docker'),
+        ('shard-container', '  test:\n', '  test:\n    container: ubuntu:24.04\n', 'without host Docker'),
+        ('shard-services', '  test:\n', '  test:\n    services: {}\n', 'without host Docker'),
+        ('shard-timeout', '          RORTHOX_ACCEL: auto\n', "          RORTHOX_ACCEL: auto\n          RORTHOX_TEST_TIMEOUT: '300'\n", 'without host Docker'),
+        ('shard-override', shard_run, '          export RORTHOX_ACCEL=tcg\n' + shard_run, 'must not override'),
+        ('shard-inline-override', shard_run, '          RORTHOX_ACCEL=tcg ' + shard_run.strip() + '\n' + shard_run, 'must not override'),
+        ('tcg-missing', '      - name: Test TCG-only boot cases', '      - name: Test TCG cases', 'TCG-only'),
+        ('tcg-accel', '      - name: Test TCG-only boot cases\n        if: matrix.shard == 1\n        env:\n          RORTHOX_REQUIRE_ISO: \'1\'\n          RORTHOX_ACCEL: tcg',
+         '      - name: Test TCG-only boot cases\n        if: matrix.shard == 1\n        env:\n          RORTHOX_REQUIRE_ISO: \'1\'\n          RORTHOX_ACCEL: auto', 'TCG-only'),
+        ('host-duplicated', '      - name: Verify and test',
+         '      - name: Enable the host KVM device if present\n        run: echo extra\n      - name: Verify and test', 'KVM device'),
+        ('host-diagnostics', '          bash ci/kvm-diagnostics.sh host "$before" "$after"',
+         '          echo no-diagnostics', 'KVM sudo'),
+        ('binary-tag', '          SHARD: ${{ matrix.shard }}', '          SHARD: ${{ matrix.shard }}\n          T: !!binary YWJj', 'YAML tags'),
+        ('value-jobs-env', 'permissions: {}', 'permissions: {}\n# jobs:\nenv:\n  T: ${{ github.token }}', 'credentials'),
+        ('escaped-secret-hex', '          SHARD: ${{ matrix.shard }}',
+         '          SHARD: ${{ matrix.shard }}\n          T: "${{ se\\x63rets.GITHUB_TOKEN }}"', 'credentials'),
+        ('escaped-secret-unicode', '          SHARD: ${{ matrix.shard }}',
+         '          SHARD: ${{ matrix.shard }}\n          T: "${{ se\\u0063rets.GITHUB_TOKEN }}"', 'credentials'),
+        ('escaped-expression', '      - name: Verify and test',
+         '      - run: "echo $\\x7b{ github.event.inputs.arg }"\n      - name: Verify and test', 'expression'),
+    )
+    for tag, old, new, why in cases:
+        assert text.count(old) == 1 or tag in ('shard-timeout',), tag
+        variant = text.replace(old, new, 1)
+        print('checking', tag, flush=True)
+        workflow.write_text(variant)
+        for path in (None, no_yaml):
+            env = os.environ.copy()
+            env.pop('GITHUB_ACTIONS', None)
+            if path is not None: env['PYTHONPATH'] = str(path)
+            p = subprocess.run(['python3', '-B', str(lint), str(workflow)], cwd=root, env=env,
+                               text=True, capture_output=True)
+            assert p.returncode and (why in p.stderr or path is not None and 'requires YAML parser' in p.stderr), (tag, p.stderr)
     env = os.environ.copy()
     env['GITHUB_ACTIONS'] = 'true'
     env['PYTHONPATH'] = str(no_yaml)
@@ -151,10 +195,19 @@ with tempfile.TemporaryDirectory() as temp:
         proc = subprocess.run(['python3', '-B', str(aggregate), str(results), build, shards],
                               capture_output=True, text=True)
         assert (proc.returncode == 0) == success, proc.stdout + proc.stderr
+    extra = results / 'results-1/tcg-only/results.json'
+    extra.parent.mkdir()
+    extra.write_text(json.dumps({'accelerator': 'tcg', 'accelerator_reason': 'RORTHOX_ACCEL=tcg',
+                                 'tests': [{'name': 'scripts/tests/boot-segments.sh', 'result': 'passed'}]}))
     check('success', 'success', True)
+    extra.write_text(json.dumps({'accelerator': 'tcg', 'accelerator_reason': 'forced',
+                                 'tests': [{'name': 'scripts/tests/not-required.sh', 'result': 'passed'}]}))
+    check('success', 'success', False)
+    extra.write_text(json.dumps({'accelerator': 'tcg', 'accelerator_reason': 'RORTHOX_ACCEL=tcg',
+                                 'tests': [{'name': 'scripts/tests/boot-segments.sh', 'result': 'passed'}]}))
     summary = subprocess.run(['python3', '-B', str(aggregate), str(results),
                               'success', 'success'], capture_output=True, text=True).stdout
-    assert '| test 1 | reported | tcg |' in summary and '::notice title=Test shard 1 accelerator::tcg:' in summary
+    assert '| TCG-only | reported | tcg |' in summary and '| test 1 | reported | tcg |' in summary and '::notice title=Test shard 1 accelerator::tcg:' in summary
     check('failure', 'skipped', False)
     report = results / 'results-3/results.json'
     report.write_text(json.dumps({'accelerator': 'kvm', 'accelerator_reason': 'RORTHOX_ACCEL=auto: KVM works', 'tests': [{'result': 'failed'}]}))
@@ -165,9 +218,30 @@ with tempfile.TemporaryDirectory() as temp:
     check('success', 'success', False)
     report.write_text(json.dumps({'accelerator': 'kvm', 'accelerator_reason': 'KVM', 'tests': [{}]}))
     check('success', 'success', False)
-    report.write_text(json.dumps({'accelerator': 'tcg', 'accelerator_reason': 'RORTHOX_ACCEL=auto: no KVM', 'tests': [{'result': 'passed'}]}))
+    report.write_text(json.dumps({'accelerator': 'tcg', 'accelerator_reason': 'RORTHOX_ACCEL=auto: no KVM', 'tests': [{'name': 'scripts/tests/boot-segments.sh', 'result': 'passed'}]}))
     (results / 'results-2/results.json').unlink()
     check('success', 'success', False)
+    (results / 'results-2/results.json').write_text(json.dumps({'accelerator': 'tcg',
+        'accelerator_reason': 'no KVM', 'tests': [{'result': 'passed'}]}))
+    extra.unlink()
+    check('success', 'success', False)
+    extra.write_text(json.dumps({'accelerator': 'kvm', 'accelerator_reason': 'invalid',
+                                 'tests': [{'name': 'scripts/tests/boot-segments.sh', 'result': 'passed'}]}))
+    check('success', 'success', False)
+    extra.write_text(json.dumps({'accelerator': 'tcg', 'accelerator_reason': 'reason',
+                                 'tests': [{'name': 'scripts/tests/boot-segments.sh', 'result': 'skipped'}]}))
+    check('success', 'success', False)
+    extra.write_text(json.dumps({'accelerator': 'tcg', 'accelerator_reason': 'a' * 1499 + '%\n',
+                                 'tests': [{'name': 'scripts/tests/boot-segments.sh', 'result': 'passed'}]}))
+    p = subprocess.run(['python3', '-B', str(aggregate), str(results), 'success', 'success'],
+                       capture_output=True, text=True)
+    assert p.returncode == 0 and 'a' * 1499 + '%25' in p.stdout
+    assert '%0A' not in p.stdout.split('::notice title=TCG-only test accelerator::', 1)[1].splitlines()[0]
+    extra.write_text(json.dumps({'accelerator': 'tcg', 'accelerator_reason': 'x%\r\n::error::injected',
+                                 'tests': [{'name': 'scripts/tests/boot-segments.sh', 'result': 'passed'}]}))
+    p = subprocess.run(['python3', '-B', str(aggregate), str(results), 'success', 'success'],
+                       capture_output=True, text=True)
+    assert p.returncode == 0 and 'x%25%0D%0A::error::injected' in p.stdout and '\n::error::injected' not in p.stdout
     print('PASS aggregate requires every job and report')
 (out / 'result.txt').write_text('workflow: all cases passed\n')
 PY

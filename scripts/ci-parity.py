@@ -107,8 +107,10 @@ def main(args):
             if item and item[0] == 'passed' and item[1] is not None:
                 ratios.append((item[1] / base, name, number, item[1], base))
     ratios.sort(reverse=True)
-    tcg_total = sum(item[1] for item in tcg.values() if item[0] == "passed")
-    kvm_totals = [sum(item[1] for item in run.values() if item[0] == "passed") for run in runs]
+    # Compare identical test sets; TCG-only tests have no KVM duration.
+    shared = set(tcg) - TCG_ONLY
+    tcg_total = sum(item[1] for name, item in tcg.items() if name in shared and item[0] == "passed")
+    kvm_totals = [sum(item[1] for name, item in run.items() if name in shared and item[0] == "passed") for run in runs]
     totals = f"TCG {tcg_total:.1f}s; KVM " + ", ".join(f"{v:.1f}s" for v in kvm_totals)
     top = "; ".join(f"{name} run {number}: {ratio:.2f}x ({kvm:.1f}s/{base:.1f}s)"
                     for ratio, name, number, kvm, base in ratios[:5])
