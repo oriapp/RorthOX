@@ -127,21 +127,25 @@ for i in "${!forced_args[@]}"; do
 done
 [ "$probe" = 1 ] || fail 'KVM probe timeout not forwarded'
 [[ " ${forced_args[*]} " == *' RORTHOX_ACCEL=kvm '* ]] || fail 'forced KVM not forwarded'
-# Check the access predicates separately from the character-device predicate.
-# Root ignores file modes, but the normal build user cannot read this fixture.
+# Root ignores modes. Under the build user each case denies exactly one access.
 if [ "$(id -u)" -ne 0 ]; then
     touch "$tmp/denied-kvm"
-    chmod 000 "$tmp/denied-kvm"
-    sed -e 's|\[ -c /dev/kvm \]|[ -c /dev/null ]|' \
-        -e "s|\[ -r /dev/kvm \]|[ -r $tmp/denied-kvm ]|" \
-        -e "s|\[ -w /dev/kvm \]|[ -w $tmp/denied-kvm ]|" ci/run.sh > "$unusable_script"
-    ( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/denied-argv" RORTHOX_IMAGE_REF="$digest"
-      export RORTHOX_ACCEL=auto
-      unset RORTHOX_IN_IMAGE RORTHOX_TEST_ROOT
-      bash "$unusable_script" true )
-    mapfile -d '' -t denied_args < "$tmp/denied-argv"
-    for i in "${!denied_args[@]}"; do
-        [ "${denied_args[i]}" != --device ] || fail 'inaccessible KVM device forwarded'
+    for mode in 0400 0200; do
+        chmod "$mode" "$tmp/denied-kvm"
+        sed -e 's|\[ -c /dev/kvm \]|[ -c /dev/null ]|' \
+            -e "s|\[ -r /dev/kvm \]|[ -r $tmp/denied-kvm ]|" \
+            -e "s|\[ -w /dev/kvm \]|[ -w $tmp/denied-kvm ]|" ci/run.sh > "$unusable_script"
+        grep -qF "[ -r $tmp/denied-kvm ]" "$unusable_script" || fail 'KVM read edit missed'
+        grep -qF "[ -w $tmp/denied-kvm ]" "$unusable_script" || fail 'KVM write edit missed'
+        grep -qF '[ -c /dev/null ]' "$unusable_script" || fail 'KVM device edit missed'
+        ( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/denied-argv" RORTHOX_IMAGE_REF="$digest"
+          export RORTHOX_ACCEL=auto
+          unset RORTHOX_IN_IMAGE RORTHOX_TEST_ROOT
+          bash "$unusable_script" true )
+        mapfile -d '' -t denied_args < "$tmp/denied-argv"
+        for i in "${!denied_args[@]}"; do
+            [ "${denied_args[i]}" != --device ] || fail "inaccessible KVM device forwarded ($mode)"
+        done
     done
 fi
 [ "${default_args[${#default_args[@]}-2]}" = "$ref" ] || fail 'default image differs from recorded digest'

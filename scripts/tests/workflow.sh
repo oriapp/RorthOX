@@ -90,7 +90,7 @@ with tempfile.TemporaryDirectory() as temp:
         ('required-prep-masked', '  image-prep:\n    runs-on:', '  image-prep:\n    continue-on-error: true\n    runs-on:'),
         ('aggregate-job-masked', '  result:\n    needs:', '  result:\n    continue-on-error: true\n    needs:'),
         ('kvm-required', '    needs: [build, test]\n    if: always()', '    needs: [build, test, kvm]\n    if: always()'),
-        ('kvm-in-pr', "    if: github.event_name == 'push' && github.repository == 'oriapp/RorthOX'\n    continue-on-error: true", '    if: always()\n    continue-on-error: true'),
+        ('kvm-in-pr', "    if: always() && github.event_name == 'push' && github.repository == 'oriapp/RorthOX' && needs.build.result == 'success'\n    continue-on-error: true", '    if: always()\n    continue-on-error: true'),
         ('kvm-as-tcg', '          RORTHOX_ACCEL: kvm', '          RORTHOX_ACCEL: tcg'),
         ('publish-commented-needs', '    needs: [image-prep, build, test]\n    if: github.event_name', '    needs: image-prep # needs: [image-prep, build, test]\n    if: github.event_name'),
         ('no-logout-always', '        if: always()\n        run: docker logout ghcr.io', '        run: docker logout ghcr.io'),
@@ -158,8 +158,8 @@ with tempfile.TemporaryDirectory() as temp:
             'KVM job must use the same verified image'),
         ('kvm-no-udev', kvm_change('            echo \'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"\' | sudo tee /etc/udev/rules.d/99-kvm4all.rules\n', ''),
             'KVM sudo is confined to device setup'),
-        ('kvm-privileged', kvm_change('      - name: Add KVM test summary\n        timeout-minutes: 2\n        if: always()\n        run: |',
-            '      - name: Add KVM test summary\n        timeout-minutes: 2\n        if: always()\n        run: |\n          docker run --privileged --rm alpine true'),
+        ('kvm-privileged', kvm_change('      - name: Add KVM test summaries\n        timeout-minutes: 2\n        if: always()\n        run: |',
+            '      - name: Add KVM test summaries\n        timeout-minutes: 2\n        if: always()\n        run: |\n          docker run --privileged --rm alpine true'),
             'KVM job must not run host Docker'),
         ('kvm-container-diagnostic', kvm_change('        run: ./ci/run.sh bash ci/kvm-diagnostics.sh container',
             '        run: echo skipped'),
@@ -171,10 +171,10 @@ with tempfile.TemporaryDirectory() as temp:
         ('kvm-upload', kvm_change('      - name: Upload KVM results\n        timeout-minutes: 2\n        if: always()',
             '      - name: Upload KVM results\n        timeout-minutes: 2\n        if: success()'),
             'KVM job must use the same verified image'),
-        ('kvm-step-timeout', kvm_change('      - name: Test with KVM\n        timeout-minutes: 31',
-            '      - name: Test with KVM'), 'kvm: step'),
+        ('kvm-step-timeout', kvm_change('      - name: Test with KVM three times\n        timeout-minutes: 85',
+            '      - name: Test with KVM three times'), 'kvm: step'),
         ('kvm-override-accel', kvm_change('          ./ci/run.sh ./scripts/run-tests.sh -j 2',
-            '          export RORTHOX_ACCEL=tcg\n          ./ci/run.sh ./scripts/run-tests.sh -j 2'), 'KVM run must not override its accelerator'),
+            '          export RORTHOX_ACCEL=tcg\n          ./ci/run.sh ./scripts/run-tests.sh -j 2'), 'KVM job must use the same verified image and build artifact'),
         ('github-nested', kvm_change(credential_step, credential_step +
             '          T: ${{ toJSON((github)) }}\n'), 'credentials outside publication'),
         ('github-or', kvm_change(credential_step, credential_step +
@@ -191,8 +191,8 @@ with tempfile.TemporaryDirectory() as temp:
             '          bash ci/kvm-diagnostics.sh host "$before" "$after"\n          docker create alpine true'), 'KVM job must not run host Docker'),
         ('sudo-extra', kvm_change('            sudo udevadm settle',
             '            sudo chmod 0666 /var/run/docker.sock\n            sudo udevadm settle'), 'KVM sudo is confined to device setup'),
-        ('host-script', kvm_change('          ./ci/run.sh ./scripts/run-tests.sh -j 2 --results build/tests/runs/kvm',
-            '          ./ci/run.sh ./scripts/run-tests.sh -j 2 --results build/tests/runs/kvm\n          ./scripts/accelerator.sh'), 'KVM scripts must run inside the image'),
+        ('host-script', kvm_change('          ./ci/run.sh ./scripts/run-tests.sh -j 2 --results "build/tests/runs/kvm-$i"',
+            '          ./ci/run.sh ./scripts/run-tests.sh -j 2 --results "build/tests/runs/kvm-$i"\n          ./scripts/accelerator.sh'), 'KVM job must use the same verified image and build artifact'),
         ('kvm-job-container', kvm_change('    runs-on: ubuntu-24.04\n',
             '    runs-on: ubuntu-24.04\n    container: alpine:latest\n'), 'KVM job must not run host Docker'),
         ('commented-image-id', kvm_change(credential_step, '          # RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}\n'), 'KVM job must use the same verified image'),
@@ -203,34 +203,40 @@ with tempfile.TemporaryDirectory() as temp:
         ('commented-test-limit', kvm_change("          RORTHOX_TEST_TIMEOUT: '300'", "          # RORTHOX_TEST_TIMEOUT: '300'"), 'KVM job must use the same verified image'),
     )
     cases += (
+        ('missing-parity-step', kvm_change('      - name: Compare KVM and TCG results',
+            '      - name: Ignore parity'), 'duplicate or unexpected KVM step name'),
+        ('one-kvm-run', kvm_change('for i in 1 2 3; do', 'for i in 1; do'),
+            'KVM job must use the same verified image and build artifact'),
+        ('wrong-tcg-artifacts', kvm_change('pattern: results-*', 'pattern: unrelated-*'),
+            'KVM job must use the same verified image and build artifact'),
         ('continued-escaped-secret', kvm_change(credential_step, credential_step +
             '          T: "safe\n' + r'            \x24\x7b\x7b \x73ecrets.GITHUB_TOKEN }}"' + '\n'),
             'escaped scalar requires YAML parser'),
-        ('duplicate-kvm-step-name', kvm_change('      - name: Test with KVM\n        timeout-minutes: 31',
-            '      - name: Test with KVM\n        timeout-minutes: 1\n        run: echo duplicate\n'
-            '      - name: Test with KVM\n        timeout-minutes: 30'), 'duplicate or unexpected KVM step name'),
-        ('quoted-kvm-step-name', kvm_change('      - name: Test with KVM\n        timeout-minutes: 31',
-            '      - name: "Test with KVM"\n        timeout-minutes: 1\n        run: echo duplicate\n'
-            '      - name: Test with KVM\n        timeout-minutes: 30'), 'duplicate or unexpected KVM step name'),
-        ('single-quoted-kvm-step-name', kvm_change('      - name: Test with KVM\n        timeout-minutes: 31',
-            "      - name: 'Test with KVM'\n        timeout-minutes: 1\n        run: echo duplicate\n"
-            '      - name: Test with KVM\n        timeout-minutes: 30'), 'duplicate or unexpected KVM step name'),
-        ('commented-kvm-step-name', kvm_change('      - name: Test with KVM\n        timeout-minutes: 31',
-            '      - name: Test with KVM # comment\n        timeout-minutes: 1\n        run: echo duplicate\n'
-            '      - name: Test with KVM\n        timeout-minutes: 30'), 'duplicate or unexpected KVM step name'),
-        ('unnamed-kvm-run', kvm_change('      - name: Add KVM test summary',
-            '      - run: ./ci/run.sh ./scripts/run-tests.sh -j 2 --results build/tests/runs/kvm\n'
+        ('duplicate-kvm-step-name', kvm_change('      - name: Test with KVM three times\n        timeout-minutes: 85',
+            '      - name: Test with KVM three times\n        timeout-minutes: 1\n        run: echo duplicate\n'
+            '      - name: Test with KVM three times\n        timeout-minutes: 84'), 'duplicate or unexpected KVM step name'),
+        ('quoted-kvm-step-name', kvm_change('      - name: Test with KVM three times\n        timeout-minutes: 85',
+            '      - name: "Test with KVM three times"\n        timeout-minutes: 1\n        run: echo duplicate\n'
+            '      - name: Test with KVM three times\n        timeout-minutes: 84'), 'duplicate or unexpected KVM step name'),
+        ('single-quoted-kvm-step-name', kvm_change('      - name: Test with KVM three times\n        timeout-minutes: 85',
+            "      - name: 'Test with KVM three times'\n        timeout-minutes: 1\n        run: echo duplicate\n"
+            '      - name: Test with KVM three times\n        timeout-minutes: 84'), 'duplicate or unexpected KVM step name'),
+        ('commented-kvm-step-name', kvm_change('      - name: Test with KVM three times\n        timeout-minutes: 85',
+            '      - name: Test with KVM three times # comment\n        timeout-minutes: 1\n        run: echo duplicate\n'
+            '      - name: Test with KVM three times\n        timeout-minutes: 84'), 'duplicate or unexpected KVM step name'),
+        ('unnamed-kvm-run', kvm_change('      - name: Add KVM test summaries',
+            '      - run: ./ci/run.sh ./scripts/run-tests.sh -j 2 --results "build/tests/runs/kvm-$i"\n'
             '        timeout-minutes: 1\n'
-            '      - name: Add KVM test summary'), 'duplicate or unexpected KVM step name'),
-        ('kvm-if-first', kvm_change('      - name: Add KVM test summary',
+            '      - name: Add KVM test summaries'), 'duplicate or unexpected KVM step name'),
+        ('kvm-if-first', kvm_change('      - name: Add KVM test summaries',
             '      - if: always()\n'
             '        name: Retry\n'
             '        timeout-minutes: 1\n'
-            '        run: ./ci/run.sh ./scripts/run-tests.sh -j 2 --results build/tests/runs/kvm\n'
-            '      - name: Add KVM test summary'), 'duplicate or unexpected KVM step name'),
-        ('spaced-kvm-step-name', kvm_change('      - name: Test with KVM\n        timeout-minutes: 31',
-            '      - name: Test with KVM \n        timeout-minutes: 1\n        run: echo duplicate\n'
-            '      - name: Test with KVM\n        timeout-minutes: 30'), 'duplicate or unexpected KVM step name'),
+            '        run: ./ci/run.sh ./scripts/run-tests.sh -j 2 --results "build/tests/runs/kvm-$i"\n'
+            '      - name: Add KVM test summaries'), 'duplicate or unexpected KVM step name'),
+        ('spaced-kvm-step-name', kvm_change('      - name: Test with KVM three times\n        timeout-minutes: 85',
+            '      - name: Test with KVM three times \n        timeout-minutes: 1\n        run: echo duplicate\n'
+            '      - name: Test with KVM three times\n        timeout-minutes: 84'), 'duplicate or unexpected KVM step name'),
     )
     for tag, mutated, reason in cases:
         print('checking', tag, flush=True)

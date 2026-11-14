@@ -107,7 +107,7 @@ def lint(text):
                 parsed['test'].get('needs') == ['image-prep', 'build'] and
                 parsed['image'].get('needs') == ['image-prep', 'build', 'test'] and
                 parsed['result'].get('needs') == ['build', 'test'] and
-                parsed['kvm'].get('needs') == ['image-prep', 'build'] and
+                parsed['kvm'].get('needs') == ['image-prep', 'build', 'test'] and
                 parsed['test'].get('strategy', {}).get('fail-fast') is False,
                 'invalid job dependencies or shard strategy')
     # Only block-style, unaliased YAML keys are supported by the fallback lint.
@@ -193,8 +193,10 @@ def lint(text):
         (None, 'actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53'),
         ('Extract KVM production build', None),
         ('Diagnose KVM in the image', None),
-        ('Test with KVM', None),
-        ('Add KVM test summary', None),
+        ('Test with KVM three times', None),
+        ('Download TCG results for parity', 'actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53'),
+        ('Compare KVM and TCG results', None),
+        ('Add KVM test summaries', None),
         ('Upload KVM results', 'actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f'),
     ]
     blocks = re.split(r'^      - ', kvm, flags=re.M)[1:]
@@ -209,13 +211,15 @@ def lint(text):
     image_step = kvm_steps.get('Verify the image for this revision', '')
     extract_step = kvm_steps.get('Extract KVM production build', '')
     diagnostic_step = kvm_steps.get('Diagnose KVM in the image', '')
-    test_step = kvm_steps.get('Test with KVM', '')
+    test_step = kvm_steps.get('Test with KVM three times', '')
+    parity_step = kvm_steps.get('Compare KVM and TCG results', '')
+    download_step = kvm_steps.get('Download TCG results for parity', '')
     host_step = kvm_steps.get('Enable the host KVM device if present', '')
     def step_field(step, field, value):
         return bool(re.search(r'^          ' + re.escape(field) + r': ' + re.escape(value) + r'$', step, re.M))
 
-    require(re.search(r'^    needs: \[image-prep, build\]$', kvm, re.M) and
-            re.search(r"^    if: github.event_name == 'push' && github.repository == 'oriapp/RorthOX'$", kvm, re.M) and
+    require(re.search(r'^    needs: \[image-prep, build, test\]$', kvm, re.M) and
+            re.search(r"^    if: always\(\) && github.event_name == 'push' && github.repository == 'oriapp/RorthOX' && needs.build.result == 'success'$", kvm, re.M) and
             'ci/image-job.sh receive' in image_step and 'ci/image-job.sh fetch' in image_step and
             step_field(image_step, 'IMAGE_MODE', '${{ needs.image-prep.outputs.mode }}') and
             step_field(test_step, 'RORTHOX_IMAGE_ID', '${{ steps.image-id.outputs.id }}') and
@@ -229,7 +233,14 @@ def lint(text):
             step_field(diagnostic_step, 'RORTHOX_IMAGE_ID', '${{ steps.image-id.outputs.id }}') and
             step_field(diagnostic_step, 'RORTHOX_ACCEL', 'kvm') and
             'run: ./ci/run.sh bash ci/kvm-diagnostics.sh container' in diagnostic_step and
-            bool(re.search(r'^          ./ci/run\.sh ./scripts/run-tests\.sh -j 2 --results build/tests/runs/kvm$', test_step, re.M)) and
+            bool(re.search(r'^          for i in 1 2 3; do$', test_step, re.M)) and
+            bool(re.search(r'^            ./ci/run\.sh ./scripts/run-tests\.sh -j 2 --results "build/tests/runs/kvm-\$i" \|\| status=1$', test_step, re.M)) and
+            'exit "$status"' in test_step and
+            'pattern: results-*' in download_step and
+            'if: always()' in download_step and
+            'if: always()' in parity_step and
+            'scripts/ci-parity.py build/tests/runs/tcg-shards build/tests/runs/kvm-1 build/tests/runs/kvm-2 build/tests/runs/kvm-3' in parity_step and
+            'cp -R "$RUNNER_TEMP/tcg-results/." build/tests/runs/tcg-shards/' in parity_step and
             bool(re.search(r'^          bash ci/kvm-diagnostics\.sh host \"\$before\" \"\$after\"$', host_step, re.M)) and
             'name: kvm-results' in kvm and
             re.search(r'^      - name: Upload KVM results\n        timeout-minutes: \d+\n        if: always\(\)$', kvm, re.M),
@@ -252,9 +263,11 @@ def lint(text):
                 'KVM job must not use a container or services')
         parsed_steps = {step.get('name'): step for step in parsed['kvm']['steps']}
         parsed_image = parsed_steps.get('Verify the image for this revision', {})
-        parsed_test = parsed_steps.get('Test with KVM', {})
+        parsed_test = parsed_steps.get('Test with KVM three times', {})
         parsed_extract = parsed_steps.get('Extract KVM production build', {})
         parsed_diagnostic = parsed_steps.get('Diagnose KVM in the image', {})
+        parsed_parity = parsed_steps.get('Compare KVM and TCG results', {})
+        parsed_download = parsed_steps.get('Download TCG results for parity', {})
         require(isinstance(parsed_image, dict) and isinstance(parsed_test, dict) and
                 parsed_image.get('env', {}).get('IMAGE_MODE') == '${{ needs.image-prep.outputs.mode }}' and
                 parsed_test.get('env', {}).get('RORTHOX_IMAGE_ID') == '${{ steps.image-id.outputs.id }}' and
@@ -266,6 +279,10 @@ def lint(text):
                 parsed_diagnostic.get('env', {}).get('RORTHOX_IMAGE_ID') == '${{ steps.image-id.outputs.id }}' and
                 parsed_diagnostic.get('env', {}).get('RORTHOX_ACCEL') == 'kvm' and
                 parsed_diagnostic.get('run') == './ci/run.sh bash ci/kvm-diagnostics.sh container' and
+                parsed_download.get('with', {}).get('pattern') == 'results-*' and
+                parsed_download.get('if') == 'always()' and
+                parsed_parity.get('if') == 'always()' and
+                'scripts/ci-parity.py build/tests/runs/tcg-shards' in parsed_parity.get('run', '') and
                 './ci/run.sh python3 -B scripts/ci-artifact.py extract build/ci/production.tar.gz "$MANIFEST_SHA256"' in parsed_extract.get('run', ''),
                 'KVM parsed step bindings differ')
     for step in parsed['kvm']['steps'] if yaml is not None else kvm_steps.values():

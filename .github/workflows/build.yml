@@ -281,11 +281,11 @@ jobs:
 
   # This is diagnostic only. Its failures are visible in its logs and artifact, not in the required result.
   kvm:
-    needs: [image-prep, build]
-    if: github.event_name == 'push' && github.repository == 'oriapp/RorthOX'
+    needs: [image-prep, build, test]
+    if: always() && github.event_name == 'push' && github.repository == 'oriapp/RorthOX' && needs.build.result == 'success'
     continue-on-error: true
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     permissions:
       contents: read
     steps:
@@ -352,8 +352,8 @@ jobs:
           RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}
           RORTHOX_ACCEL: kvm
         run: ./ci/run.sh bash ci/kvm-diagnostics.sh container
-      - name: Test with KVM
-        timeout-minutes: 31
+      - name: Test with KVM three times
+        timeout-minutes: 85
         env:
           MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}
           RORTHOX_REQUIRE_ISO: '1'
@@ -362,14 +362,42 @@ jobs:
           RORTHOX_ACCEL_PROBE_TIMEOUT: '30'
           RORTHOX_IMAGE_ID: ${{ steps.image-id.outputs.id }}
         run: |
-          ./ci/run.sh ./scripts/run-tests.sh -j 2 --results build/tests/runs/kvm
-      - name: Add KVM test summary
+          status=0
+          for i in 1 2 3; do
+            ./ci/run.sh ./scripts/run-tests.sh -j 2 --results "build/tests/runs/kvm-$i" || status=1
+          done
+          exit "$status"
+      # Only artifacts from the four required shards of this run are compared.
+      - name: Download TCG results for parity
+        timeout-minutes: 3
+        if: always()
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        with:
+          pattern: results-*
+          path: ${{ runner.temp }}/tcg-results
+      - name: Compare KVM and TCG results
         timeout-minutes: 2
         if: always()
         run: |
-          if [ -f build/tests/runs/kvm/summary.md ]; then
-            head -c 1000000 build/tests/runs/kvm/summary.md >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p build/tests/runs/tcg-shards
+          if [ -d "$RUNNER_TEMP/tcg-results" ]; then
+            cp -R "$RUNNER_TEMP/tcg-results/." build/tests/runs/tcg-shards/
           fi
+          status=0
+          ./ci/run.sh python3 -B scripts/ci-parity.py build/tests/runs/tcg-shards build/tests/runs/kvm-1 build/tests/runs/kvm-2 build/tests/runs/kvm-3 build/tests/runs/parity-summary.md || status=1
+          if [ -f build/tests/runs/parity-summary.md ]; then
+            head -c 6000 build/tests/runs/parity-summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
+      - name: Add KVM test summaries
+        timeout-minutes: 2
+        if: always()
+        run: |
+          for i in 1 2 3; do
+            if [ -f "build/tests/runs/kvm-$i/summary.md" ]; then
+              head -c 200000 "build/tests/runs/kvm-$i/summary.md" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
       # Keep the diagnostic report separate from the four required TCG shards.
       - name: Upload KVM results
         timeout-minutes: 2
@@ -378,8 +406,8 @@ jobs:
         with:
           name: kvm-results
           path: |
-            build/tests/runs/kvm/results.json
-            build/tests/runs/kvm/junit.xml
-            build/tests/runs/kvm/summary.md
-            build/tests/runs/kvm/failed/
+            build/tests/runs/kvm-*/results.json
+            build/tests/runs/kvm-*/junit.xml
+            build/tests/runs/kvm-*/summary.md
+            build/tests/runs/kvm-*/failed/
           if-no-files-found: warn

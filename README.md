@@ -403,9 +403,9 @@ qemu-system-i386 -m 128 -drive file=bin/os.bin,format=raw,index=0,media=disk \
 make test
 ```
 
-This builds everything (and the GRUB ISO, when its packages are installed) and runs 76 tests (`scripts/smoke.sh` plus
+This builds everything (and the GRUB ISO, when its packages are installed) and runs 78 tests (`scripts/smoke.sh` plus
 every `scripts/tests/*.sh`), as many at once as there are CPUs (about 2 minutes with 16); it keeps going after a
-failure and prints a summary (`76 passed, 0 failed, 0 skipped`) and where the output went. `make test TEST_JOBS=1`
+failure and prints a summary (`78 passed, 0 failed, 0 skipped`) and where the output went. `make test TEST_JOBS=1`
 runs them one after the other (about 14 minutes; as at any `-j`, a test's output shows when it ends);
 `TEST_JOBS=4` runs four at once. `make smoke` runs
 only the smoke test, and `./scripts/run-tests.sh scripts/tests/panic.sh` runs single tests (a test named twice runs
@@ -557,12 +557,17 @@ The default is `RORTHOX_ACCEL=tcg`. Set `RORTHOX_ACCEL=kvm` to require KVM, or
 `RORTHOX_ACCEL=auto` to use KVM if it works and otherwise use TCG (before tests start, never
 as a retry after a test fails). The container receives `/dev/kvm` only when the host user can
 access it; the KVM probe checks whether QEMU really enabled it. The required CI result uses
-TCG. On trusted pushes CI also runs the full suite with forced KVM in a separate,
-information-only job; that job can fail without making the required result red.
+TCG. On trusted pushes CI runs the same production build through the full suite with forced KVM three times
+in a separate information-only job. It compares each run's per-test result against the four required TCG shards:
+the runner records test results, not individual check IDs. Missing reports or tests and any difference are reported;
+the top ten KVM/TCG per-test duration ratios appear in the job summary. KVM failures do not make the required result red.
 Pull request code does not get a KVM run; self-hosted runners must never serve
 `pull_request` workflows. The trusted push run is the authoritative result.
 Local KVM has not been verified. See the run metadata for the chosen accelerator and reason.
 Local builds without Docker remain available with the documented toolchain.
+
+`ci-parity` checks equal and divergent report fixtures without QEMU. `ci-image` tests KVM's read and write
+access checks independently and refuses a fixture whose device substitutions missed.
 
 CI (`.github/workflows/build.yml`) runs on Ubuntu 24.04 for pushes to `main` or
 `features` and for pull requests. A read-only preparation job pulls the image
