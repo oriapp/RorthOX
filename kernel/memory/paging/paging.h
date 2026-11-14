@@ -32,6 +32,14 @@ void enable_paging();
 // Mutate inactive task directories only, with IF=0 and kernel CR3 loaded.
 // Reloading task CR3 invalidates translations before return; no global pages,
 // CR4.PGE stays 0. paging_set refuses the currently loaded directory.
+// paging_set and paging_map_range refuse (-EINVARG, nothing written) a NULL or
+// loaded directory, an unaligned address, and a leaf under a not-present or
+// 4 MiB PDE, whatever the new PTE value. A present user leaf sets U in its PDE;
+// no call clears it. paging_map_range checks the whole range (every PDE it
+// touches, negative counts, wrap of virt or phys) before its first write, so a
+// failure changes nothing; count 0 with valid arguments writes nothing and
+// returns 0. That holds only while nothing else changes the directory
+// meanwhile: IF=0, one CPU, directory not loaded.
 int paging_set(uint32_t *directory, void *virt, uint32_t val);
 bool paging_is_aligned(void *addr);
 

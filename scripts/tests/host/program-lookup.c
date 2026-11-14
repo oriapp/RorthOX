@@ -175,6 +175,13 @@ void task_sleep_until(uint32_t deadline)
     exit(4);
 }
 
+// Syscall 9 stops the kernel when it can't end a process; never reached with the stand-ins above.
+void PANIC(const char *msg, const char *file, int line)
+{
+    printf("PANIC() called unexpectedly: %s\n", msg);
+    exit(4);
+}
+
 // The syscall under test: 6 or 7, and for 7 whether its nodes must reach the loader.
 static int syscall_number;
 

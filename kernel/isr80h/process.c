@@ -8,6 +8,7 @@
 #include "string/string.h"
 #include "memory/heap/kheap.h"
 #include "include/kernel/time/pit.h"
+#include "include/kernel/sys.h"
 
 static const char *const program_search_paths[] = { RORTHOX_PROGRAM_SEARCH_PATHS };
 
@@ -198,7 +199,11 @@ void *isr80h_command8_get_program_arguments(struct interrupt_frame *frame)
 void *isr80h_command9_exit(struct interrupt_frame *frame)
 {
     struct process *process = task_current()->process;
-    process_terminate(process);
+    int res = process_terminate(process);
+    if (res < 0)
+    {
+        PANIC("exit: Cannot terminate process", __FILE__, __LINE__);
+    }
     task_next();
 
     return 0;

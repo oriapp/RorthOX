@@ -87,12 +87,7 @@ void *process_malloc(struct process *process, size_t size)
     int res = paging_map_to(process->task->page_directory, ptr, ptr, paging_align_address(ptr+size), PAGING_IS_WRITEABLE | PAGING_IS_PRESENT | PAGING_ACCESS_FROM_ALL);
     if (res < 0)
     {
-        // A partial map must not leave user access to blocks returned to the heap.
-        res = paging_map_to(process->task->page_directory, ptr, ptr, paging_align_address(ptr+size), PAGING_IS_PRESENT | PAGING_IS_WRITEABLE);
-        if (res < 0)
-        {
-            PANIC("process_malloc: Cannot restore supervisor mapping", __FILE__, __LINE__);
-        }
+        // Range mapping is atomic: no user mapping was published on failure.
         goto out_err;
     }
 
@@ -252,6 +247,20 @@ int process_terminate_allocation(struct process *process)
     return 0;
 }
 
+// The task directory must be destroyed before releasing allocations whose revocation failed.
+static void process_release_remaining_allocations(struct process *process)
+{
+    for (int i = 0; i < RORTHOX_MAX_PROGRAM_ALLOCATIONS; i++)
+    {
+        if (process->allocations[i].ptr)
+        {
+            kfree(process->allocations[i].ptr);
+            process->allocations[i].ptr = 0;
+            process->allocations[i].size = 0;
+        }
+    }
+}
+
 int process_free_binary_data(struct process *process)
 {
     kfree(process->ptr);
@@ -375,23 +384,22 @@ void process_close_files(struct process *process)
 
 int process_terminate(struct process *process)
 {
-    process_close_files(process);
-    int res = 0;
-    res = process_terminate_allocation(process);
-    if (res < 0)
+    if (!process || (process->filetype != PROCESS_FILETYPE_BINARY &&
+        process->filetype != PROCESS_FILETYPE_ELF))
     {
-        goto out;
+        return -EINVARG;
     }
+
+    process_close_files(process);
+    process_terminate_allocation(process);
 
     // Kernel CR3 is active: destroy user mappings before releasing their backing.
     task_free(process->task);
+    process->task = 0;
+    process_release_remaining_allocations(process);
 
-    res = process_free_program_data(process);
-    if (res < 0)
-    {
-        goto out;
-    }
-
+    // Validated ELF/raw release is non-failing; destruction must finish once started.
+    process_free_program_data(process);
 
     // Free the process stack memory.
     kfree(process->stack);
@@ -402,8 +410,7 @@ int process_terminate(struct process *process)
 
     print("Process was terminated\n"); // Replace with something. do something cool
 
-out:
-    return res;
+    return 0;
 }
 
 void process_get_arguments(struct process *process, int *argc, char ***argv)
@@ -677,7 +684,7 @@ int process_load_switch(const char *filename, struct process **process)
     return res;
 }
 
-// Discard an unpublished process with no outstanding argument allocations.
+// Discard an unpublished process, including argument allocations that could not be revoked.
 // Its directory was never active; destroy even partial user maps before freeing backing.
 static void process_discard(struct process *process)
 {
@@ -688,6 +695,8 @@ static void process_discard(struct process *process)
 
     process_close_files(process);
     task_discard(process->task);
+    process->task = 0;
+    process_release_remaining_allocations(process);
     kfree(process->stack);
     if (process->ptr)
     {
