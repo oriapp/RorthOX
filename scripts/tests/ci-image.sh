@@ -11,7 +11,8 @@ tmp=$(mktemp -d)
 fallback=
 work=
 kvm_script=
-trap 'rm -rf "$tmp"; [ -z "$work" ] || rm -rf "$work"; [ -z "$fallback" ] || rm -rf "$fallback"; [ -z "$kvm_script" ] || rm -f "$kvm_script"' EXIT
+unusable_script=
+trap 'rm -rf "$tmp"; [ -z "$work" ] || rm -rf "$work"; [ -z "$fallback" ] || rm -rf "$fallback"; [ -z "$kvm_script" ] || rm -f "$kvm_script"; [ -z "$unusable_script" ] || rm -f "$unusable_script"' EXIT
 fail() { echo "FAIL ci-image: $*" >&2; exit 1; }
 for file in ci/Dockerfile ci/image-key.sh ci/run.sh ci/image.ref .devcontainer/devcontainer.json; do
     [ -f "$file" ] || fail "missing $file"
@@ -84,7 +85,7 @@ digest=ghcr.io/oriapp/rorthox-build@sha256:1111111111111111111111111111111111111
 (
     cd "$work"
     export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/argv" DOCKER_EXIT=37
-    unset RORTHOX_IN_IMAGE RORTHOX_TEST_ROOT RORTHOX_TEST_TIMEOUT
+    unset RORTHOX_IN_IMAGE RORTHOX_TEST_ROOT RORTHOX_TEST_TIMEOUT RORTHOX_ACCEL_PROBE_TIMEOUT
     export RORTHOX_IMAGE_REF="$digest" GITHUB_ACTIONS=true RORTHOX_REQUIRE_ISO=1
     export GITHUB_TOKEN=secret ACTIONS_RUNTIME_TOKEN=secret GITHUB_ENV="$tmp/secret"
     export GITHUB_OUTPUT="$tmp/secret" GITHUB_STEP_SUMMARY="$tmp/secret"
@@ -104,24 +105,25 @@ expected+=(-e GITHUB_ACTIONS=true -e RORTHOX_ACCEL=tcg -e RORTHOX_REQUIRE_ISO=1
 for i in "${!expected[@]}"; do
     [ "${actual[i]}" = "${expected[i]}" ] || fail "docker argv[$i]: ${actual[i]}"
 done
-( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/default-argv"; unset RORTHOX_IN_IMAGE RORTHOX_IMAGE_REF
+( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/default-argv" RORTHOX_ACCEL=tcg; unset RORTHOX_IN_IMAGE RORTHOX_IMAGE_REF
   bash ci/run.sh true ) 2> "$tmp/current-warning"
 if grep -q 'warning: checkout image inputs differ from ci/image.ref' "$tmp/current-warning"; then
     fail 'current checkout warned about stale image inputs'
 fi
 mapfile -d '' -t default_args < "$tmp/default-argv"
-# When /dev/kvm is absent or not accessible, no device may be forwarded, even with forced KVM.
+# A regular file stands in for an unusable KVM device, regardless of the host.
+touch "$tmp/unusable-kvm"
+unusable_script=$(mktemp "$root/ci/.kvm-unusable.XXXXXX.sh")
+sed "s|/dev/kvm|$tmp/unusable-kvm|g" ci/run.sh > "$unusable_script"
 ( export PATH="$tmp/bin:$PATH" DOCKER_ARGS="$tmp/forced-argv" RORTHOX_IMAGE_REF="$digest"
   export RORTHOX_ACCEL=kvm RORTHOX_ACCEL_PROBE_TIMEOUT=17
   unset RORTHOX_IN_IMAGE RORTHOX_TEST_ROOT
-  bash ci/run.sh true )
+  bash "$unusable_script" true )
 mapfile -d '' -t forced_args < "$tmp/forced-argv"
 probe=0
 for i in "${!forced_args[@]}"; do
     if [ "${forced_args[i]}" = -e ] && [ "${forced_args[i+1]:-}" = RORTHOX_ACCEL_PROBE_TIMEOUT=17 ]; then probe=1; fi
-    if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
-        [ "${forced_args[i]}" != --device ] || fail 'unusable KVM device forwarded'
-    fi
+    [ "${forced_args[i]}" != --device ] || fail 'unusable KVM device forwarded'
 done
 [ "$probe" = 1 ] || fail 'KVM probe timeout not forwarded'
 [[ " ${forced_args[*]} " == *' RORTHOX_ACCEL=kvm '* ]] || fail 'forced KVM not forwarded'
