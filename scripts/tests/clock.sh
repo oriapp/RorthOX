@@ -15,6 +15,8 @@
 #    0x3ff001), repeated for at least 30 ticks so timer IRQs also arrive while esp is garbage,
 #    returns a value between the calls before and after it and gets its esp back,
 #    and the wrapper keeps ebx, esi, edi, ebp, esp and the stack word above its arguments.
+#    The garbage esp loop's round limit scales with the busy loop's calls (no fixed speed
+#    bound); the test prints both counts and their limits.
 #    The shell then still runs blank.elf. bin/os.bin itself must not change.
 #
 # Env: HOST_CC=cc   BOOT_TIMEOUT=60   STEP_TIMEOUT=90
@@ -102,6 +104,13 @@ S="$OUT/screen.txt"
 # the program's lines without it (each line still has to match exactly).
 sed 's/^> //' "$S" > "$OUT/lines.txt" 2> /dev/null || : > "$OUT/lines.txt"
 L="$OUT/lines.txt"
+# How close the loops came to their limits on this accelerator: the garbage esp loop's rounds for
+# 30 ticks against its limit, and the busy loop's calls for 5 ticks against 2000000.
+awk '$1 == "lt-t:" && $2 == "garbage" && $4 == "rounds" && $6 == "limit" && $8 == "ticks" &&
+     $10 == "busy" && $11 == "calls" && NF == 12 {
+         printf "clock: garbage esp loop: %s ticks in %s rounds (limit %s), busy loop: 5 ticks in %s calls (limit 2000000)\n",
+             $9, $5, $7, $12; found = 1; exit }
+     END { if (!found) print "clock: no garbage esp rounds line on the screen" }' "$L"
 check "no kernel panic (debugcon)"                        "$OUT/debugcon.log" "PANIC" absent
 check "three sleep(50) took 7..100 ticks each"            "$L" "lt-t: sleeps ok" line
 check "busy loop: the value went up 5 times, 1..100 each" "$L" "lt-t: advanced 5 times" line

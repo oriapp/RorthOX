@@ -79,7 +79,8 @@
  *     rorthox_get_ticks(); "lt-t: advanced 5 times" if a busy loop saw the value go up 5 times,
  *     each time by 1..100, within 2000000 calls; "lt-t: garbage esp ok" if int 0x80 with eax 19
  *     and esp set to 0, 0xdeadbeef, 0xfffffffc or 0x3ff001 (none of them a stack the program owns),
- *     repeated until at least 30 ticks have passed ("lt-t: garbage esp rounds <n> ticks <t>"),
+ *     repeated until at least 30 ticks have passed (at most 10 rounds per busy loop call, at least
+ *     100000; "lt-t: garbage esp rounds <n> limit <l> ticks <t> busy calls <c>"),
  *     always returned a value between the calls before and after it and gave the same esp back; and
  *     "lt-t: ebx esi edi ebp esp and stack kept". Ends with "libtest clock: done" (or FAIL lines
  *     and "libtest clock: FAIL").
@@ -796,12 +797,19 @@ static int clock_ticks(void)
     failed |= !ok;
 
     // A garbage esp: the handler reads nothing from the user stack. Repeated until at least 30
-    // ticks have passed (at most 100000 rounds), so timer IRQs also come in while esp is garbage
-    // (right after the iret, or between the mov and the int). Stops at the first wrong value.
+    // ticks have passed, so timer IRQs also come in while esp is garbage (right after the iret,
+    // or between the mov and the int). Stops at the first wrong value.
+    // The round limit only ends the loop if the ticks stop. A fixed count would be a speed
+    // bound (a faster CPU does more rounds in 30 ticks), so it scales with the calls the busy
+    // loop made in its 4 to 5 ticks: a round is 13 calls, so 30 ticks take about half that many
+    // rounds on any accelerator, and the limit is 10 times as many. Never below 100000.
+    unsigned int limit = 10 * calls;
+    if (changes != 5 || limit < 100000)
+        limit = 100000;
     static const unsigned int bad[] = { 0, 0xdeadbeef, 0xfffffffc, 0x3ff001 };
     ok = 1;
     unsigned int first = ticks_checked(), rounds = 0, passed = 0;
-    while (ok && passed < 30 && rounds < 100000)
+    while (ok && passed < 30 && rounds < limit)
     {
         for (unsigned i = 0; ok && i < sizeof(bad) / sizeof(bad[0]); i++)
         {
@@ -830,8 +838,12 @@ static int clock_ticks(void)
     }
     strcpy(line, "lt-t: garbage esp rounds");
     add_int(line, (int)rounds);
+    add(line, " limit");
+    add_int(line, (int)limit);
     add(line, " ticks");
     add_int(line, (int)passed);
+    add(line, " busy calls");
+    add_int(line, (int)calls);
     add(line, "\n");
     print(line);
     ok &= passed >= 30;
