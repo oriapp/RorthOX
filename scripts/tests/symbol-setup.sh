@@ -13,7 +13,9 @@
 # 2. With an i686-elf-ld that fails: the same, the error names the failed link.
 # 3. With the real toolchain: the same setup finds every symbol and offset, and the callers get as
 #    far as starting QEMU (so the checks above are not met by a setup that always fails).
-# No QEMU runs in this test.
+# No QEMU runs in this test. The callers' output goes below $OUT/runs: qemu_start writes the
+# stand-in's output to a monitor.log there, which never says "kvm support: enabled", and the runner
+# skips directories named runs when it checks that every QEMU of a test ran with KVM.
 
 set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 1
@@ -101,9 +103,9 @@ setup() {
     ' setup "$3" "$dir" > "$dir/output.log" 2>&1
 }
 
-# caller <case> <path> <caller>: one caller with the QEMU stand-in; $OUT/<case>/output.log, status.txt.
+# caller <case> <path> <caller>: one caller with the QEMU stand-in; $OUT/runs/<case>/output.log, status.txt.
 caller() {
-    local dir="$OUT/$1"
+    local dir="$OUT/runs/$1"
     mkdir -p "$dir"
     rm -f "$OUT/qemu-ran"
     if PATH="$2" QEMU="$OUT/qemu-stand-in" CALLER_OUT="$dir" TMPDIR="$dir" QEMU_TIMEOUT=10 \
@@ -121,7 +123,7 @@ expect() { if eval "$2"; then ok "$1"; else fail "$1"; fi; }
 
 # stopped <case> <label> <error>: the checks for a caller that must stop before QEMU.
 stopped() {
-    local d="$OUT/$1" err="$3"
+    local d="$OUT/runs/$1" err="$3"
     expect "$2: fails" '[ -f "$d/status.txt" ] && ! grep -qx "status=0" "$d/status.txt"'
     expect "$2: says the setup failed and why" \
         'grep -qF "$err" "$d/output.log" &&
@@ -164,7 +166,7 @@ expect "kernel_symbols_or_stop: sets the symbols" 'grep -qx "blank=no" "$OUT/fou
 expect "no error from the setup" '! grep -q ERROR "$OUT"/found-*/output.log'
 for c in guest-state heap-snapshot syscheck; do
     caller "found-$c-caller" "$PATH" "$c"
-    expect "$c caller: gets as far as starting QEMU" '[ -e "$OUT/qemu-ran" ] && grep -qx found "$OUT/found-$c-caller/symbols.txt"'
+    expect "$c caller: gets as far as starting QEMU" '[ -e "$OUT/qemu-ran" ] && grep -qx found "$OUT/runs/found-$c-caller/symbols.txt"'
 done
 
 if [ "$failures" -ne 0 ]; then
