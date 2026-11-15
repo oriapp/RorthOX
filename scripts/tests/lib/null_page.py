@@ -16,7 +16,10 @@ access <socket> <map> <directory file> <results> <tag>
       task_load, task_store      injected at isr80h_handler, the shell's directory loaded
       kernel_load, kernel_store  injected right after kernel_page() returned in isr80h_handler,
                                  the kernel directory loaded
-    "mov eax, [0]" (A1 00000000) and "mov [0], eax" (A3 00000000). Each must give #PF (the int14
+    "mov eax, [0]" (A1 00000000) and "mov [0], eax" (A3 00000000). Before each one the debugger
+    sets CR2 to 0x5A5A5A5A with an injected "mov cr2, eax" (0F 22 D0) and stops right after it (CR2
+    is 0 from reset until the first #PF, so without this a fault that didn't write CR2 would still
+    show 0). Each access must give #PF (the int14
     stub): error 0x0 for the load, 0x2 for the store (not present, supervisor), the saved eip is
     the injected instruction, cs the kernel's, CR2 = 0 and CR3 the directory it ran under. The
     first three are rewound at the stub (esp, eflags, eip and eax as before the access: the stub
@@ -41,6 +44,8 @@ PAGE = 4096
 MULTIBOOT_MAGIC = 0x2BADB002
 LOAD = b"\xa1\x00\x00\x00\x00"     # mov eax, [0]
 STORE = b"\xa3\x00\x00\x00\x00"    # mov [0], eax
+SEED = b"\x0f\x22\xd0"               # mov cr2, eax
+MARK = 0x5A5A5A5A                    # eax for every access, and the CR2 value it seeds
 ERRORS = {"load": 0x0, "store": 0x2}
 
 RES = None
@@ -173,13 +178,26 @@ class Access:
                       symbols["interrupt_handler"]: "interrupt_handler"}
 
     def run(self, ident, kind, at, directory, last):
-        """The CPU runs LOAD or STORE at `at`. Returns True when it faulted as expected so far."""
+        """The CPU runs SEED at `at`, then LOAD or STORE right after it. Returns the stub's esp for
+        the last access when it faulted as expected, else None (after rewinding the others)."""
         r = self.r
         saved = {name: r.reg(name) for name in ("eax", "esp", "eflags", "eip")}
-        original = r.read(at, 5)
-        r.set_reg("eax", 0x5A5A5A5A)
-        r.write(at, LOAD if kind == "load" else STORE)
-        after = at + 5
+        code = LOAD if kind == "load" else STORE
+        access = at + len(SEED)
+        original = r.read(at, len(SEED) + len(code))
+        r.set_reg("eax", MARK)
+        r.write(at, SEED)
+        r.add_breakpoint(access)
+        eip = run_to(r, 10)
+        r.remove_breakpoint(access)
+        cr2 = r.control_registers()["cr2"] if eip == access else None
+        RES.add(ident + "_cr2_seeded", eip == access and cr2 == MARK,
+                "stopped at %s, cr2 %s" % (where(eip, self.names), "-" if cr2 is None else "%#x" % cr2))
+        if eip != access:
+            bail()
+        # The breakpoint is gone, so the next continue starts here without a step.
+        r.write(access, code)
+        after = access + len(code)
         self.names[after] = "after the %s" % kind
         r.add_breakpoint(self.stub14)
         r.add_breakpoint(after)
@@ -197,17 +215,22 @@ class Access:
         if eip == self.stub14:
             esp = r.reg("esp")
             error, f_eip, f_cs, f_flags = struct.unpack("<4I", r.read(esp, 16))
-            insn = r.read(f_eip, 5)
-            RES.add(ident + "_frame", error == ERRORS[kind] and f_eip == at and f_cs == self.kernel_cs and
-                    esp == saved["esp"] - 16 and insn == (LOAD if kind == "load" else STORE),
+            try:
+                insn = r.read(f_eip, len(code))
+            except RspError:
+                insn = b""    # the saved eip is not readable: the frame is wrong
+            RES.add(ident + "_frame", error == ERRORS[kind] and f_eip == access and f_cs == self.kernel_cs and
+                    esp == saved["esp"] - 16 and insn == code,
                     "error %#x eip %#x cs %#x esp %#x, instruction %s (want %#x %#x %#x %#x)" %
-                    (error, f_eip, f_cs, esp, insn.hex(), ERRORS[kind], at, self.kernel_cs, saved["esp"] - 16))
-            RES.add(ident + "_cr2", cr["cr2"] == 0, "cr2 %#x" % cr["cr2"])
+                    (error, f_eip, f_cs, esp, insn.hex() or "unreadable", ERRORS[kind], access, self.kernel_cs,
+                     saved["esp"] - 16))
+            RES.add(ident + "_cr2", cr["cr2"] == 0, "cr2 %#x (%#x before the access)" % (cr["cr2"], MARK))
         RES.add(ident + "_cr3", cr["cr3"] == directory, "cr3 %#x, expected %#x" % (cr["cr3"], directory))
         if last and eip == self.stub14:
             return esp
         # Back to the state before the access: the stub ran nothing yet, so only the CPU's push of
-        # error code, eip, cs and eflags (and its eflags changes) are undone.
+        # error code, eip, cs and eflags (and its eflags changes) are undone. CR2 stays 0: the
+        # kernel reads it only in the stubs, right after a #PF wrote it.
         r.set_reg("esp", saved["esp"])
         r.set_reg("eflags", saved["eflags"])
         r.set_reg("eax", saved["eax"])
@@ -290,9 +313,9 @@ def access_mode(sock, map_path, directory_path, result_path, tag):
             vector, f, h_cr2 = struct.unpack("<III", r.read(sp + 4, 12))
             words = struct.unpack("<12I", r.read(f, 48))
             RES.add("handler_frame", vector == 14 and f == esp - 32 and h_cr2 == 0 and
-                    words[8] == 0x2 and words[9] == back,
-                    "vector %d frame %#x (want %#x) cr2 %#x error %#x ip %#x" %
-                    (vector, f, esp - 32, h_cr2, words[8], words[9]))
+                    words[8] == 0x2 and words[9] == back + len(SEED),
+                    "vector %d frame %#x (want %#x) cr2 %#x error %#x ip %#x (want %#x)" %
+                    (vector, f, esp - 32, h_cr2, words[8], words[9], back + len(SEED)))
             eip = run_to(r, 10)
         else:
             RES.add("handler_frame", False, "interrupt_handler not reached, stopped at %s" % where(eip, a.names))

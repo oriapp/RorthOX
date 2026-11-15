@@ -14,7 +14,9 @@
 # supervisor-only (the user stack aside), and QEMU's own page walk can't read address 0. Then
 # the debugger puts "mov eax, [0]" and "mov [0], eax" into the kernel, once at isr80h_handler
 # (the shell's directory loaded) and once right after kernel_page() returned (the kernel
-# directory loaded), so the CPU itself loads and stores through address 0 in ring 0. Each must
+# directory loaded), so the CPU itself loads and stores through address 0 in ring 0. Right before
+# each access an injected "mov cr2, eax" sets CR2 to 0x5A5A5A5A (it is 0 from reset until the first
+# #PF, so only a fault that writes CR2 can make it 0 again). Each access must
 # give #PF with error 0x0 (load) or 0x2 (store), the injected instruction's eip, CR2 = 0; the
 # last one goes on to PANIC("Kernel exception") and PAUSE, and physical page zero is unchanged.
 # With page zero mapped the access simply completes: a breakpoint after it reports that at once.
@@ -121,9 +123,10 @@ run_case() {
     check "$c: QEMU's walk: 0 unreadable, 0x1000 readable"   "$r" "PASS cpu_walk" line
     local a
     for a in task_load task_store kernel_load kernel_store; do
+        check "$c: $a: CR2 set to 0x5A5A5A5A before it"     "$r" "PASS ${a}_cr2_seeded" line
         check "$c: $a: the CPU's access faulted (#PF)"        "$r" "PASS ${a}_faulted" line
         check "$c: $a: error code, eip, cs, instruction"      "$r" "PASS ${a}_frame" line
-        check "$c: $a: CR2 = 0"                               "$r" "PASS ${a}_cr2" line
+        check "$c: $a: the fault set CR2 = 0"                 "$r" "PASS ${a}_cr2" line
         check "$c: $a: CR3 = the directory it ran under"      "$r" "PASS ${a}_cr3" line
     done
     check "$c: kernel_page() selected the kernel directory"  "$r" "PASS kernel_cr3" line
