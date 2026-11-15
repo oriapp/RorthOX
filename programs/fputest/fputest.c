@@ -34,6 +34,11 @@
  *     exit / a page fault right after loading a last XMM7 (see dirty()).
  * "fputest.elf mf": divides by zero with the zero-divide exception unmasked, then FWAIT: the x87
  *     error (#MF) must end it.
+ * "fputest.elf pending <how>" (P) and "fputest.elf survivor <how>" (W): P leaves that x87 error
+ *     pending and is switched away (preempt, sleep or syscall, see pending()) while W runs with its
+ *     own state; P must still have the error pending when it comes back and end at its FWAIT, and
+ *     W must keep its state and never have an error pending. "fputest.elf pendexit" and
+ *     "fputest.elf pendfault" end by exit / a page fault with the error pending, W running.
  * As the first program (no arguments, started as shell.elf): loads its state (I) and sleeps in
  *     100 ms steps until a key comes (the kernel idles meanwhile, no other task exists), checks,
  *     starts "shell.elf fresh idle" with its state loaded, sleeps, checks again, then sleeps for ever.
@@ -241,6 +246,8 @@ static void load(const struct pattern *p, struct expected *e, int sse)
     }
 }
 
+static void verify_sse(struct tally *t, const struct pattern *p, const struct expected *e);
+
 static void verify(struct tally *t, const struct pattern *p, const struct expected *e, int sse)
 {
     uint16_t cw = 0, sw = 0;
@@ -253,10 +260,14 @@ static void verify(struct tally *t, const struct pattern *p, const struct expect
     x87_compute(&sum, third);
     check(t, sum == e->sum, "x87 sum of the seven values changed");
     check(t, same(third, e->third, 10), "x87 1/3 changed (rounding or precision)");
-    if (!sse)
+    if (sse)
     {
-        return;
+        verify_sse(t, p, e);
     }
+}
+
+static void verify_sse(struct tally *t, const struct pattern *p, const struct expected *e)
+{
     static uint32_t out[8][4] __attribute__((aligned(16)));
     uint32_t mxcsr = 0;
     uint32_t quotient[4];
@@ -417,6 +428,8 @@ static int fresh(const char *tag, int wait)
     check(&t, quotient[0] == 0x3EAAAAABU && quotient[3] == 0x3EAAAAABU, "divps 1/3 is not rounded to nearest");
     check(&t, mxcsr == 0x1FA0, "MXCSR after divps is not 0x1FA0");
     summary(&t, "");
+    // No x87 error pending (the status word above is 0), so this FWAIT must not end the program.
+    __asm__ volatile("fwait");
     if (wait)
     {
         say(t.who, "waiting for a key");
@@ -456,6 +469,132 @@ static int x87_error(void)
     say("fputest mf", (sw & 0x84) == 0x84 ? "error pending" : "FAIL no pending error");
     __asm__ volatile("fwait");
     say("fputest mf", "FAIL no exception at fwait");
+    return 0;
+}
+
+// An unmasked x87 zero divide, left pending (ZE and ES set): only a waiting instruction reports
+// it, so the program can be switched away and come back with it still pending.
+static const uint16_t cw_zero_divide = 0x037B;
+
+static void make_pending(void)
+{
+    __asm__ volatile("fninit\n\tfldcw %0\n\tfld1\n\tfidivl %1" : : "m"(cw_zero_divide), "m"(zero_divisor));
+}
+
+// Read with non-waiting instructions only: the error still pending, one value on the stack (top
+// 7), the control word as loaded.
+static void check_pending(struct tally *t)
+{
+    uint16_t cw = 0, sw = 0;
+    __asm__ volatile("fnstcw %0" : "=m"(cw));
+    __asm__ volatile("fnstsw %0" : "=m"(sw));
+    check(t, (sw & 0x84) == 0x84, "x87 error no longer pending");
+    check(t, ((sw >> 11) & 7) == 7, "x87 stack top changed");
+    check(t, cw == cw_zero_divide, "x87 control word changed");
+}
+
+// "fputest.elf pending <how>" (P): starts "fputest.elf survivor <how>" (W) after a key, loads
+// A's state, leaves an x87 error pending and is switched away with it: "preempt" spins without a
+// syscall until the kernel has come back to it from an interrupt, 20 times; "sleep" sleeps 50 ms;
+// "syscall" makes 50 syscalls that return to it. Then the error must still be pending and the SSE
+// state A's, and the FWAIT after that must end the program (#MF).
+static int pending(const char *how)
+{
+    struct tally t;
+    struct expected e;
+    char command[48] = "fputest.elf survivor ";
+    begin(&t, "fputest P", how);
+    say(t.who, "waiting for a key");
+    rorthox_getkeyblock();
+    rorthox_system_run(add(command, how));
+    sleep(100);
+    load(&pattern_a, &e, 1);
+    uint32_t before = rorthox_get_ticks();
+    make_pending();
+    if (strncmp(how, "preempt", 8) == 0)
+    {
+        for (int i = 0; i < 20; i++)
+        {
+            window(0xF0500016U);
+        }
+    }
+    else if (strncmp(how, "sleep", 6) == 0)
+    {
+        sleep(50);
+    }
+    else
+    {
+        for (int i = 0; i < 50; i++)
+        {
+            rorthox_get_ticks();
+        }
+    }
+    check_pending(&t);
+    verify_sse(&t, &pattern_a, &e);
+    uint32_t ticks = rorthox_get_ticks() - before;
+    check(&t, ticks >= 2 || strncmp(how, "syscall", 8) == 0, "not switched away (under 2 ticks)");
+    summary(&t, ", error pending");
+    __asm__ volatile("fwait");
+    say(t.who, "FAIL no exception at fwait");
+    return 0;
+}
+
+// "fputest.elf survivor <how>" (W): loads B's state, then until a key comes spins until the kernel
+// has come back to it from an interrupt and checks its state, that no x87 error is pending, and
+// FWAIT (which would end it if one were). After the key it checks once more.
+static int survivor(const char *how)
+{
+    struct tally t;
+    struct expected e;
+    int windows = 0, switched = 0, key = 0;
+    begin(&t, "fputest W", how);
+    load(&pattern_b, &e, 1);
+    while (1)
+    {
+        uint16_t sw = 0;
+        verify(&t, &pattern_b, &e, 1);
+        __asm__ volatile("fnstsw %0" : "=m"(sw));
+        check(&t, !(sw & 0x80), "x87 error pending");
+        __asm__ volatile("fwait");
+        if (key)
+        {
+            break;
+        }
+        uint32_t before = rorthox_get_ticks();
+        window(0xF0570057U);
+        if (rorthox_get_ticks() - before >= 2)
+        {
+            switched++;
+        }
+        windows++;
+        key = rorthox_getkey();
+    }
+    char more[64] = ", ";
+    add(add(add_number(add(add_number(more, switched), " of "), windows), " switched away"), "");
+    summary(&t, more);
+    return 0;
+}
+
+// "fputest.elf pendexit" / "fputest.elf pendfault": starts "fputest.elf survivor exit|fault" after
+// a key, leaves an x87 error pending, sleeps (W runs), then ends with exit / a page fault with the
+// error still pending.
+static int pending_end(int fault)
+{
+    struct tally t;
+    begin(&t, "fputest", fault ? "pendfault" : "pendexit");
+    say(t.who, "waiting for a key");
+    rorthox_getkeyblock();
+    rorthox_system_run(fault ? "fputest.elf survivor fault" : "fputest.elf survivor exit");
+    sleep(100);
+    make_pending();
+    sleep(50);
+    check_pending(&t);
+    summary(&t, fault ? ", faulting with the error pending" : ", exiting with the error pending");
+    if (fault)
+    {
+        __asm__ volatile("movl $1, 0" : : : "memory");
+        say(t.who, "FAIL no page fault");
+    }
     return 0;
 }
 
@@ -516,6 +655,18 @@ int main(int argc, char **argv)
     if (strncmp(mode, "mf", 3) == 0)
     {
         return x87_error();
+    }
+    if (strncmp(mode, "pending", 8) == 0 && argc > 2)
+    {
+        return pending(argv[2]);
+    }
+    if (strncmp(mode, "survivor", 9) == 0 && argc > 2)
+    {
+        return survivor(argv[2]);
+    }
+    if (strncmp(mode, "pendexit", 9) == 0 || strncmp(mode, "pendfault", 10) == 0)
+    {
+        return pending_end(mode[4] == 'f');
     }
     say("fputest", "FAIL unknown mode");
     return 0;

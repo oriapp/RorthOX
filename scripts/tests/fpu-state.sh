@@ -29,6 +29,15 @@
 #         lib/kernel-symbols.sh) the freed block must not hold that last XMM7 (the kernel must not
 #         save the state of a task it freed). Last "mf": a zero divide with the exception unmasked,
 #         then FWAIT, must end the program.
+#   pending  an unmasked x87 zero divide left pending by "fputest.elf pending <how>" (P) while another
+#         program, "survivor" (W), runs with its own state: P is switched away with the error pending
+#         by the timer in a spin without a syscall (preempt), by a sleep, or makes 50 syscalls; it
+#         must come back with the error still pending and its own SSE state, and end at its FWAIT.
+#         The debugger (lib/exceptions.py catch mf) must see #MF (vector 16) from ring 3 at that
+#         FWAIT and process_terminate on P's process; W must keep its state, never see an error
+#         pending (FNSTSW, then FWAIT) and have been switched away. "pendexit" and "pendfault" end
+#         by exit / a page fault with the error pending: W as before, and the next program, which
+#         gets the same task block, starts clean and its FWAIT doesn't fault. Needs python3.
 #   idle  fputest.elf as shell.elf, the only program, on a Pentium III CPU model (SSE, no SSE2): it
 #         loads its state and sleeps in 100 ms steps until a key, so the kernel idles with
 #         interrupts on. All 20 samples meanwhile (some halted in ring 0) must show its registers,
@@ -37,20 +46,26 @@
 #         must still be right, and a child it starts is clean.
 #   grub  the idle case through the GRUB ISO (the disk's boot sector replaced by "jmp $"). Skipped
 #         without the ISO tools (fails with RORTHOX_REQUIRE_ISO=1).
-# bin/os.bin itself must not change. In every case, every sample must show the control register
-# bits the kernel sets for the FPU (CR0 MP and NE set, EM and TS clear; CR4 OSFXSR and OSXMMEXCPT
-# set, OSXSAVE clear). The fresh programs also check the x87 instruction and operand pointers
-# (FNSTENV), which FXSAVE may store as zero: they must be zero, and a program's own or zero after
-# its child ran.
+#   cpu   no FXSAVE/FXRSTOR (-cpu qemu32,-fxsr), then no SSE (-cpu qemu32,-sse): the kernel must stop
+#         with its unsupported-CPU message before it changes CR0 or CR4 (MP, EM, TS, NE, OSFXSR and
+#         OSXMMEXCPT still clear) and before it goes on (no "Thats cool" on debugcon). The kernel
+#         decides by CPUID, which QEMU masks under KVM too.
+# bin/os.bin itself must not change. In the disk, idle and grub cases, every sample must show the
+# control register bits the kernel sets for the FPU (CR0 MP and NE set, EM and TS clear; CR4 OSFXSR
+# and OSXMMEXCPT set, OSXSAVE clear). The fresh programs also check the x87 instruction and operand
+# pointers (FNSTENV), which FXSAVE may store as zero: they must be zero, and a program's own or zero
+# after its child ran.
 #
-# Env: HOST_CC=cc   BOOT_TIMEOUT=60   RUN_TIMEOUT=120   FPU_STATE_CASES="host disk idle grub"
+# Env: HOST_CC=cc   BOOT_TIMEOUT=60   RUN_TIMEOUT=120   FPU_STATE_CASES="host disk pending idle grub cpu"
+#      FPU_PENDING_CASES="preempt sleep syscall exit fault"
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 HOST_CC="${HOST_CC:-cc}"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-120}"
-CASES="${FPU_STATE_CASES:-host disk idle grub}"
+CASES="${FPU_STATE_CASES:-host disk pending idle grub cpu}"
+PENDING="${FPU_PENDING_CASES:-preempt sleep syscall exit fault}"
 . ./scripts/qemu-lib.sh
 . ./scripts/tests/lib/iso-check.sh
 . ./scripts/tests/lib/kernel-symbols.sh
@@ -59,7 +74,7 @@ OUT=${RORTHOX_TEST_ROOT:-build/tests}/fpu-state
 PROGRAM=programs/fputest/build/fputest.elf
 mkdir -p "$OUT"
 Q_OUT=$OUT   # finish reads it; qemu_start sets it for each boot
-rm -rf "${OUT:?}"/disk "$OUT"/idle "$OUT"/grub "$OUT"/host-*
+rm -rf "${OUT:?}"/disk "$OUT"/pending "$OUT"/idle "$OUT"/grub "$OUT"/cpu-* "$OUT"/host-*
 [ -f "$PROGRAM" ] && [ -f build/kernelfull.o ] || { echo "fpu-state: run 'make all' first" >&2; exit 1; }
 image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
@@ -71,6 +86,11 @@ TASK_TAIL=$SYM_TASK_TAIL
 FPU_OWNER=$(awk '$3 == "fpu_owner" { print $1 }' "$OUT/kernel-nm.txt")
 # The clean image every task starts with (static in fpu.c), and where a task keeps its saved state.
 FPU_PRISTINE=$(awk '$3 == "fpu_pristine" { print $1 }' "$OUT/kernel-nm.txt")
+# The kernel heap table: one byte per block, 0 = free.
+config_value() { awk -v key="$1" '$1 == "#define" && $2 == key { print $3 }' kernel/config.h; }
+HEAP_TABLE=$(($(config_value RORTHOX_HEAP_TABLE_ADDRESS)))
+HEAP_BASE=$(($(config_value RORTHOX_HEAP_ADDRESS)))
+HEAP_BLOCK=$(($(config_value RORTHOX_HEAP_BLOCK_SIZE)))
 printf '#include "task/task.h"\nchar task_fpu_offset[offsetof(struct task, fpu) + 1];\n' > "$OUT/fpu-offset.c"
 TASK_FPU_OFFSET=
 if i686-elf-gcc -std=gnu99 -ffreestanding -fno-common -I kernel -I build/config -c "$OUT/fpu-offset.c" \
@@ -335,6 +355,170 @@ disk_case() {
     check "$C: no kernel panic (debugcon)" "$D/debugcon.log" "PANIC" absent
 }
 
+# key_when_running: send a key once the monitor reports the guest running again (the debugger has
+# just continued it, and QEMU drops key presses while the guest is stopped).
+key_when_running() {
+    local i seen
+    seen=$(grep -a -c 'VM status' "$Q_OUT/monitor.log" || true)
+    for ((i = 0; i < 50; i++)); do
+        qemu_cmd "info status"
+        screen_snapshot      # a monitor round trip: the status line is in monitor.log after it
+        if grep -a 'VM status' "$Q_OUT/monitor.log" | tail -n +$((seen + 1)) | grep 'VM status: running' > /dev/null; then
+            qemu_cmd "sendkey ret"
+            return 0
+        fi
+        sleep 0.1
+    done
+    echo "  the guest did not run again after the debugger continued it"
+    return 1
+}
+
+# survivor <how>: W's result once it has its key: no check failed, and it was switched away from.
+survivor() {
+    look "$RUN_TIMEOUT" 0 "w-$1=fputest W $1: $RESULT, [0-9]+ of [0-9]+ switched away"
+}
+
+# pending_mf <how>: "fputest.elf pending <how>". The debugger (exceptions.py catch mf) waits at the
+# #MF, #NM and #GP stubs from the key on; P must end at its FWAIT, then W gets a key.
+pending_mf() {
+    local py i s=0
+    type_line "fputest.elf pending $1"
+    look "$RUN_TIMEOUT" 0 "ready-$1=fputest P $1: waiting for a key" || return 1
+    rm -f "$D/ready-$1"
+    python3 -B scripts/tests/lib/exceptions.py catch "$SOCK" build/kernel.map "$D/catch-$1.txt" "$D/ready-$1" mf \
+        > "$D/catch-$1.log" 2>&1 &
+    py=$!
+    for ((i = 0; i < 100; i++)); do [ -f "$D/ready-$1" ] && break; sleep 0.1; done
+    [ -f "$D/ready-$1" ] && { key_when_running || true; }
+    wait "$py" || s=1
+    sed 's/^/  /' "$D/catch-$1.log"
+    look "$RUN_TIMEOUT" 0 "p-$1=fputest P $1: $RESULT, error pending" || return 1
+    key_when_running && survivor "$1" && return "$s"
+}
+
+# pending_end <exit|fault>: "fputest.elf pend<how>" ends with the error pending. Once its task block
+# is free in the kernel heap (the task is gone), W gets a key.
+pending_end() {
+    local task i
+    type_line "fputest.elf pend$1"
+    look "$RUN_TIMEOUT" 0 "ready-$1=fputest pend$1: waiting for a key" || return 1
+    task=$(read_word "$TASK_TAIL")
+    printf -v "PEND_$1" '%s' "$task"
+    qemu_cmd "sendkey ret"
+    look "$RUN_TIMEOUT" 0 "end-$1=fputest pend$1: $RESULT, (exiting|faulting) with the error pending" || return 1
+    for ((i = 0; i < 100; i++)); do
+        memory "$(printf '%x' $((HEAP_TABLE + (0x$task - HEAP_BASE) / HEAP_BLOCK)))" 1 "$D/block.bin" || return 1
+        [ "$(od -An -tu1 "$D/block.bin" | tr -d ' ')" = 0 ] && break
+        sleep 0.1
+    done
+    ((i < 100)) || { echo "  the task block of fputest pend$1 was not freed"; return 1; }
+    qemu_cmd "sendkey ret"
+    survivor "$1"
+}
+
+# pending_case: an unmasked x87 error left pending across switches (programs/fputest pending,
+# survivor, pendexit, pendfault), with the debugger on the exception stubs for the #MF cases.
+GDB_DIR=
+gdb_cleanup() { [ -z "$GDB_DIR" ] || rm -rf "$GDB_DIR"; GDB_DIR=; }
+pending_case() {
+    C=pending D="$OUT/pending"
+    mkdir -p "$D"
+    cp bin/os.bin "$D/fpu.bin"
+    mcopy -i "$D/fpu.bin" "$PROGRAM" ::
+    echo "fpu-state: pending"
+    command -v python3 > /dev/null || { echo "fpu-state: python3 not found" >&2; exit 1; }
+    status=0 ready=0 PEND_exit= PEND_fault= AFTER_exit= AFTER_fault=
+    GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
+    Q_CLEANUP=gdb_cleanup
+    SOCK="$GDB_DIR/gdb"
+    QEMU_FLAGS="-gdb unix:$SOCK,server=on,wait=off" qemu_start "$D/fpu.bin" "$D"
+    if wait_screen_lines "$BOOT_TIMEOUT" "line:${RORTHOX_NAME} v${RORTHOX_VERSION}" "line:>"; then
+        SHELL_TASK=$(read_word "$TASK_TAIL") && ready=1
+    fi
+    local how
+    for how in $PENDING; do
+        case "$how" in
+            preempt | sleep | syscall) step pending_mf "$how" ;;
+            exit | fault) step pending_end "$how"
+                step exchange "AFTER_$how" "fputest.elf after$how" "after$how" "fputest fresh after$how: waiting for a key" ;;
+            *) echo "fpu-state: unknown pending case $how" >&2; exit 2 ;;
+        esac
+    done
+    echo "exit=$status" > "$D/steps.txt"
+    qemu_stop || true
+    gdb_cleanup
+
+    check "$C: every step ran" "$D/steps.txt" "exit=0" line
+    for how in $PENDING; do
+        [[ $how =~ ^(preempt|sleep|syscall)$ ]] || continue
+        local r="$D/catch-$how.txt"
+        seen "p-$how" "fputest P $how: 0 of 7 checks failed, error pending"
+        check "$C $how: the exception is #MF (vector 16)" "$r" "PASS stub_vector" line
+        check "$C $how: from ring 3" "$r" "PASS cpu_ring3" line
+        check "$C $how: at FWAIT" "$r" "PASS faulting_instruction" line
+        check "$C $how: interrupt_handler got the right vector and frame" "$r" "PASS handler_frame" line
+        check "$C $how: process_terminate on the faulting task's process" "$r" "PASS process_terminated" line
+        survived "$how"
+    done
+    for how in $PENDING; do
+        [[ $how =~ ^(exit|fault)$ ]] || continue
+        local p="PEND_$how" a="AFTER_$how"
+        if [ "$how" = exit ]; then seen "end-$how" "fputest pend$how: 0 of 3 checks failed, exiting with the error pending"
+        else seen "end-$how" "fputest pend$how: 0 of 3 checks failed, faulting with the error pending"; fi
+        survived "$how"
+        result "after$how" "fputest fresh after$how" 10
+        [ -n "${!a}" ] && [ "${!a}" = "${!p}" ] && echo same > "$D/reuse-$how.txt" || echo differs > "$D/reuse-$how.txt"
+        check "$C: after$how got the task block of the program that ended with the error pending" \
+            "$D/reuse-$how.txt" same line
+    done
+    check "$C: no program printed a failed check" "$D/screen.txt" ": FAIL " absent
+    check "$C: no kernel panic (debugcon)" "$D/debugcon.log" "PANIC" absent
+}
+
+# survived <how>: W's last line, after P ended: no check failed, and it was switched away from.
+survived() {
+    local row k
+    row=$(grep -xE "fputest W $1: 0 of [0-9]+ checks failed, [0-9]+ of [0-9]+ switched away" "$D/screen-w-$1.txt" 2> /dev/null | head -n 1 || true)
+    k=$(sed -E 's/.*, ([0-9]+) of [0-9]+ switched away$/\1/' <<< "${row:-x, 0 of 0 switched away}")
+    if [ -n "$row" ] && [ "$k" -ge 1 ]; then echo ok; else echo "not ok: ${row:-no row}"; fi > "$D/survivor-$1.txt"
+    check "$C $1: the other program (W) kept its state, never had an error pending and was switched away" \
+        "$D/survivor-$1.txt" ok line
+}
+
+# cpu_case <name> <cpu> <message>: the kernel must stop with <message> before it changes CR0 or CR4.
+cpu_case() {
+    C=cpu-$1 D="$OUT/cpu-$1"
+    echo "fpu-state: $C ($2)"
+    mkdir -p "$D"
+    cp bin/os.bin "$D/fpu.bin"
+    QEMU_CPU=$2 qemu_start "$D/fpu.bin" "$D"
+    local status=0 re
+    re=$(sed 's/[][\.*^$()+?{}|]/\\&/g' <<< "$3")
+    look "$BOOT_TIMEOUT" 0 "stop=.*$re.*" || status=1
+    qemu_cmd "info registers"
+    screen_snapshot      # a monitor round trip: the register dump is in monitor.log after it
+    echo "exit=$status" > "$D/steps.txt"
+    qemu_stop || true
+    # The bits fpu_init sets or clears: CR0 MP (1), EM (2), TS (3), NE (5); CR4 OSFXSR (9),
+    # OSXMMEXCPT (10). Before it, all of them are clear.
+    tr -d '\r' < "$D/monitor.log" | awk '
+        function hex(s,    v, i) { v = 0; for (i = 1; i <= length(s); i++) v = v * 16 + index("0123456789abcdef", tolower(substr(s, i, 1))) - 1; return v }
+        function bit(v, b) { return int(v / 2 ^ b) % 2 }
+        { for (i = 1; i <= NF; i++) {
+              if ($i ~ /^CR0=/) { v = hex(substr($i, 5)); cr0 = bit(v, 1) bit(v, 2) bit(v, 3) bit(v, 5) }
+              else if ($i ~ /^CR4=/) { v = hex(substr($i, 5)); cr4 = bit(v, 9) bit(v, 10) }
+          } }
+        END { print "CR0 MP EM TS NE " (cr0 == "" ? "?" : cr0) ", CR4 OSFXSR OSXMMEXCPT " (cr4 == "" ? "?" : cr4) }' > "$D/control.txt"
+    sed 's/^/  /' "$D/control.txt"
+    check "$C: every step ran" "$D/steps.txt" "exit=0" line
+    check "$C: the kernel stopped with: $3" "$D/screen.txt" "$3"
+    check "$C: CR0 and CR4 as before (the FPU bits not set)" "$D/control.txt" \
+        "CR0 MP EM TS NE 0000, CR4 OSFXSR OSXMMEXCPT 00" line
+    check "$C: the shell did not start" "$D/screen.txt" "${RORTHOX_NAME} v${RORTHOX_VERSION}" absent
+    check "$C: the kernel went no further than fpu_init (debugcon)" "$D/debugcon.log" "Thats cool" absent
+    check "$C: no CPU exception in the kernel (debugcon)" "$D/debugcon.log" "exception:" absent
+}
+
 # idle_case <case> <image> <cpu> [qemu flags]
 idle_case() {
     C=$1 D="$OUT/$1"
@@ -375,6 +559,11 @@ for c in $CASES; do
     case "$c" in
         host) host_case ;;
         disk) disk_case ;;
+        pending) pending_case ;;
+        cpu)
+            cpu_case fxsr qemu32,-fxsr "Unsupported CPU: no FXSAVE/FXRSTOR (CPUID.1:EDX bit 24)"
+            cpu_case sse qemu32,-sse "Unsupported CPU: no SSE (CPUID.1:EDX bit 25)"
+            ;;
         idle | grub)
             mkdir -p "$OUT/$c"
             cp bin/os.bin "$OUT/$c/fpu.bin"

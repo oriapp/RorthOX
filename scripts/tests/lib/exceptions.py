@@ -124,6 +124,7 @@ CASES = {
     "out20": ([13],          13,   0,      3,   b"\xe6\x20"),   # out 0x20, al
     "inffff": ([13],         13,   0,      3,   b"\xec"),       # in al, dx (dx = 0xffff)
     "df":    ([8, 11, 13],   8,    0,      3,   None),
+    "mf":    ([16, 7, 13],   16,   None,   3,   b"\x9b"),       # fwait (fpu-state.sh)
 }
 
 
