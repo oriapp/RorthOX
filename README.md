@@ -147,6 +147,10 @@ others the syscall numbers and the codes of the special keys (`KEY_UP` = 0x100 t
 holds the program search list, `PROGRAM_SEARCH_PATHS`: 1 to 4 directory prefixes such as `0:/` or `0:/bin/`
 (`0:/`, then simple directory names, each ending in `/`; disk 0 is the only disk). The build stops on anything else.
 
+| Config key | Default | Constraint |
+|---|---:|---|
+| `ELF_FILE_LIMIT_BYTES` | 8 MiB | Positive 4 KiB multiple no larger than the 100 MiB kernel heap; limits the ELF file buffer (not aggregate process memory). |
+
 ### Disk image
 
 `bin/os.bin` is the boot sector, then `kernel.bin`, then 16 MiB of zeroes. The FAT16 layout comes from `config.mk`:

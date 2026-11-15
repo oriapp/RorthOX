@@ -92,7 +92,7 @@ reject() {
 }
 
 ACCEPTED="defaults key-low key-high key-padded-hex syscalls-reordered sleep-default sleep-reordered ticks-default \
-ticks-reordered stack-at-boot"
+ticks-reordered stack-at-boot elf-default elf-hex elf-heap-max"
 echo "config-values: accepted values"
 accept defaults           "#define RORTHOX_KEY_PAGE_DOWN 0x109"
 accept key-low            "#define RORTHOX_KEY_UP 0x100"            KEY_UP=0x100
@@ -104,12 +104,15 @@ accept sleep-reordered    "#define SYSCALL_SLEEP 0"                 SYSCALL_SLEE
 accept ticks-default      "#define SYSCALL_GET_TICKS 19"
 accept ticks-reordered    "#define SYSCALL_GET_TICKS 0"             SYSCALL_GET_TICKS=0 SYSCALL_SUM=19
 accept stack-at-boot      "#define USER_PROGRAM_STACK_SIZE 0x1FF000" USER_STACK_SIZE=0x1FF000
+accept elf-default        "#define ELF_FILE_LIMIT_BYTES 8388608"
+accept elf-hex            "#define ELF_FILE_LIMIT_BYTES 0x800000" ELF_FILE_LIMIT_BYTES=0x800000
+accept elf-heap-max       "#define ELF_FILE_LIMIT_BYTES 104857600" ELF_FILE_LIMIT_BYTES=104857600
 
 REJECTED="key-zero key-0xff key-255 key-0x10000 key-65536 key-wrap-hex key-wrap-dec key-dup key-dup-spelling \
 key-word key-zero-padded syscall-dup syscall-dup-spelling sleep-dup sleep-dup-spelling sleep-zero-padded sleep-word \
 sleep-wrap-hex sleep-wrap-dec file-open-dup file-read-dup file-write-dup file-seek-dup file-stat-dup file-close-dup \
 file-read-zero-padded ticks-dup ticks-dup-spelling ticks-zero-padded ticks-wrap-hex ticks-wrap-dec \
-stack-over-boot stack-wrap stack-part-page"
+stack-over-boot stack-wrap stack-part-page elf-zero elf-part-page elf-wrap-hex elf-wrap-dec elf-zero-padded"
 echo "config-values: rejected values"
 reject key-zero             "$KEY_ERROR"     KEY_UP=0
 reject key-0xff             "$KEY_ERROR"     KEY_LEFT=0xFF
@@ -149,6 +152,38 @@ reject ticks-wrap-dec       "$SYSCALL_ERROR" SYSCALL_GET_TICKS=18446744073709551
 reject stack-over-boot      '*** user stack must not overlap the kernel boot stack' USER_STACK_SIZE=0x200000
 reject stack-wrap           '*** ELF window and stack boundaries must be page-aligned 32-bit values' USER_STACK_SIZE=0x10000000000004000
 reject stack-part-page      '*** ELF window and stack boundaries must be page-aligned 32-bit values' USER_STACK_SIZE=0x4001
+ELF_ERROR='*** ELF_FILE_LIMIT_BYTES must be a positive page multiple within 32-bit size range'
+reject elf-zero           "$ELF_ERROR"     ELF_FILE_LIMIT_BYTES=0
+reject elf-part-page      "$ELF_ERROR"     ELF_FILE_LIMIT_BYTES=8193
+reject elf-wrap-hex       "$ELF_ERROR"     ELF_FILE_LIMIT_BYTES=0x10000000000800000
+reject elf-wrap-dec       "$ELF_ERROR"     ELF_FILE_LIMIT_BYTES=18446744073717940224
+reject elf-zero-padded    "$NUMERIC_ERROR" ELF_FILE_LIMIT_BYTES=010000
+
+echo "config-values: ELF file limit in the shell environment, heap geometry and command-line override"
+set_values
+if make -s -C "$FIX" build/config/rorthox-config.env > "$FIX/elf-env.log" 2>&1 &&
+        grep -qxF 'ELF_FILE_LIMIT_BYTES=8388608' "$FIX/build/config/rorthox-config.env"; then
+    echo "PASS elf-env" >> "$RESULTS"
+fi
+for sh in /bin/sh /bin/bash; do
+    log="$FIX/elf-override-$(basename "$sh").log"
+    make -s -C "$FIX" -n SHELL="$sh" ELF_FILE_LIMIT_BYTES=4096 build/config/rorthox-config.h > "$log" 2>&1 || true
+    grep -qF '*** ELF_FILE_LIMIT_BYTES must be set in config.mk, not on the command line' "$log" &&
+        echo "PASS elf-override $sh" >> "$RESULTS"
+done
+# This geometry is defined in kernel/config.h, not copied into the makefile.
+for pair in ELF_FILE_LIMIT_BYTES=104857600 ELF_FILE_LIMIT_BYTES=104861696; do
+    set_values "$pair"
+    make -s -C "$FIX" build/config/rorthox-config.h > "$FIX/elf-heap.log" 2>&1 || true
+    if printf '#include "config.h"\n' | i686-elf-gcc -std=gnu99 -ffreestanding -I "$FIX/build/config" -I kernel -x c -c - -o "$FIX/elf-heap.o" >> "$FIX/elf-heap.log" 2>&1; then
+        [ "$pair" = ELF_FILE_LIMIT_BYTES=104857600 ] && echo "PASS elf-heap-max" >> "$RESULTS"
+    else
+        if [ "$pair" = ELF_FILE_LIMIT_BYTES=104861696 ] &&
+                grep -qF 'ELF file limit must be a positive page multiple within the kernel heap' "$FIX/elf-heap.log"; then
+            echo "PASS elf-heap-over" >> "$RESULTS"
+        fi
+    fi
+done
 
 echo "config-values: syscall 12 (sleep) in the NASM include, on the command line and past the command table"
 # The stdlib's sleep wrapper takes its number from the NASM include.
@@ -205,6 +240,11 @@ for t in $REJECTED; do
     check "$t: rejected with /bin/sh"   "$RESULTS" "PASS $t rejected /bin/sh" line
     check "$t: rejected with /bin/bash" "$RESULTS" "PASS $t rejected /bin/bash" line
 done
+check "ELF limit: shell value" "$RESULTS" "PASS elf-env" line
+check "ELF limit: override rejected by sh" "$RESULTS" "PASS elf-override /bin/sh" line
+check "ELF limit: override rejected by bash" "$RESULTS" "PASS elf-override /bin/bash" line
+check "ELF limit: heap maximum compiles" "$RESULTS" "PASS elf-heap-max" line
+check "ELF limit: above heap rejected by C" "$RESULTS" "PASS elf-heap-over" line
 check "sleep: %define SYSCALL_SLEEP 12 in the NASM include" "$RESULTS" "PASS sleep-nasm" line
 check "sleep: command-line value refused (/bin/sh)"         "$RESULTS" "PASS sleep-override /bin/sh" line
 check "sleep: command-line value refused (/bin/bash)"       "$RESULTS" "PASS sleep-override /bin/bash" line

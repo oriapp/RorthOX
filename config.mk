@@ -74,6 +74,9 @@ COMMAND_ARGUMENT_SIZE = 512
 # Includes the program name.
 MAX_COMMAND_ARGUMENTS = 32
 
+# Maximum retained ELF file buffer (bytes; whole heap pages).
+ELF_FILE_LIMIT_BYTES = 8388608
+
 # Ordered directories searched for bare program names.
 PROGRAM_SEARCH_PATHS = 0:/ 0:/bin/
 
