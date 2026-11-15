@@ -18,13 +18,15 @@
  *                     loads it again), then check; a window that took 2 or more timer ticks was
  *                     switched away from (another task ran while the state was loaded)
  *       sse windows   the same with the x87 and SSE state loaded (A first starts
- *                     "fputest.elf fresh sse" with both loaded, sleeps and checks)
+ *                     "fputest.elf fresh sse" with both loaded, sleeps and checks; after each
+ *                     child A's x87 pointers must be its own or zero)
  *       syscall windows  both loaded: a sleep of 20 ms (another task runs), or a syscall that
  *                     returns to the same task, then check
  *     While it spins, EDI holds 0xF0<id>00<87|55> (id 0x41 A, 0x42 B; 0x87 x87, 0x55 sse), so a
  *     QEMU monitor sample with that EDI in ring 3 must show that program's registers.
  * "fputest.elf fresh <tag>": FXSAVE as its first FPU instruction must show the clean
- *     state, then 1/3 on the x87 and with divps must be rounded to nearest. "fputest.elf afterexit"
+ *     state and FNSTENV zero x87 instruction and operand pointers (not another program's), then
+ *     1/3 on the x87 and with divps must be rounded to nearest. "fputest.elf afterexit"
  *     and "fputest.elf afterfault" do the same (tag = the mode), then wait for a key. They have as
  *     many words as "fputest.elf dirty" and "fputest.elf fault", so the shell's command takes the
  *     same heap blocks and the new task gets the block of the program that ended before it.
@@ -209,6 +211,25 @@ static void sse_compute(const struct pattern *p, uint32_t *quotient)
         : : "r"(quotient), "r"(p->xmm[0]) : "memory");
 }
 
+// The address of the last x87 instruction, its opcode and the address of its memory operand,
+// read with FNSTENV (32-bit protected-mode layout: offsets 12, 16 bits 16-26, 20). FNSTENV masks
+// every x87 exception afterwards; FLDCW puts the control word back.
+struct pointers
+{
+    uint32_t ip;
+    uint32_t opcode;
+    uint32_t dp;
+};
+
+static void pointers(struct pointers *p)
+{
+    static uint32_t env[7];
+    __asm__ volatile("fnstenv %0\n\tfldcw %0" : "+m"(env));
+    p->ip = env[3];
+    p->opcode = env[4] >> 16 & 0x7FF;
+    p->dp = env[5];
+}
+
 static void load(const struct pattern *p, struct expected *e, int sse)
 {
     x87_load(p);
@@ -317,15 +338,22 @@ static void syscall_windows(const struct pattern *p)
     summary(&t, "");
 }
 
-// Starts a child with its own state loaded, lets it run, then checks its state again.
+// Starts a child with its own state loaded, lets it run, then checks its state again. The x87
+// pointers must then be this program's own (FXRSTOR loaded them) or zero (the kernel's FNINIT
+// cleared them and this CPU's FXRSTOR doesn't load them), never the child's.
 static void with_child(const struct pattern *p, const char *command, const char *what, int sse)
 {
     struct tally t;
     struct expected e;
+    struct pointers own, now;
     begin(&t, p->who, what);
     load(p, &e, sse);
+    pointers(&own);
     rorthox_system_run(command);
     sleep(300);
+    pointers(&now);
+    check(&t, (now.ip == 0 || now.ip == own.ip) && (now.dp == 0 || now.dp == own.dp),
+          "x87 pointers are another program's");
     verify(&t, p, &e, sse);
     summary(&t, "");
 }
@@ -369,6 +397,11 @@ static int fresh(const char *tag, int wait)
     }
     check(&t, st, "x87 register contents not zero");
     check(&t, same(image + 160, zero, 128), "XMM registers not zero");
+    // Where FXSAVE stores the x87 pointers as zero (QEMU TCG), only FNSTENV shows the ones
+    // another program left.
+    struct pointers ptr;
+    pointers(&ptr);
+    check(&t, ptr.ip == 0 && ptr.opcode == 0 && ptr.dp == 0, "x87 pointers or opcode not zero");
     unsigned char result[10];
     __asm__ volatile("fld1\n\tfidivl %1\n\tfstpt %0" : "=m"(result) : "m"(three));
     check(&t, same(result, third, 10), "x87 1/3 is not the round-to-nearest 64-bit result");

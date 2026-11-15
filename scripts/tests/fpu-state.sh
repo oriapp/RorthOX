@@ -25,11 +25,17 @@
 #         then FWAIT, must end the program.
 #   idle  fputest.elf as shell.elf, the only program, on a Pentium III CPU model (SSE, no SSE2): it
 #         loads its state and sleeps in 100 ms steps until a key, so the kernel idles with
-#         interrupts on. All 20 samples meanwhile (some halted in ring 0) must show its registers;
-#         after the key its arithmetic must still be right, and a child it starts is clean.
+#         interrupts on. All 20 samples meanwhile (some halted in ring 0) must show its registers,
+#         and its task block must still hold the clean image it started with (the kernel saves
+#         a program's state only when it switches to another one); after the key its arithmetic
+#         must still be right, and a child it starts is clean.
 #   grub  the idle case through the GRUB ISO (the disk's boot sector replaced by "jmp $"). Skipped
 #         without the ISO tools (fails with RORTHOX_REQUIRE_ISO=1).
-# bin/os.bin itself must not change.
+# bin/os.bin itself must not change. In every case, every sample must show the control register
+# bits the kernel sets for the FPU (CR0 MP and NE set, EM and TS clear; CR4 OSFXSR and OSXMMEXCPT
+# set, OSXSAVE clear). The fresh programs also check the x87 instruction and operand pointers
+# (FNSTENV), which FXSAVE may store as zero: they must be zero, and a program's own or zero after
+# its child ran.
 #
 # Env: BOOT_TIMEOUT=60   RUN_TIMEOUT=120   FPU_STATE_CASES="disk idle grub"
 
@@ -56,7 +62,15 @@ kernel_symbols_or_stop "$OUT" fpu-state || exit 1
 # task.c).
 TASK_TAIL=$SYM_TASK_TAIL
 FPU_OWNER=$(awk '$3 == "fpu_owner" { print $1 }' "$OUT/kernel-nm.txt")
-echo "  fpu_owner ${FPU_OWNER:-not found}"
+# The clean image every task starts with (static in fpu.c), and where a task keeps its saved state.
+FPU_PRISTINE=$(awk '$3 == "fpu_pristine" { print $1 }' "$OUT/kernel-nm.txt")
+printf '#include "task/task.h"\nchar task_fpu_offset[offsetof(struct task, fpu) + 1];\n' > "$OUT/fpu-offset.c"
+TASK_FPU_OFFSET=
+if i686-elf-gcc -std=gnu99 -ffreestanding -fno-common -I kernel -I build/config -c "$OUT/fpu-offset.c" \
+        -o "$OUT/fpu-offset.o" > "$OUT/fpu-offset.log" 2>&1; then
+    TASK_FPU_OFFSET=$(printf '%x' $((0x$(i686-elf-nm -S "$OUT/fpu-offset.o" | awk '$4 == "task_fpu_offset" { print $2 }') - 1)))
+fi
+echo "  fpu_owner ${FPU_OWNER:-not found}, fpu_pristine ${FPU_PRISTINE:-not found}, struct task: fpu at ${TASK_FPU_OFFSET:-?}"
 
 # What QEMU prints for each program's registers (XMM as two 64-bit halves, high first; lanes as in
 # programs/fputest: xmm0 the dividends, xmm1 3.0, xmm2-7 lane j = id << 24 | register << 16 | j).
@@ -103,6 +117,31 @@ memory() {
 }
 
 read_word() { memory "$1" 4 "$D/word.bin" && od -An -tx4 -N4 "$D/word.bin" | tr -d ' \n'; }
+
+# control <monitor.log>: CR0 and CR4 in every register dump. CR0: MP (1) and NE (5) set, EM
+# (2) and TS (3) clear; CR4: OSFXSR (9) and OSXMMEXCPT (10) set, OSXSAVE (18) clear.
+control() {
+    tr -d '\r' < "$1" | awk '
+        function hex(s,    v, i) { v = 0; for (i = 1; i <= length(s); i++) v = v * 16 + index("0123456789abcdef", tolower(substr(s, i, 1))) - 1; return v }
+        function bit(v, b) { return int(v / 2 ^ b) % 2 }
+        { for (i = 1; i <= NF; i++) {
+              if ($i ~ /^CR0=/) { n++; v = hex(substr($i, 5)); if (!bit(v, 1) || !bit(v, 5) || bit(v, 2) || bit(v, 3)) bad0++ }
+              else if ($i ~ /^CR4=/) { m++; v = hex(substr($i, 5)); if (!bit(v, 9) || !bit(v, 10) || bit(v, 18)) bad4++ }
+          } }
+        END { print (n > 0 && n == m ? "seen" : "none") ", CR0 wrong " bad0 + 0 ", CR4 wrong " bad4 + 0 " (" n + 0 " samples)" }' > "$D/control.txt"
+    sed 's/^/  control registers: /' "$D/control.txt"
+    check "$C: every sample: CR0 MP NE set, EM TS clear; CR4 OSFXSR OSXMMEXCPT set, OSXSAVE clear" \
+        "$D/control.txt" "seen, CR0 wrong 0, CR4 wrong 0"
+}
+
+# pristine <task>: the task's saved FPU image is still the clean image (a task that has never been
+# switched away from has never been saved).
+pristine() {
+    [ -n "$1" ] && [ -n "$FPU_PRISTINE" ] && [ -n "$TASK_FPU_OFFSET" ] || return 1
+    memory "$(printf '%x' $((0x$1 + 0x$TASK_FPU_OFFSET)))" 512 "$D/task-fpu.bin" &&
+        memory "$FPU_PRISTINE" 512 "$D/fpu-pristine.bin" || return 1
+    if cmp -s "$D/task-fpu.bin" "$D/fpu-pristine.bin"; then echo clean; else echo saved; fi > "$D/task-fpu.txt"
+}
 
 # wait_tail <task> <seconds>: until the newest task is <task> (the programs after it have ended).
 wait_tail() {
@@ -224,14 +263,15 @@ disk_case() {
     echo "exit=$status" > "$D/steps.txt"
     qemu_stop || true
     samples "$D/monitor.log" > "$D/samples.txt"
+    control "$D/monitor.log"
 
     check "$C: every step ran" "$D/steps.txt" "exit=0" line
-    result x87child "fputest fresh x87" 9
-    result x87after "fputest A after the x87 child" 4
+    result x87child "fputest fresh x87" 10
+    result x87after "fputest A after the x87 child" 5
     windows x87a "fputest A x87 windows" 600
     windows x87b "fputest B x87 windows" 600
-    result ssechild "fputest fresh sse" 9
-    result sseafter "fputest A after the sse child" 7
+    result ssechild "fputest fresh sse" 10
+    result sseafter "fputest A after the sse child" 8
     windows ssea "fputest A sse windows" 1050
     windows sseb "fputest B sse windows" 1050
     result calla "fputest A syscall windows" 420
@@ -254,10 +294,10 @@ disk_case() {
     done
     seen dirty "fputest dirty: loaded, waiting for a key"
     check "$C: the block freed at exit doesn't hold the program's last XMM7" "$D/freed-exit.txt" "not there" line
-    result afterexit "fputest fresh afterexit" 9
+    result afterexit "fputest fresh afterexit" 10
     seen fault "fputest fault: loaded, waiting for a key"
     check "$C: the block freed after the fault doesn't hold its last XMM7" "$D/freed-fault.txt" "not there" line
-    result afterfault "fputest fresh afterfault" 9
+    result afterfault "fputest fresh afterfault" 10
     echo "dirty $DIRTY_TASK afterexit $EXIT_TASK fault $FAULT_TASK afterfault $AFTER_TASK" > "$D/tasks.txt"
     [ -n "$EXIT_TASK" ] && [ "$EXIT_TASK" = "$DIRTY_TASK" ] && echo same > "$D/reuse-exit.txt" || echo differs > "$D/reuse-exit.txt"
     [ -n "$AFTER_TASK" ] && [ "$AFTER_TASK" = "$FAULT_TASK" ] && echo same > "$D/reuse-fault.txt" || echo differs > "$D/reuse-fault.txt"
@@ -277,6 +317,7 @@ idle_case() {
     {
         look "$BOOT_TIMEOUT" 0 "loaded=fputest I: loaded, sleeping until a key" &&
         for ((i = 0; i < 20; i++)); do sample; sleep 0.1; done &&
+        { pristine "$(read_word "$TASK_TAIL")" || echo "not read" > "$D/task-fpu.txt"; } &&
         qemu_cmd "sendkey ret" &&
         look "$RUN_TIMEOUT" 0 "idle=fputest I idle: $RESULT" "child=fputest fresh idle: $RESULT" \
             "after=fputest I after the child: $RESULT"
@@ -284,6 +325,7 @@ idle_case() {
     echo "exit=$status" > "$D/steps.txt"
     qemu_stop || true
     samples "$D/monitor.log" > "$D/samples.txt"
+    control "$D/monitor.log"
     awk -v f="$FCW_I" -v m="$MXCSR_I" -v xi="$XMM_I" '
         { x = $7; for (i = 8; i <= NF; i++) x = x " " $i; n++ }
         $1 == 0 && $2 == 1 { halted++ }
@@ -294,9 +336,11 @@ idle_case() {
     check "$C: every step ran" "$D/steps.txt" "exit=0" line
     check "$C: 20 samples while it sleeps, some halted, all with its registers" "$D/idle.txt" \
         "samples 20, halted in ring 0 yes, wrong 0" line
+    check "$C: its saved FPU image is still the clean one (no FPU work on a return to the same task)" \
+        "$D/task-fpu.txt" clean line
     result idle "fputest I idle" 7
-    result child "fputest fresh idle" 9
-    result after "fputest I after the child" 7
+    result child "fputest fresh idle" 10
+    result after "fputest I after the child" 8
     check "$C: no kernel panic (debugcon)" "$D/debugcon.log" "PANIC" absent
 }
 

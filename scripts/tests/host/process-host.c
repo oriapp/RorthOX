@@ -372,7 +372,7 @@ int paging_user_translate(uint32_t *directory, uint32_t address, int write, void
 
 void kernel_page() {}
 void user_registers() {}
-// No FPU on the host; scripts/tests/host/fpu-owner.c checks task.c's FPU calls.
+// No FPU on the host: the FPU calls do nothing here.
 void fpu_task_init(void *area) {}
 void fpu_save(void *area) {}
 void fpu_restore(void *area) {}
