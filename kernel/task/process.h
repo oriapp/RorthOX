@@ -81,7 +81,7 @@ struct process
     int files[RORTHOX_FILE_MAX_OPEN];
 
     // Page-rounded charges for live process allocations, including argv.
-    size_t heap_used_bytes;
+    uint32_t heap_used_bytes;
 };
 
 int process_switch(struct process *process);
