@@ -14,24 +14,30 @@ fp_opcode = re.compile(
     r"ldmxcsr|stmxcsr|xsave\w*|xrstor\w*|vzero\w*|"
     r"maskmov\w*|prefetch\w*|(?:s|l|m)fence)$", re.I
 )
-section = re.compile(r"^\s*\d+\s+(\S+)\s+[^\n]*\n[^\n]*\bCODE\b", re.M)
+section = re.compile(r"^\s*\d+\s+(\S+)\s+[^\n]*\n\s*([A-Z, ]+)$", re.M)
+# NASM's default .asm section has ALLOC but no executable flag. Other
+# allocated contents with an unexpected name must not hide instructions.
+data_section = re.compile(r"^(?:\.data(?:\..*)?|\.rodata(?:\..*)?|\.bss(?:\..*)?)$")
 
 
 def disassembly(obj):
     header = subprocess.run(
         ["i686-elf-objdump", "-h", obj], check=True, capture_output=True, text=True
     ).stdout
-    # Include every CODE section, not just .text (GCC may create .text.*).
-    # NASM's .asm is not flagged executable, so find that by name as well.
-    sections = set(section.findall(header))
-    if re.search(r"^\s*\d+\s+\.asm\s+", header, re.M):
-        sections.add(".asm")
+    sections = set()
+    for name, flag_text in section.findall(header):
+        flags = set(flag_text.split(", "))
+        # CODE corresponds to ELF SHF_EXECINSTR; include all executable
+        # sections, regardless of name or where they occur in the object.
+        if "CODE" in flags or name == ".asm":
+            sections.add(name)
+        elif {"ALLOC", "CONTENTS"} <= flags and not data_section.fullmatch(name):
+            raise ValueError(f"{obj}: unscanned allocated section {name}")
     if not sections:
-        raise ValueError(f"{obj}: no code or .asm section to inspect")
+        raise ValueError(f"{obj}: no executable or .asm section to inspect")
     for name in sorted(sections):
-        mode = "-D" if name == ".asm" else "-d"
         output = subprocess.run(
-            ["i686-elf-objdump", mode, "-M", "intel", "-j", name, obj],
+            ["i686-elf-objdump", "-D", "-M", "intel", "-j", name, obj],
             check=True, capture_output=True, text=True
         ).stdout
         for line in output.splitlines():
@@ -51,14 +57,14 @@ def main(objects):
     allowed = "build/arch/fpu.asm.o"
     violations = []
     for obj in objects:
-        if obj.removeprefix("./") == allowed:
-            continue
+        in_fpu = obj.removeprefix("./") == allowed
         for name, line, instruction in disassembly(obj):
-            opcode = instruction.split()[0]
+            opcode = instruction.split()[0].lower()
             if fp_register.search(instruction) or fp_opcode.fullmatch(opcode):
-                violations.append(f"{obj} ({name}): {line.strip()}")
+                if not in_fpu or opcode not in {"fxsave", "fxrstor", "fninit"}:
+                    violations.append(f"{obj} ({name}): {line.strip()}")
     if violations:
-        raise ValueError("floating-point/vector instructions outside fpu.asm:\n" +
+        raise ValueError("disallowed floating-point/vector instructions:\n" +
                          "\n".join(violations))
     print(f"kernel FPU scan: {len(objects)} objects checked")
 
