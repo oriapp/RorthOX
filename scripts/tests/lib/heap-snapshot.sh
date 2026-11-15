@@ -15,10 +15,12 @@
 #   heap_snapshot_detached <seconds>  wait at most <seconds> for the debugger to end, without collecting
 #                                     its status; another debugger (guest-state.sh) may attach after it
 #   heap_snapshot_checks <label> <dir>
-#   heap_snapshot_site <label> <dir> <function>|none
+#   heap_snapshot_site <label> <dir> <function> [<via>] | none
 #                                     after an attach with "sites": where the kernel heap ran out
 #                                     while the checked syscalls ran (heap_snapshot.py): exactly one
-#                                     failed allocation, with <function> among its callers, or none
+#                                     failed allocation, made in <function> (its site=, the first
+#                                     caller outside the heap) and, with <via>, reached through <via>;
+#                                     or none
 # Every wait is bounded; without a debugger the program fails its own acknowledgement checks.
 . ./scripts/tests/lib/kernel-symbols.sh
 
@@ -113,12 +115,14 @@ heap_snapshot_checks() {
 }
 
 heap_snapshot_site() {
-    local label="$1" dir="$2" site="$3"
+    local label="$1" dir="$2" site="$3" via="${4:-}"
     [ -f "$dir/heap-sites.txt" ] || : > "$dir/heap-sites.txt"
     if [ "$site" = none ]; then
         check "${label}no kernel heap allocation failed in the syscalls" "$dir/heap-sites.txt" "failures=0" line
     else
         check "${label}one kernel heap allocation failed in the syscall"  "$dir/heap-sites.txt" "failures=1" line
-        check "${label}the allocation that failed was made through $site" "$dir/heap-sites.txt" "failure 1 caller $site" line
+        check "${label}the allocation that failed was made in $site" "$dir/heap-sites.txt" "failure 1 site=$site callers="
+        [ -z "$via" ] ||
+            check "${label}the failed allocation was reached through $via" "$dir/heap-sites.txt" "failure 1 caller $via" line
     fi
 }

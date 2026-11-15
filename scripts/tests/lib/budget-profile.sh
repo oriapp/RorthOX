@@ -40,7 +40,9 @@ budget_profile_build() {
                 rm -rf "$stage"; echo 'budget profile: config entry missing or duplicated' >&2; exit 1
             fi
             mv "$stage/config.mk.tmp" "$stage/config.mk" || exit 1
-            if ! (cd "$stage" && make clean all iso) > "$root/budget-profile-build.log" 2>&1; then
+            # Only "all": the pressure tests boot the disk image, not the ISO (so no GRUB packages are
+            # needed), and clean and all run one after the other so an exported -j can't race them.
+            if ! (cd "$stage" && make clean && make all) > "$root/budget-profile-build.log" 2>&1; then
                 echo "budget profile: build failed (see $root/budget-profile-build.log)" >&2
                 rm -rf "$stage"; exit 1
             fi

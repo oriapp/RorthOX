@@ -55,7 +55,8 @@ BLANK_ELF=programs/blank/build/blank.elf
 SHELL_ELF=programs/shell/build/shell.elf
 # The later page table first: it is the case that crashed before.
 CASES="${OOM_CASES:-table second wrapper elfobject elfdata process}"
-# case_site <case>: a kernel function the failing heap allocation must be called from. Under TCG,
+# case_site <case>: the kernel function the failing heap allocation was made in (the first caller
+# outside the heap), and for argv the caller it ran under. Under TCG,
 # recording it slows the syscall's other allocations down (lib/heap-snapshot.sh); one case that
 # fails after the whole page directory is set up (argv) is recorded, the others like it (table,
 # wrapper, arg1-arg3) are not.
@@ -71,7 +72,7 @@ case_site() {
         openitem)  echo fat16_new_fat_item_for_directory_item ;;
         openclone) echo fat_16_clone_directory_item ;;
         openvfs)   echo file_new_descriptor ;;
-        argv)      echo process_inject_arguments ;;
+        argv)      echo process_zalloc_user process_inject_arguments ;;   # site, then the caller it runs under
     esac
 }
 mkdir -p "$OUT"
@@ -215,7 +216,7 @@ run_case() {
     heap_snapshot_checks "$name: " "$dir"
     if [ -n "$site" ]; then
         sed 's/^/  heap: /' "$dir/heap-sites.txt" 2> /dev/null || true
-        heap_snapshot_site "$name: " "$dir" "$site"
+        heap_snapshot_site "$name: " "$dir" $site
     fi
 }
 
