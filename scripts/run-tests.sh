@@ -248,8 +248,20 @@ count_left() {
     s2=$?
     mapfile -t pids < "$run_tmp/left"
     for p in "${pids[@]}"; do seen[$p]=1; done
+    # The newly launched child may still be waiting to call setsid, with no TMPDIR in its argv.
+    if ours "$1"; then seen[$1]=1; fi
     left_count=${#seen[@]}
     [ "$s1" -le 1 ] && [ "$s2" -le 1 ]
+}
+
+# signal_test <child/session> <test tmp> <signal>: before setsid the child belongs to our
+# session, so signal only its verified PID. Afterwards also signal its private session.
+signal_test() {
+    local sid="$1" dir="$2" sig="$3"
+    pkill -"$sig" -s "$sid" 2> /dev/null
+    ours "$sid" && kill -"$sig" "$sid" 2> /dev/null
+    pkill -"$sig" -f -- "$dir/" 2> /dev/null
+    return 0
 }
 
 # stop_test <session> <test tmp>: TERM to everything the test left, KILL to what is still there
@@ -261,14 +273,12 @@ stop_test() {
     done
     stopped=$left_count
     [ "$stopped" -gt 0 ] || return 0
-    pkill -TERM -s "$sid" 2> /dev/null
-    pkill -TERM -f -- "$dir/" 2> /dev/null
+    signal_test "$sid" "$dir" TERM
     for ((i = 0; i < grace * 10; i++)); do
         count_left "$sid" "$dir" && [ "$left_count" -eq 0 ] && return 0
         sleep 0.1
     done
-    pkill -KILL -s "$sid" 2> /dev/null
-    pkill -KILL -f -- "$dir/" 2> /dev/null
+    signal_test "$sid" "$dir" KILL
     for ((i = 0; i < 50; i++)); do
         count_left "$sid" "$dir" && [ "$left_count" -eq 0 ] && break
         sleep 0.1
@@ -287,13 +297,13 @@ on_exit() {
     : > "$run_dir/finished"
 }
 
-# ours <pid>: the pid is still a test this runner started (its child and a session leader), not a
-# finished one whose number came back.
+# ours <pid>: a living direct child, whether or not it has reached setsid. A zombie can
+# be reaped even if Bash has already removed its job; a reused PID is not our child.
 ours() {
     local stat rest
     { read -r stat < "/proc/$1/stat"; } 2> /dev/null || return 1
     read -r -a rest <<< "${stat##*) }"
-    [ "${rest[1]}" = "$$" ] && [ "${rest[3]}" = "$1" ]
+    [ "${rest[1]}" = "$$" ] && [ "${rest[0]}" != Z ]
 }
 
 passed=()
@@ -388,16 +398,16 @@ while :; do
         next=$((next + 1))
     done
     [ "${#active[@]}" -gt 0 ] || break
-    # Out of time or interrupted: TERM to the test's whole session, KILL $grace seconds later.
+    # Out of time or interrupted: TERM to the test, KILL $grace seconds later.
     monotonic
     for sid in "${!active[@]}"; do
         i=${active[$sid]}
         if [ -z "${stopping[i]:-}" ] && { [ -n "$cancel" ] || [ "$now" -ge "${deadlines[i]}" ]; }; then
             if [ -n "$cancel" ]; then stopping[i]=cancel; else stopping[i]=timeout; fi
-            pkill -TERM -s "$sid" 2> /dev/null
+            signal_test "$sid" "$run_tmp/$((i + 1))" TERM
             deadlines[i]=$((now + grace * 100))
         elif [ -n "${stopping[i]:-}" ] && [ "$now" -ge "${deadlines[i]}" ]; then
-            pkill -KILL -s "$sid" 2> /dev/null
+            signal_test "$sid" "$run_tmp/$((i + 1))" KILL
         fi
     done
     # Wake up at least once a second for the time limits; a signal ends the wait at once.
@@ -412,8 +422,8 @@ while :; do
     elif [ -n "${active[$done_pid]:-}" ]; then
         finish_test "${active[$done_pid]}" "$status"
     fi
-    # bash drops a job from its job list once it has reported it (e.g. as killed); wait <pid> still
-    # knows its status.
+    # Bash drops a completed job from its job list once it has reported it (e.g. as killed);
+    # wait <pid> still knows its status. Never block waiting for a living pre-setsid child.
     for sid in "${!active[@]}"; do
         ours "$sid" && continue
         wait "$sid" 2> /dev/null
