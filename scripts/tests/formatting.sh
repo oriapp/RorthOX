@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
-# Kernel text formatting (K11): the buffer formatter (snprintf, sprintf, vsnprintf, vsprintf) is
-# one bounded function that never calls itself, itoa_hex puts the digits in the right order, and
-# the terminal's print_hex and printf("%x") show all eight digits of the value.
+# Kernel text formatting (K11): the buffer formatter (snprintf, vsnprintf) is one bounded function
+# that never calls itself, itoa_hex puts the digits in the right order, and the terminal's
+# print_hex and printf("%x") show all eight digits of the value. The kernel has no unbounded
+# buffer formatter: sprintf and vsprintf are not in build/kernel.map (snprintf and vsnprintf are).
 #
 # Host check only (no QEMU): scripts/tests/host/formatting.c builds the real
 # kernel/string/string.c and kernel/arch/i686/tty.c with the host C compiler. The formatting
@@ -10,7 +11,7 @@
 # Every destination, format string and %s argument ends at an unmapped page, every case runs in
 # its own process with a time limit, and signed overflow stops the case (-fsanitize).
 # Cases:
-#   api              snprintf, sprintf, vsnprintf, vsprintf (the va_list functions directly)
+#   api              snprintf, vsnprintf (the va_list function directly)
 #   empty            empty output, size 0 with a NULL destination, size 1; a NULL destination
 #                    with a size above 0 returns -1 and writes nothing
 #   truncate         a mixed format at every size from 0 to its length + 2: return value, text,
@@ -44,8 +45,7 @@ mkdir -p "$OUT"
 
 CASES="api empty truncate pad limits char string unsupported trailing int_max itoa_hex itoa_base
        print_hex printf_hex printf_trailing printf_others"
-RENAME="-Dsnprintf=kernel_snprintf -Dsprintf=kernel_sprintf -Dvsnprintf=kernel_vsnprintf
-        -Dvsprintf=kernel_vsprintf -Ditoa_hex=kernel_itoa_hex"
+RENAME="-Dsnprintf=kernel_snprintf -Dvsnprintf=kernel_vsnprintf -Ditoa_hex=kernel_itoa_hex"
 
 echo "formatting: host check"
 status="not built"
@@ -58,16 +58,25 @@ if "$HOST_CC" -std=gnu99 -g -O0 -fno-builtin -no-pie -fno-pie -w \
     if "$OUT/host-check" > "$OUT/host-check.log" 2>&1; then status=0; else status=$?; fi
     sed 's/^/  /' "$OUT/host-check.log"
     # The formatter under test is the kernel's.
-    nm "$OUT/host-check" | grep -E ' T kernel_(vsnprintf|vsprintf|snprintf|sprintf|itoa_hex)$' | wc -l |
+    nm "$OUT/host-check" | grep -E ' T kernel_(vsnprintf|snprintf|itoa_hex)$' | wc -l |
         sed 's/^ */kernel functions=/' > "$OUT/symbols.txt"
 else
     echo "  host build failed, see $OUT/host-build.log"
     head -n 20 "$OUT/host-build.log" | sed 's/^/  /' || true
 fi
 echo "exit=$status" > "$OUT/host-status.txt"
+# The kernel itself: the bounded formatters are linked, the unbounded ones are gone.
+[ -f build/kernel.map ] || { echo "formatting: build/kernel.map not found, run 'make all' first" >&2; exit 1; }
+map_count() { grep -cE "^ +0x[0-9a-f]+ +($1)\$" build/kernel.map || true; }
+{
+    echo "bounded=$(map_count 'snprintf|vsnprintf')"
+    echo "unbounded=$(map_count 'sprintf|vsprintf')"
+} > "$OUT/kernel-map.txt"
 
 check "host check built and exited with status 0"        "$OUT/host-status.txt" "exit=0" line
-check "the kernel's five formatting functions are linked" "$OUT/symbols.txt" "kernel functions=5" line
+check "the kernel's three formatting functions are linked" "$OUT/symbols.txt" "kernel functions=3" line
+check "the kernel has snprintf and vsnprintf"            "$OUT/kernel-map.txt" "bounded=2" line
+check "the kernel has no sprintf or vsprintf"            "$OUT/kernel-map.txt" "unbounded=0" line
 for c in $CASES; do
     check "$c" "$OUT/host-check.log" "PASS $c" line
 done

@@ -278,16 +278,6 @@ int snprintf(char *str, size_t size, const char *format, ...) {
     return count;
 }
 
-int sprintf(char *str, const char *format, ...) {
-    int count;
-    va_list args;
-    va_start(args, format);
-    count = vsprintf(str, format, args);
-    va_end(args);
-    return count;
-}
-
-
 static int format_putc(char *str, size_t size, int *count, char c)
 {
     if (*count == INT_MAX)
@@ -417,10 +407,4 @@ out:
         str[(size_t)count < size ? (size_t)count : size - 1] = '\0';
     }
     return result;
-}
-
-int vsprintf(char *str, const char *format, va_list args) {
-    int count;
-    count = vsnprintf(str, INT_MAX, format, args);
-    return count;
 }

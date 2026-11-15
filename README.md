@@ -62,7 +62,8 @@ Everything in this list is checked by `make test` or was run in QEMU.
   before it touches the disk.
 - **Console:** 80x25 VGA text with colours, scrolling and backspace across rows, and a kernel `printf`. Programs can
   move the cursor back and forth across rows without changing the text (syscall 11); a move off the visible page is
-  refused. Kernel debug output also goes to port 0xE9 (QEMU's `debugcon`).
+  refused. Kernel debug output also goes to port 0xE9 (QEMU's `debugcon`). Buffer formatting uses `snprintf` and
+  `vsnprintf` with explicit capacities; the boot clock prints `System Time: HH:MM:SS` with leading zeros.
 - **Keyboard:** PS/2 scancode set 1 with Shift symbols, Caps Lock and the keypad. Num Lock starts on, so the keypad
   types digits right away as before, whatever state the BIOS or GRUB left the keyboard in. The driver keeps track of
   it: with it off, the keypad digits and the decimal point type nothing, while keypad `+ - * /` and Enter still work. The arrows, Home, End, Insert, Delete, Page Up and Page Down arrive as their own key codes,
@@ -180,7 +181,7 @@ the build makes right now (16,850,264 bytes) that is clusters 2 to 252, about 15
 | `kernel/task` | tasks, processes, switching to ring 3, sleeping tasks and the idle loop |
 | `kernel/isr80h` | the syscalls (file syscalls in `file.c`) |
 | `kernel/keyboard` | keyboard queue and the PS/2 driver |
-| `kernel/time/rtc` | CMOS clock read at boot ("System Time") |
+| `kernel/time/rtc` | CMOS clock read at boot ("System Time"); bounded time-string helpers return allocated strings, or NULL on failure |
 | `include/rorthox` | headers shared by the kernel and programs: file modes, the stat struct, error codes |
 
 ### Syscalls
@@ -726,8 +727,6 @@ isolate every resource or protect against every kernel bug.
   sleeps that long holds the keyboard until a reboot.
 - **Idle only when every task sleeps.** The shell waits for keys by polling `getkey`, so while it runs the CPU never
   halts, even when the program it started is asleep. Sleeping doesn't change which program gets the keys either.
-- **Small things.** Kernel `vsprintf`/`sprintf` are unbounded (no code that runs calls them). The boot clock prints minutes and seconds without
-  leading zeros.
 - **GRUB path is BIOS only.** No UEFI, and the ISO has only been booted in QEMU (not VirtualBox, not from USB).
 - **Tested only in QEMU** (8.2, TCG and hosted KVM). It has never run on real hardware.
 

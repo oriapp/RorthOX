@@ -30,9 +30,6 @@ int atoi(char* str);
 // Nonzero sizes retain a terminated prefix; size zero permits a NULL destination.
 int snprintf(char *str, size_t size, const char *format, ...);
 int vsnprintf(char *str, size_t size, const char *format, va_list args);
-// These unbounded wrappers require enough destination space from the caller.
-int sprintf(char *str, const char *format, ...);
-int vsprintf(char *str, const char *format, va_list args);
 
 #ifdef __cplusplus
 }

@@ -4,6 +4,8 @@
 #include "include/kernel/tty.h"
 #include "string/string.h"
 #include "include/kernel/sys.h"
+#include "memory/heap/kheap.h"
+#include <stdint.h>
 
 int century_register = 0x00; // Set by ACPI table parsing code if possible
 
@@ -36,7 +38,7 @@ int timezone_offset = 180; // -3 hours (in minutes)
 
 void read_rtc()
 {
-    unsigned char century;
+    unsigned char century = 0;
     unsigned char last_second;
     unsigned char last_minute;
     unsigned char last_hour;
@@ -127,69 +129,90 @@ void read_rtc()
     }
 }
 
-char *getformattedtime(const char *format) {
-    char *result = kmalloc(strlen(format) + 1);
-    char hourStr[3], minStr[3], secStr[3];
-    // snprintf();
-
-    sprintf(hourStr, "%02d", hour);
-    sprintf(minStr, "%02d", minute);
-    sprintf(secStr, "%02d", second);
-
-    const char *p = format;
-    char *q = result;
-    while (*p) {
-        if (*p == 'h') {
-            // Hours with leading zeros
-            q = strcat(q, hourStr);
-        } else if (*p == 'H') {
-            // Hours without leading zeros
-            q = strcat(q, hour < 10 ? " " : "");
-            sprintf(q, "%d", hour);
-        } else if (*p == 'm') {
-            // Minutes with leading zeros
-            q = strcat(q, minStr);
-        } else if (*p == 'M') {
-            // Minutes without leading zeros
-            q = strcat(q, minute < 10 ? " " : "");
-            sprintf(q, "%d", minute);
-        } else if (*p == 's') {
-            // Seconds with leading zeros
-            q = strcat(q, secStr);
-        } else if (*p == 'S') {
-            // Seconds without leading zeros
-            q = strcat(q, second < 10 ? " " : "");
-            sprintf(q, "%d", second);
-        } else {
-            // Copy literal characters
-            char tmp[2] = {*p, '\0'};
-            q = strcat(q, tmp);
-        }
-        p++;
+static int rtc_format_token(char *buffer, size_t capacity, char token)
+{
+    int value;
+    switch (token)
+    {
+    case 'h':
+    case 'H':
+        value = hour;
+        break;
+    case 'm':
+    case 'M':
+        value = minute;
+        break;
+    case 's':
+    case 'S':
+        value = second;
+        break;
+    default:
+        return snprintf(buffer, capacity, "%c", token);
     }
 
+    if (token == 'h' || token == 'm' || token == 's')
+        return snprintf(buffer, capacity, "%02d", value);
+    return snprintf(buffer, capacity, "%s%d", value < 10 ? " " : "", value);
+}
+
+char *getformattedtime(const char *format)
+{
+    if (!format)
+        return NULL;
+
+    size_t capacity = 1;
+    for (const char *p = format; *p; p++)
+    {
+        char token[4]; // An unsigned RTC byte needs at most three digits.
+        int length = rtc_format_token(token, sizeof(token), *p);
+        if (length < 0 || (size_t)length >= sizeof(token) ||
+            (size_t)length > SIZE_MAX - capacity)
+            return NULL;
+        capacity += length;
+    }
+
+    char *result = kmalloc(capacity);
+    if (!result)
+        return NULL;
+    result[0] = '\0';
+
+    size_t used = 0;
+    for (const char *p = format; *p; p++)
+    {
+        int length = rtc_format_token(result + used, capacity - used, *p);
+        if (length < 0 || (size_t)length >= capacity - used)
+        {
+            kfree(result);
+            return NULL;
+        }
+        used += length;
+    }
     return result;
 }
 
 char *gettime()
 {
-    char *x = kmalloc(sizeof(int) * 8);
-    sprintf(x, "%d:%d:%d", hour, minute, second);
-    return x;
+    size_t capacity = sizeof("255:255:255");
+    char *result = kmalloc(capacity);
+    if (!result)
+        return NULL;
+    int length = snprintf(result, capacity, "%d:%d:%d", hour, minute, second);
+    if (length < 0 || (size_t)length >= capacity)
+    {
+        kfree(result);
+        return NULL;
+    }
+    return result;
 }
 
 void printtime()
 {
-    // asm volatile ("cli");
-    // 	read_rtc();
-    // 	asm volatile ("sti");
+    char time[sizeof("255:255:255\n")];
     read_rtc();
 
+    int length = snprintf(time, sizeof(time), "%02d:%02d:%02d\n", hour, minute, second);
+    if (length < 0 || (size_t)length >= sizeof(time))
+        return;
     printc("System Time: ", VGA_COLOR_LIGHT_GREEN);
-    print(itoa(hour));
-    print(":");
-    print(itoa(minute));
-    print(":");
-    print(itoa(second));
-    print("\n");
+    print(time);
 }

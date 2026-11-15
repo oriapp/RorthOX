@@ -2,9 +2,8 @@
  * Host check for scripts/tests/formatting.sh: the real kernel/string/string.c and
  * kernel/arch/i686/tty.c, built with the host C compiler.
  *
- * string.c is built with its formatting names prefixed (kernel_snprintf, kernel_sprintf,
- * kernel_vsnprintf, kernel_vsprintf, kernel_itoa_hex), so no call can end up in the C library's
- * formatter. The expected text comes from the C library's snprintf, reached by its symbol name.
+ * string.c is built with its formatting names prefixed (kernel_snprintf, kernel_vsnprintf,
+ * kernel_itoa_hex), so no call can end up in the C library's formatter. The expected text comes from the C library's snprintf, reached by its symbol name.
  * tty.c writes to a VGA text page mapped at its real address 0xB8000 with unmapped pages around it.
  *
  * Every destination ends right before an unmapped page, and the bytes before it in its page hold a
@@ -13,7 +12,7 @@
  * byte, so reading past it also stops the case. Every case runs in its own process with a time
  * limit (a formatter that calls itself forever overflows the stack or runs out of time).
  *
- * Buffer formatter (vsnprintf and the wrappers around it): %d %i %u %x %X %c %s %% and %02d.
+ * Buffer formatter (vsnprintf and snprintf around it): %d %i %u %x %X %c %s %% and %02d.
  * Return value: the length of the whole output (without the NUL), whatever the size. Size 0 writes
  * nothing (the destination may be NULL); otherwise at most size - 1 characters and always a NUL.
  * A NULL destination with a size above 0 returns -1 and writes nothing.
@@ -45,7 +44,6 @@
 // The kernel's buffer formatter (string.c is built with -Dvsnprintf=kernel_vsnprintf and so on,
 // and this file is built with the same names). Declared here as well in case string.h doesn't.
 int vsnprintf(char *str, size_t size, const char *format, va_list args);
-int vsprintf(char *str, const char *format, va_list args);
 
 // The C library's snprintf, for the expected text.
 int host_snprintf(char *str, unsigned long size, const char *format, ...) __asm__("snprintf");
@@ -198,21 +196,12 @@ static void check_result(const char *what, struct dest *d, int ret, const char *
     }
 }
 
-// The kernel's vsnprintf and vsprintf through a variadic front, to test the va_list entry points.
+// The kernel's vsnprintf through a variadic front, to test the va_list entry point.
 static int call_vsnprintf(char *str, size_t size, const char *format, ...)
 {
     va_list ap;
     va_start(ap, format);
     int r = vsnprintf(str, size, format, ap);
-    va_end(ap);
-    return r;
-}
-
-static int call_vsprintf(char *str, const char *format, ...)
-{
-    va_list ap;
-    va_start(ap, format);
-    int r = vsprintf(str, format, ap);
     va_end(ap);
     return r;
 }
@@ -240,12 +229,10 @@ static void c_api(void)
 
     d = dest_new(16);
     check_result("snprintf", &d, snprintf(d.buf, 16, fmt, -42, s), "a-42bxyc", 8);
-    d = dest_new(9);
-    check_result("sprintf", &d, sprintf(d.buf, fmt, -42, s), "a-42bxyc", 8);
     d = dest_new(5);
     check_result("vsnprintf (truncating)", &d, call_vsnprintf(d.buf, 5, fmt, -42, s), "a-42bxyc", 8);
     d = dest_new(9);
-    check_result("vsprintf", &d, call_vsprintf(d.buf, fmt, -42, s), "a-42bxyc", 8);
+    check_result("vsnprintf (exact size)", &d, call_vsnprintf(d.buf, 9, fmt, -42, s), "a-42bxyc", 8);
     d = dest_new(0);
     check_result("vsnprintf size 0, NULL", &d, call_vsnprintf(0, 0, fmt, -42, s), "a-42bxyc", 8);
 }
@@ -267,8 +254,6 @@ static void c_empty(void)
     check_result("\"abc\", size 1", &d, snprintf(d.buf, 1, abc, 0), "abc", 3);
     d = dest_new(1);
     check_result("empty %s, size 1", &d, snprintf(d.buf, 1, edge("%s"), edge("")), "", 0);
-    d = dest_new(1);
-    check_result("sprintf empty", &d, sprintf(d.buf, empty), "", 0);
     // A NULL destination with a size: -1, nothing written (a store through NULL stops the case).
     int r = snprintf(0, 4, abc, 0);
     if (r != -1)
@@ -284,11 +269,6 @@ static void c_empty(void)
     if (r != -1)
     {
         BAD("vsnprintf(NULL, 8, \"a%%db\") returned %d, expected -1", r);
-    }
-    r = sprintf(0, abc);
-    if (r != -1)
-    {
-        BAD("sprintf(NULL, \"abc\") returned %d, expected -1", r);
     }
 }
 
