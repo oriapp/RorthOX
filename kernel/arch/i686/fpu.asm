@@ -11,9 +11,10 @@ global fpu_write_cr4
 global fpu_save
 global fpu_restore
 
-; The kernel's only x87/SSE instructions are the FXSAVE and FXRSTOR below. Neither waits for a
-; pending x87 exception (Intel SDM Vol. 2A FXSAVE/FXRSTOR: no #MF), so a task's unmasked
-; exception is only raised at its own next waiting FP instruction, in ring 3.
+; The kernel's only x87/SSE instructions are the FXSAVE, FNINIT and FXRSTOR below. None of them
+; waits for a pending x87 exception (Intel SDM Vol. 2A FXSAVE/FXRSTOR: no #MF; FNINIT is the
+; no-wait form of FINIT), so a task's unmasked exception is only raised at its own next waiting
+; FP instruction, in ring 3.
 
 ; int fpu_has_cpuid(void)
 ; 1 if software can flip EFLAGS.ID (bit 21): then the CPU has CPUID (Intel SDM Vol. 2A, CPUID).
@@ -79,5 +80,6 @@ fpu_save:
 ; void fpu_restore(void *area)
 fpu_restore:
     mov eax, [esp+4]
+    fninit                          ; FXRSTOR keeps the old FIP/FDP/FOP on TCG, pre-Zen 2 AMD
     fxrstor [eax]
     ret

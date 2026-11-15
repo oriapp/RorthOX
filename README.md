@@ -757,10 +757,11 @@ isolate every resource or protect against every kernel bug.
 - **FPU and SSE.** Only the legacy FXSAVE state is switched (x87, MMX, `XMM0-7`, `MXCSR`). There's no XSAVE:
   CR4.OSXSAVE stays off, so AVX instructions are invalid opcodes. A CPU without SSE can't boot RorthOX at all.
   An unmasked SSE error should be a #XM (vector 19) that ends the program, but QEMU's TCG never raises #XM (it
-  only sets the flag in `MXCSR`), so that path hasn't been run. On older AMD CPUs FXSAVE leaves out the last x87
-  instruction and data pointers (FIP, FDP, FOP) unless an x87 exception is pending (CVE-2006-1056), so there a
-  program could see where the previous program's last x87 instruction and operand were. RorthOX doesn't clear
-  them; QEMU stores the pointers as zero.
+  only sets the flag in `MXCSR`), so that path hasn't been run. On AMD CPUs before Zen 2, FXSAVE and FXRSTOR leave
+  out the last x87 instruction and data pointers (FIP, FDP, FOP) unless an x87 exception is pending
+  (CVE-2006-1056), and QEMU's TCG never saves or loads them. The kernel clears them (FNINIT) before it loads a
+  task's state, so a program never sees another program's pointers; on those CPUs and under TCG it can read zero
+  instead of its own once another task has run.
 - **Fixed memory layout.** The kernel heap is at 16 MiB and the machine needs 128 MiB of RAM; there's no BIOS
   memory map, and the one GRUB passes is ignored. The boot sector turns A20 on itself before it loads the kernel to
   1 MiB, with the fast A20 port (0x92) only; on a machine where that port doesn't work it stops instead of booting.

@@ -236,8 +236,8 @@ void task_wake_sleepers(uint32_t now)
 }
 
 // Every way back to ring 3 comes through here (task_page for the same task), with IF=0 and
-// the kernel's CR3. FPU state moves only when the owner changes, and only with FXSAVE and
-// FXRSTOR, which never raise a pending x87 exception in ring 0.
+// the kernel's CR3. FPU state moves only when the owner changes, and only with FXSAVE, FNINIT
+// and FXRSTOR, which never raise a pending x87 exception in ring 0.
 int task_switch(struct task *task)
 {
     if (task != fpu_owner)
