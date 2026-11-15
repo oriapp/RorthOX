@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include "config.h"
 #include "memory/paging/paging.h"
+#include "include/kernel/fpu.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -94,7 +95,19 @@ struct task
     */
     enum task_state state;
     uint32_t wake_tick;
+
+    /*
+    *   x87/MMX/SSE state (FXSAVE image) while the task doesn't own the FPU. Kernel-only:
+    *   the kernel writes it with FXSAVE or the clean image and nothing else. Last, so the
+    *   fields above keep their offsets.
+    */
+    uint8_t fpu[FPU_STATE_SIZE] __attribute__((aligned(FPU_STATE_ALIGN)));
 };
+
+_Static_assert(offsetof(struct task, fpu) % FPU_STATE_ALIGN == 0, "FXSAVE needs a 16-byte aligned area");
+_Static_assert(sizeof(((struct task *)0)->fpu) == FPU_STATE_SIZE, "the FXSAVE area is 512 bytes");
+// task_new takes one kernel heap block per task.
+_Static_assert(sizeof(struct task) <= RORTHOX_HEAP_BLOCK_SIZE, "a task must fit one heap block");
 
 // Construct a detached task; publish it exactly once after setup succeeds.
 struct task *task_new(struct process *process);
@@ -102,6 +115,8 @@ void task_publish(struct task *task);
 // Destroy a detached task whose page directory is inactive.
 void task_discard(struct task *task);
 struct task *task_current();
+// The task whose x87/SSE state is in the CPU, or NULL.
+struct task *task_fpu_owner(void);
 struct task *task_get_next();
 // Unlink and destroy a published task.
 int task_free(struct task *task);

@@ -13,6 +13,16 @@
 // The current task that is running
 struct task *current_task = 0;
 
+// The task whose x87/SSE state is in the CPU, or NULL when no live task's is (after boot and
+// once the owner is destroyed). Kept apart from current_task: task_list_remove moves
+// current_task to a successor whose state was never loaded.
+static struct task *fpu_owner = 0;
+
+// Heap blocks start at RORTHOX_HEAP_ADDRESS and are RORTHOX_HEAP_BLOCK_SIZE apart, so each
+// task's fpu area is 16-byte aligned.
+_Static_assert(RORTHOX_HEAP_ADDRESS % FPU_STATE_ALIGN == 0, "heap blocks must be 16-byte aligned");
+_Static_assert(RORTHOX_HEAP_BLOCK_SIZE % FPU_STATE_ALIGN == 0, "heap blocks must be 16-byte aligned");
+
 // Keep count of the tasks, night be useful (?)
 static unsigned int tasks = 0;
 
@@ -25,6 +35,11 @@ int task_init(struct task *task, struct process *process);
 struct task *task_current()
 {
     return current_task;
+}
+
+struct task *task_fpu_owner(void)
+{
+    return fpu_owner;
 }
 
 struct task *task_new(struct process *process)
@@ -139,6 +154,13 @@ void task_discard(struct task *task)
         return;
     }
 
+    // Its state isn't needed any more, but the pointer must not outlive the storage: the
+    // next task_new can get the same block back.
+    if (task == fpu_owner)
+    {
+        fpu_owner = 0;
+    }
+
     if (task->page_directory)
     {
         paging_free_4gb(task->page_directory);
@@ -213,8 +235,21 @@ void task_wake_sleepers(uint32_t now)
     }
 }
 
+// Every way back to ring 3 comes through here (task_page for the same task), with IF=0 and
+// the kernel's CR3. FPU state moves only when the owner changes, and only with FXSAVE and
+// FXRSTOR, which never raise a pending x87 exception in ring 0.
 int task_switch(struct task *task)
 {
+    if (task != fpu_owner)
+    {
+        if (fpu_owner)
+        {
+            fpu_save(fpu_owner->fpu);
+        }
+        fpu_restore(task->fpu);
+        fpu_owner = task;
+    }
+
     current_task = task;
     paging_switch(task->page_directory);
     return 0;
@@ -498,7 +533,15 @@ void task_run_first_ever_task()
 
 int task_init(struct task *task, struct process *process)
 {
+    // FXSAVE/FXRSTOR on a misaligned area is a #GP in ring 0.
+    if ((uintptr_t)task->fpu % FPU_STATE_ALIGN)
+    {
+        return -EINVARG;
+    }
+
     memset(task, 0, sizeof(struct task));
+    // A new task starts with the clean state, never with what the CPU holds now.
+    fpu_task_init(task->fpu);
     // Keep kernel storage supervisor-writable, including entry and return stacks.
     // Only owned user pages are overlaid, under kernel CR3 before task CR3 reload.
     task->page_directory = paging_new_4gb(PAGING_IS_PRESENT | PAGING_IS_WRITEABLE);

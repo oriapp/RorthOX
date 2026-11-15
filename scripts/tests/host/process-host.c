@@ -372,6 +372,10 @@ int paging_user_translate(uint32_t *directory, uint32_t address, int write, void
 
 void kernel_page() {}
 void user_registers() {}
+// No FPU on the host; scripts/tests/host/fpu-owner.c checks task.c's FPU calls.
+void fpu_task_init(void *area) {}
+void fpu_save(void *area) {}
+void fpu_restore(void *area) {}
 
 // Sleeping is not under test with these stand-ins: task_next's idle loop and syscall 12's clock
 // stop the check if they are ever reached.

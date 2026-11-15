@@ -23,10 +23,14 @@ Everything in this list is checked by `make test` or was run in QEMU.
   one-entry menu. Programs still come from the FAT16 disk image.
 - **CPU setup:** GDT with kernel/user code and data segments plus a 104-byte TSS, a 256-vector IDT, both 8259 PICs
   remapped (IRQs at 0x20-0x2F, only timer, keyboard and cascade unmasked), PIT at 100 Hz (divisor 11932, rounded
-  up so a tick is never shorter than 10 ms of the nominal clock).
+  up so a tick is never shorter than 10 ms of the nominal clock). The FPU is set up for x87 and SSE: CR0.MP and NE
+  on, EM and TS off, CR4.OSFXSR and OSXMMEXCPT on. The kernel needs a CPU with CPUID, an x87 FPU, FXSAVE/FXRSTOR
+  and SSE (a Pentium III, an Athlon XP or newer); on an older one it stops at boot with a panic that names the
+  missing feature.
 - **Exceptions:** a CPU exception in a user program ends only that program and the shell keeps working. An exception
   in kernel code stops the machine with a panic screen showing the reason and `file:line`, and one line on the debug
-  port.
+  port. An unmasked x87 error in a program (a division by zero after the program unmasked it in its control word,
+  say) is a #MF (vector 16) at the program's next waiting x87 instruction and ends the program the same way.
 - **Memory:** a block allocator for the kernel heap (100 MiB, 4 KiB blocks) that refuses requests it can't satisfy, and
   one paging directory per process. Each process has an 8 MiB allocation budget, counting every `malloc` and copied
   argument allocation rounded up to 4 KiB. User `malloc` clears every byte of its backing pages, including trailing
@@ -52,7 +56,10 @@ Everything in this list is checked by `make test` or was run in QEMU.
   Page zero (0x0-0xFFF) is not mapped in any page directory. A program that touches it is ended as before; once
   paging is on, a kernel access through a NULL pointer (to an offset below 4 KiB) is a page fault that halts the kernel.
 - **Tasks:** 12 process slots, a round-robin task switch on every timer tick, command-line arguments passed to
-  `main(argc, argv)`.
+  `main(argc, argv)`. Programs can use x87, MMX and SSE instructions, and each task has its own copy of those
+  registers (`ST0-7`, `XMM0-7`, the control words and `MXCSR`: 512 bytes in the FXSAVE format). A new task starts
+  clean (x87 control word 0x037F, `MXCSR` 0x1F80, every register empty and zero). The kernel saves and loads the
+  state only when a different task gets the CPU, not on every syscall or interrupt.
 - **Sleeping:** a program can call `sleep(milliseconds)` (syscall 12). Only that program blocks: the scheduler skips
   it and the other tasks keep running, and the timer tick wakes it once its deadline has passed. It comes back with
   its registers and stack as they were and gets 0. When every task is asleep, the kernel halts the CPU (`hlt` with
@@ -97,7 +104,8 @@ The default path is my own boot sector:
 4. `_start` (`kernel/kernel.asm`) loads the data segments, sets the stack to 0x200000, turns on A20 (port 0x92),
    clears `.bss`, remaps and masks both PICs and calls `kernel_main`.
 5. `kernel_main` (`kernel/kernel.c`) sets up the terminal, GDT, kernel heap, filesystems, disk, IDT, PIT, TSS and
-   paging, registers the syscalls and the keyboard, loads `0:/shell.elf` and drops into ring 3 with `iret`.
+   paging, checks the CPU and sets up the FPU (`fpu_init`), registers the syscalls and the keyboard, loads
+   `0:/shell.elf` and drops into ring 3 with `iret`.
 
 Interrupts stay off while the kernel runs. They are on only in user mode (`task_return` sets EFLAGS.IF), so every
 timer tick, key press and syscall enters the kernel from ring 3. The one exception is the idle loop in `task_next`:
@@ -136,7 +144,7 @@ it does not leave holes in the kernel mappings needed during entry and return.
 | 0x7E00-0xE1FF | kernel heap block table (one byte per 4 KiB block) |
 | 0xB8000 | VGA text screen |
 | 0x100000-0x111B57 | kernel image (`kernel.bin`, 72,536 bytes; the disk reserves 101,888) |
-| 0x112000-0x11464B | kernel `.bss` |
+| 0x112000-0x11466B | kernel `.bss` |
 | below 0x200000 | kernel boot stack (top 0x200000) |
 | 0x3FB000-0x3FEFFF | user stack (virtual, 16 KiB, top 0x3FF000) |
 | 0x400000-0x4FFFFF | user program load window (virtual) |
@@ -179,7 +187,7 @@ the build makes right now (16,850,264 bytes) that is clusters 2 to 252, about 15
 | `kernel/boot` | boot sector, GRUB menu template |
 | `kernel/kernel.asm`, `kernel/kernel.c` | entry points (`_start` and `multiboot_entry`), PIC setup, `kernel_main`, panic |
 | `kernel/gdt`, `kernel/idt`, `kernel/task/tss.*` | descriptor tables, 256 interrupt stubs, TSS |
-| `kernel/arch/i686` | VGA terminal and `printf`, debug port, panic screen, PIT driver (tick counter, milliseconds to ticks) |
+| `kernel/arch/i686` | VGA terminal and `printf`, debug port, panic screen, PIT driver (tick counter, milliseconds to ticks), FPU setup and the FXSAVE/FXRSTOR routines (`fpu.c`, `fpu.asm`, the only kernel code with x87 or SSE instructions) |
 | `kernel/memory` | heap allocator (`heap/`), paging (`paging/`) |
 | `kernel/disk` | ATA PIO driver (read, write, flush, IDENTIFY) and byte streamer |
 | `kernel/fs` | path parser, VFS, FAT16 (reading and writing) |
@@ -192,7 +200,8 @@ the build makes right now (16,850,264 bytes) that is clusters 2 to 252, about 15
 
 ### Syscalls
 
-A program puts the number in `eax`, pushes the arguments and runs `int 0x80`; the result comes back in `eax`. The
+A program puts the number in `eax`, pushes the arguments and runs `int 0x80`; the result comes back in `eax`. A
+syscall leaves the program's x87, MMX and SSE registers as they were. The
 numbers are in `config.mk`, the handlers in `kernel/isr80h/`, the wrappers in `programs/stdlib/src/rorthox.asm`.
 
 | # | User function | What it does |
@@ -416,9 +425,9 @@ qemu-system-i386 -m 128 -drive file=bin/os.bin,format=raw,index=0,media=disk \
 make test
 ```
 
-This builds everything (and the GRUB ISO, when its packages are installed) and runs 90 tests (`scripts/smoke.sh` plus
+This builds everything (and the GRUB ISO, when its packages are installed) and runs 91 tests (`scripts/smoke.sh` plus
 every `scripts/tests/*.sh`), as many at once as there are CPUs (about 2 minutes with 16); it keeps going after a
-failure and prints a summary (`90 passed, 0 failed, 0 skipped`) and where the output went. `make test TEST_JOBS=1`
+failure and prints a summary (`91 passed, 0 failed, 0 skipped`) and where the output went. `make test TEST_JOBS=1`
 runs them one after the other (about 14 minutes; as at any `-j`, a test's output shows when it ends);
 `TEST_JOBS=4` runs four at once. `make smoke` runs
 only the smoke test, and `./scripts/run-tests.sh scripts/tests/panic.sh` runs single tests (a test named twice runs
@@ -543,6 +552,7 @@ while the debugger is attached, and no change to the build.
 | Writing files | `fat-write`, `file-syscalls` | `fat-write` runs the real FAT16, VFS and streamer code on the host against a disk model that tracks what was flushed: create, append, truncate and overwrite give the right bytes and leave both FATs equal, every chain exactly as long as its file and no lost clusters; 1807 crash points (cut at each flush, keeping none, all, one or all but one of the sectors written since the last flush) all leave every file with a valid chain in both FATs that covers its size, no cluster shared and the old data intact (lost clusters are allowed); with each disk write, flush and read of an append failing in turn, the call fails and the position stays put, and after a failed write or flush every later write is refused while reads still work; bad names, full directories, a full disk, broken chains and different FAT copies are refused before anything is written; nothing is allocated past the disk's real end. `file-syscalls` boots a copy of the image with `filetest.elf` and uses syscalls 13-18 from ring 3: write and read back more than 4 KiB in short pieces, append after a seek, truncate, copy `blank.elf` and run the copy, bad handles, paths, buffers and stack operands, 16 handles and the 17th refused, handles private to a process, a full disk and a full root directory, and all handles closed after an exit or a fault (read from the kernel's table). Then mtools and the FAT on the host check every file, and a second boot reads everything back. Both run `fsck.fat -n` when it's installed and expect nothing beyond the fresh image's label note |
 | Programs and processes | `elf-segments`, `elf-unwind`, `elf-limit`, `raw-program`, `load-unwind`, `process-release`, `process-exit`, `task-list`, `syscall-path`, `program-arguments`, `command-arguments`, `argument-oom`, `user-pointers`, `program-lookup`, `program-lookup-config`, `config-values` | ELF segments get their own memory; bad ELF files are refused; an ELF file over `ELF_FILE_LIMIT_BYTES` is refused right after its magic, before its buffer is allocated or the rest of it is read, and is never run as a flat binary; raw programs must fit the load window; failed loads give everything back; finished programs free their memory; ending a process whose program type the kernel doesn't know is refused before anything is freed (the exit syscall then stops the kernel), and allocations that couldn't be unmapped are freed once the page tables are gone; the task list stays linked, and a parent can end while its child lives on and owns the keyboard; every syscall checks the user memory it reads or writes; a program name too long for the kernel's path buffer is refused and starts nothing; bare names are looked up in the search list in order, the first match wins, only a missing file moves on, and `argv[0]` stays as typed; bad `PROGRAM_SEARCH_PATHS` values stop the build, and so do key codes outside 0x100-0xFFFF and duplicate key codes or syscall numbers in `config.mk` |
 | Sleeping | `sleep`, `sleep-idle`, `task-list`, `pit`, `clock` | `sleep(0)` returns 0, negative and too-big values return -2; a sleep lasts at least `ceil(ms / 10) + 2` ticks while another program keeps running, then returns 0 with registers and stack unchanged; sleeping tasks are never picked, every due sleeper wakes on its tick (also across the 2^32 wrap of the tick counter), and a freed sleeper leaves nothing behind; with every task asleep the CPU sits in `hlt` in ring 0 with interrupts on and the kernel's page directory, a key or an NMI doesn't wake the sleeper (the key is read after it wakes), and the idle stack doesn't grow; `rorthox_get_ticks()` goes up as ticks arrive, returns every value unchanged (also with the high bit set) and reads nothing from the user stack, not even with a garbage `esp` |
+| x87 and SSE | `fpu-state` | two programs' x87 and SSE registers (values, control word, `XMM0-7`, `MXCSR`) survive timer switches with no syscall in between, sleeps and syscalls while the other program uses its own: each checks its arithmetic, and QEMU monitor samples taken while they run show each program's own registers; a new program starts clean while its parent's state is in the CPU, and after a program ended by exit or a fault, in that program's task block, which the kernel never writes that program's last state into; a sleeping program's registers stay in the CPU while the kernel idles; an unmasked x87 divide by zero ends the program at its `fwait`; on both boots and on a Pentium III CPU model (SSE without SSE2) |
 | Console, keyboard, user library | `tty-scroll`, `tty-backspace`, `printc`, `formatting`, `keyboard-burst`, `keyboard-queue`, `keyboard-scancode`, `keyboard-symbols`, `keyboard-extended`, `readline`, `readline-edit`, `strtok`, `shell-command`, `rtc-helpers`, `boot-clock` | scrolling and backspace; colours, and the key and cursor syscalls pass their values whole; bounded formatting, and no `sprintf` or `vsprintf` in the kernel; the time strings fit their allocation, with any number of time letters in the format and clock values up to 255, and are NULL when an allocation fails; the boot clock shows HH:MM:SS with leading zeros on both boots; no lost keys; a full key queue keeps unread keys and every key value comes back unchanged; the decoder for every key with Shift, Caps and Num Lock, plus the E0/E1 sequences (fake shifts, Print Screen, Pause); the special keys and Num Lock as QEMU sends them; cursor moves stay on the page and change no text; line editing in the middle of a line, across a row edge and while the screen scrolls; `strtok`; the shell's command list is freed after every command, a command is never run from a list cut short by a failed allocation, and a command of more than 32 words prints the limit and runs nothing |
 
 `ci-annotations` checks that CI names failing tests in error annotations, including escaped failure output, without QEMU.
@@ -744,7 +754,13 @@ isolate every resource or protect against every kernel bug.
 - **Handles and truncation.** If one handle truncates a file that another handle has open past the new end, that
   other handle keeps its position: reads there return 0, and a write or a `RORTHOX_SEEK_CUR` by 0 from there gives
   `-EINVARG` until the file is long enough again.
-- **No FPU state per process.** x87 registers aren't saved or reset between tasks.
+- **FPU and SSE.** Only the legacy FXSAVE state is switched (x87, MMX, `XMM0-7`, `MXCSR`). There's no XSAVE:
+  CR4.OSXSAVE stays off, so AVX instructions are invalid opcodes. A CPU without SSE can't boot RorthOX at all.
+  An unmasked SSE error should be a #XM (vector 19) that ends the program, but QEMU's TCG never raises #XM (it
+  only sets the flag in `MXCSR`), so that path hasn't been run. On older AMD CPUs FXSAVE leaves out the last x87
+  instruction and data pointers (FIP, FDP, FOP) unless an x87 exception is pending (CVE-2006-1056), so there a
+  program could see where the previous program's last x87 instruction and operand were. RorthOX doesn't clear
+  them; QEMU stores the pointers as zero.
 - **Fixed memory layout.** The kernel heap is at 16 MiB and the machine needs 128 MiB of RAM; there's no BIOS
   memory map, and the one GRUB passes is ignored. The boot sector turns A20 on itself before it loads the kernel to
   1 MiB, with the fast A20 port (0x92) only; on a machine where that port doesn't work it stops instead of booting.

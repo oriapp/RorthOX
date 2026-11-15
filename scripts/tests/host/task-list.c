@@ -73,6 +73,10 @@ int process_user_span(struct process *p, uint32_t a, int w, uint32_t *n) { exit(
 int paging_user_translate(uint32_t *d, uint32_t a, int w, void **p) { exit(4); }
 void kernel_page() { kernel_pages++; }
 void user_registers() {}
+// No FPU on the host; scripts/tests/host/fpu-owner.c checks task.c's FPU calls.
+void fpu_task_init(void *area) {}
+void fpu_save(void *area) {}
+void fpu_restore(void *area) {}
 void task_return(struct registers *regs)
 {
     if (!dispatch_armed)

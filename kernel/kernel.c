@@ -4,6 +4,7 @@
 #include "include/kernel/tty.h" // Use that.
 #include "include/kernel/sys.h" // Use that.
 #include "include/kernel/time/pit.h"
+#include "include/kernel/fpu.h"
 #include "idt/idt.h"
 #include "io/io.h"
 #include "memory/heap/kheap.h"
@@ -113,6 +114,10 @@ void kernel_main()
 
     // Enable paging
     enable_paging();
+
+    // x87/SSE: refuse a CPU without FXSAVE and SSE, set CR0/CR4 and load the clean state
+    // before the first task exists. Both boot paths come through here.
+    fpu_init();
     
     // Register the kernel commands
     isr80h_register_commands();
