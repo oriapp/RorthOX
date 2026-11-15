@@ -167,6 +167,20 @@ void *kalloc_live_at(int i)
     return NULL;
 }
 
+int kalloc_live_overlapping(const void *start, const void *end, void **bases, int max)
+{
+    int n = 0;
+    for (int j = 0; j < alloc_count && n < max; j++)
+    {
+        const unsigned char *base = allocs[j].ptr;
+        if (allocs[j].live && base < (const unsigned char *)end && base + allocs[j].size > (const unsigned char *)start)
+        {
+            bases[n++] = allocs[j].ptr;
+        }
+    }
+    return n;
+}
+
 int kalloc_bad_frees(void)
 {
     return bad_frees;

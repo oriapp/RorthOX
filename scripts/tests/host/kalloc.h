@@ -31,6 +31,9 @@ int kalloc_is_live(const void *ptr);
 long kalloc_size(const void *ptr);
 // Live allocation number i (0 = oldest live one), NULL past the end.
 void *kalloc_live_at(int i);
+// Store in bases (at most max) the starts of the live allocations that overlap [start, end),
+// oldest first, in one pass. Returns how many were stored.
+int kalloc_live_overlapping(const void *start, const void *end, void **bases, int max);
 // Frees of something that isn't a live allocation (double free, bad pointer).
 int kalloc_bad_frees(void);
 // Freed allocations that were written to after kfree.

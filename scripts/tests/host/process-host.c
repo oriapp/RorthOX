@@ -16,7 +16,8 @@
 
 #define FD 3
 #define MAX_FILE (3 * 1024 * 1024)
-#define MAX_MAPPINGS 256
+// A process can map one allocation per slot (process-limit.sh fills all of them).
+#define MAX_MAPPINGS 2048
 #define MAX_BASES 4
 #define MAX_DIRECTORIES 64
 
@@ -321,21 +322,8 @@ int paging_map_to(struct paging_4gb_chunk *directory, void *virt, void *phys, vo
     m->phys = phys;
     m->size = (char *)phys_end - (char *)phys;
     m->flags = flags;
-    m->base_count = 0;
     // Remember the live allocations the mapped range touches.
-    for (int i = 0; m->base_count < MAX_BASES; i++)
-    {
-        char *base = kalloc_live_at(i);
-        if (!base)
-        {
-            break;
-        }
-        char *end = base + kalloc_size(base);
-        if (base < (char *)phys_end && end > (char *)phys)
-        {
-            m->bases[m->base_count++] = base;
-        }
-    }
+    m->base_count = kalloc_live_overlapping(phys, phys_end, m->bases, MAX_BASES);
     return 0;
 }
 
