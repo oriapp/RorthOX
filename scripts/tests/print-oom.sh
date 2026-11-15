@@ -13,7 +13,10 @@
 # is attached): the heap gets full only once the shell is back at its own key request and
 # printoom.elf has the keyboard, and after printoom.elf and blank.elf the shell is alone, the same
 # task, and has the keyboard. The "no second copy" count is taken on the screen saved at the
-# rendezvous after printoom.elf, where nothing is printing or scrolling.
+# rendezvous after printoom.elf, where nothing is printing or scrolling. The debugger also records
+# any kernel heap allocation that fails while print and printc run: there must be none.
+# The QEMU part runs on a separately built copy where only the per-process allocation budget is
+# raised to the whole heap (lib/pressure-profile.sh), so one program can fill the heap.
 # bin/os.bin itself must not change.
 #
 # Needs python3. Env: BOOT_TIMEOUT=60 (seconds to wait for the shell)   RUN_TIMEOUT=60 (for printoom.elf)
@@ -21,6 +24,9 @@
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+# The QEMU part runs on the 100 MiB process-budget profile (lib/pressure-profile.sh).
+. ./scripts/tests/lib/pressure-profile.sh
+pressure_profile print-oom.sh "$@"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-60}"
 EXIT_TIMEOUT="${EXIT_TIMEOUT:-30}"
@@ -35,7 +41,7 @@ rm -f "$OUT"/state-*.txt "$OUT"/state-*.txt.log "$OUT/shell.txt" "$OUT"/screen-*
 [ -f "$PROGRAM" ] || { echo "print-oom: $PROGRAM not found, run 'make all' first" >&2; exit 1; }
 [ "$QEMU_RAM_MIB" -ge 128 ] || { echo "print-oom: needs QEMU_RAM_MIB >= 128 (is $QEMU_RAM_MIB)" >&2; exit 1; }
 
-heap_snapshot_setup "$OUT" || { echo "print-oom: cannot read the heap settings" >&2; exit 1; }
+heap_snapshot_setup "$OUT" || { echo "print-oom: setup failed (kernel symbols or heap settings)" >&2; exit 1; }
 guest_state_setup "$OUT"
 
 # state <tag> [options]: the guest-state rendezvous, results in $OUT/state-<tag>.txt.
@@ -60,7 +66,7 @@ if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT" &&
     # debugger is attached. Two syscalls (print, printc) are checked against their copies.
     if wait_screen_lines "$RUN_TIMEOUT" "prompt:printoom: ready" &&
         state ready tasks=2 shell="$OUT/shell.txt" owner=last &&
-        heap_snapshot_attach "$PROGRAM" "$OUT" 2; then
+        heap_snapshot_attach "$PROGRAM" "$OUT" 2 sites; then
         qemu_cmd "sendkey g"
         if wait_screen_lines "$RUN_TIMEOUT" "prompt:printoom: done" && heap_snapshot_detached "$EXIT_TIMEOUT" &&
             state ended shell="$OUT/shell.txt" owner=first screen="$OUT/screen-printoom.txt"; then
@@ -106,8 +112,10 @@ stop_checks ready "shell back at its key request before the heap fills, printoom
 stop_checks ended "printoom ended (the shell alone, owns the keyboard)"
 stop_checks after "blank.elf ended (the shell alone)"
 heap_snapshot_checks "" "$OUT"
+heap_snapshot_site "" "$OUT" none
 
 hash_after=$(image_hash)
 [ "$hash_before" = "$hash_after" ] && echo "unchanged" > "$OUT/image.txt" || echo "changed" > "$OUT/image.txt"
 check "bin/os.bin not changed by the test"  "$OUT/image.txt"  "unchanged" line
+pressure_profile_checks "$OUT"
 finish print-oom

@@ -17,6 +17,9 @@
 #    timed out (status 124), pass.sh still runs, exit 1.
 # 5. --timeout 3, hold.sh let go before the limit (after the runner's one-second wakeup): timed
 #    out (124), exit 1.
+# 6. USR1 while held: a signal the runner doesn't trap ends it through its EXIT trap, which must
+#    still find the held process (not yet in a session of its own) and send it TERM; let go after
+#    that, nothing of it is left, pass.sh not started, the runner ends by USR1.
 # Every case: the runner ends, nothing of hold.sh or the stand-in is left, and the other process in
 # the runner's session is still there.
 
@@ -199,6 +202,16 @@ finish timeout-before
 expect "timeout-before: exit 1, hold.sh timed out (124)" \
     '[ "$status" -eq 1 ] && result hold.sh "timed out" 124 &&
      grep -Fxq "[hold] run-tests: stopped after 3 seconds (--timeout)" "$OUT/timeout-before.log"'
+
+echo "runner-startup: 6. USR1 while hold.sh is held, let go after the runner's TERM"
+start usr1-held "$fx/hold.sh" "$fx/pass.sh"
+wait_file "$gate/held" || fail "usr1-held: hold.sh was held"
+kill -USR1 "$pid"
+expect "usr1-held: the runner's EXIT trap sends TERM to the held process" 'wait_file "$gate/signals"'
+let_go
+finish usr1-held
+expect "usr1-held: the runner ended by USR1, pass.sh not started" \
+    '[ "$status" -eq $((128 + $(kill -l USR1))) ] && [ ! -e "$gate/pass.ran" ]'
 
 if [ "$failures" -ne 0 ]; then
     echo "runner-startup: $failures check(s) failed" >&2

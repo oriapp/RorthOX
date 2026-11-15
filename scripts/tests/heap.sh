@@ -3,13 +3,18 @@
 # The kernel heap must refuse a request bigger than any free run of blocks. Copy bin/os.bin,
 # add programs/heaptest to the copy only, boot it and run heaptest.elf: it asks for 96 MiB of
 # the 100 MiB heap (more than is free after boot) and expects NULL, then checks that a small
-# allocation still works. bin/os.bin itself must not change.
+# allocation still works. bin/os.bin itself must not change. The QEMU part runs on a separately
+# built copy where only the per-process allocation budget is raised to the whole heap
+# (lib/pressure-profile.sh), so the heap itself refuses the request, not the budget.
 #
 # Env: BOOT_TIMEOUT=60 (seconds to wait for the shell)   RUN_TIMEOUT=60 (for heaptest)
 #      EXIT_TIMEOUT=15 (for the process to end after PASS)
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+# The QEMU part runs on the 100 MiB process-budget profile (lib/pressure-profile.sh).
+. ./scripts/tests/lib/pressure-profile.sh
+pressure_profile heap.sh "$@"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-60}"
 EXIT_TIMEOUT="${EXIT_TIMEOUT:-15}"
@@ -65,4 +70,5 @@ check "heaptest finished"                           "$OUT/screen.txt"   "heaptes
 check "heaptest reported no failure"                "$OUT/screen.txt"   "heaptest: FAIL" absent
 check "heaptest process ended"                      "$OUT/screen.txt"   "Process was terminated"
 check "bin/os.bin not changed by the test"          "$OUT/image.txt"    "unchanged" line
+pressure_profile_checks "$OUT"
 finish heap

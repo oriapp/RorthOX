@@ -16,7 +16,8 @@
 # That link uses ld directly while bin/kernel.bin is linked through gcc, so the result is checked
 # against the real link: every global named in build/kernel.map must have the same address in the
 # ELF, and the ELF's loaded bytes must be bin/kernel.bin byte for byte (this covers the statics).
-# Returns 1 if something is missing (a symbol or the struct fields) or the check fails.
+# Returns 1 if something is missing (a cross tool, a symbol or the struct fields) or the check fails;
+# a missing cross tool is named in an error message.
 #
 # Only the host uses these: sleep.sh, sleep-idle.sh and guest-state.sh read jiffies, the task list
 # and struct task through the QEMU monitor and gdbstub while the VM is stopped. The user programs
@@ -30,8 +31,13 @@ kernel_symbols() {
     SYM_TASK_TAIL='' SYM_CURRENT_PROCESS='' SYM_PROCESSES='' SYM_ISR80H_HANDLER=''
     TASK_PREV_OFFSET='' TASK_ID_OFFSET='' PROCESS_ID_OFFSET='' PROCESS_TASK_OFFSET='' FRAME_CS_OFFSET=''
     MAX_PROCESSES=''
+    local tool
+    for tool in i686-elf-ld i686-elf-nm i686-elf-objcopy i686-elf-gcc; do
+        command -v "$tool" > /dev/null ||
+            { echo "  ERROR: $tool not found in PATH: the kernel symbols need the cross toolchain" >&2; return 1; }
+    done
     i686-elf-ld -L build/config -T kernel/linker.ld --oformat elf32-i386 build/kernelfull.o -o "$elf" ||
-        return 1
+        { echo "  ERROR: i686-elf-ld could not link build/kernelfull.o for the kernel symbols" >&2; return 1; }
     i686-elf-nm "$elf" > "$out/kernel-nm.txt"
     sym() { awk -v n="$1" '$3 == n { print $1; exit }' "$out/kernel-nm.txt"; }
     SYM_TICKS=$(sym jiffies)
@@ -131,5 +137,20 @@ EOF
         [ -n "$SYM_TASK_TAIL" ] && [ -n "$SYM_CURRENT_PROCESS" ] && [ -n "$SYM_PROCESSES" ] &&
         [ -n "$SYM_ISR80H_HANDLER" ] && [ -n "$TASK_PREV_OFFSET" ] && [ -n "$TASK_ID_OFFSET" ] &&
         [ -n "$PROCESS_ID_OFFSET" ] && [ -n "$PROCESS_TASK_OFFSET" ] && [ -n "$FRAME_CS_OFFSET" ] &&
-        [ -n "$MAX_PROCESSES" ]
+        [ -n "$MAX_PROCESSES" ] && return 0
+    echo "  ERROR: kernel symbols or struct offsets missing, or the relinked kernel does not match (see above)" >&2
+    return 1
+}
+
+# kernel_symbols_or_stop <outdir> <test>: kernel_symbols, then <outdir>/symbols.txt "found" or
+# "missing". Missing symbols are a setup failure: say so and return 1, so the caller stops before it
+# starts QEMU (a debugger given blank addresses would fail later with misleading checks).
+kernel_symbols_or_stop() {
+    if kernel_symbols "$1"; then
+        echo "found" > "$1/symbols.txt"
+        return 0
+    fi
+    echo "missing" > "$1/symbols.txt"
+    echo "$2: setup failed: no kernel symbols for the debugger, QEMU not started" >&2
+    return 1
 }

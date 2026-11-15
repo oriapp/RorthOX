@@ -8,7 +8,7 @@ SYSCHECK_GDB=
 syscheck_cleanup() { [ -z "$SYSCHECK_GDB" ] || rm -rf "$SYSCHECK_GDB"; }
 syscheck_setup() {
     [ -z "$SYSCHECK_GDB" ] || return 0
-    guest_state_setup "$OUT"
+    guest_state_setup "$OUT" || exit 1
     Q_CLEANUP=syscheck_cleanup
     trap qemu_exit EXIT
     SYSCHECK_GDB=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)

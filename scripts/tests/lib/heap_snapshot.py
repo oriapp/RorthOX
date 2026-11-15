@@ -24,10 +24,18 @@ stop in another task (the shell) is skipped; more than MAX_OTHER_STOPS of them f
     not its instructions up to int 0x80; the program's later checks catch a lasting change there.
   - heap_snapshot_end(requests): requests must be the number of copies given, and the number of
     wrapper checks the count passed on the command line. Then it detaches.
+With kernel=<relinked kernel ELF> and sites=<file> (and enomem=<hex>, the ENOMEM value), it also
+records where the kernel heap runs out: from each wrapper check to the program's next stop, a
+breakpoint sits on the only "mov eax, -ENOMEM" of heap_get_start_block (reached only when no free
+run is big enough). At each hit the stack is walked for the callers, and the first caller outside
+the heap's own allocation path (ALLOCATOR) is the site. The file gets "failures=<n>", one
+"failure <i> site=<function> callers=<a<b<...>" line per failure and a "failure <i> caller <name>"
+line for each function in that chain.
 All reads (task list, heap table) go through the CR3 of the stopped task, so the kernel must stay
 mapped (supervisor-only is enough) in task page directories; if it isn't, the session fails.
 """
 
+import bisect
 import struct
 import sys
 
@@ -37,6 +45,58 @@ MAX_TASKS = 12
 MAX_OTHER_STOPS = 20
 TIMEOUT = 90
 WRAPPERS = ("rorthox_system", "print", "printc")
+# kernel=<relinked kernel ELF> and sites=<file>: record where the kernel heap runs out (see sites()).
+PATH_ARGS = ("kernel", "sites")
+# The kernel heap's own allocation path: the failing allocation site is the first caller outside it.
+ALLOCATOR = ("heap_get_start_block", "heap_malloc_blocks", "heap_malloc", "kmalloc", "kzalloc")
+MAX_FRAMES = 8
+
+
+class Kernel:
+    """Functions of the relinked kernel ELF, to name the callers at a stop in the heap code."""
+
+    def __init__(self, path):
+        self.symbols = read_elf_symbols(path, sizes=True)
+        self.functions = sorted((value, size, name) for name, (value, size) in self.symbols.items() if size)
+
+    def function_at(self, addr):
+        """(start, name) of the sized symbol holding addr, or None."""
+        i = bisect.bisect_right(self.functions, (addr, 0xFFFFFFFF, "")) - 1
+        if i >= 0 and self.functions[i][0] <= addr < self.functions[i][0] + self.functions[i][1]:
+            return self.functions[i][0], self.functions[i][2]
+        return None
+
+    def failure_address(self, r, enomem):
+        """The one "mov eax, -ENOMEM" in heap_get_start_block: only reached when no free run is big
+        enough, so a breakpoint there stops exactly when a kernel heap allocation fails."""
+        start, size = self.symbols["heap_get_start_block"]
+        code = r.read(start, size)
+        insn = b"\xb8" + struct.pack("<i", -enomem)
+        found = [i for i in range(len(code)) if code.startswith(insn, i)]
+        if len(found) != 1:
+            raise RspError("heap_get_start_block has %d \"mov eax, -ENOMEM\", want 1" % len(found))
+        return start + found[0]
+
+    def callers(self, r):
+        """Function names from heap_get_start_block outwards. The kernel has no frame pointers, so
+        walk the stack: a return address is a value just after a direct call (E8 rel32) to the
+        function found last, and it lies in its caller."""
+        chain = ["heap_get_start_block"]
+        target = self.symbols["heap_get_start_block"][0]
+        esp = r.reg("esp")
+        stack = r.read(esp, 1024)
+        for off in range(0, len(stack) - 3, 4):
+            value, = struct.unpack_from("<I", stack, off)
+            caller = self.function_at(value)
+            if caller is None or value - 5 < caller[0]:
+                continue
+            call = r.read(value - 5, 5)
+            if call[0] == 0xE8 and (value + struct.unpack_from("<i", call, 1)[0]) & 0xFFFFFFFF == target:
+                chain.append(caller[1])
+                target = caller[0]
+                if len(chain) == MAX_FRAMES:
+                    break
+        return chain
 
 
 def walk(r, k):
@@ -56,7 +116,8 @@ def walk(r, k):
 def main():
     sock, elf, result_path, ready_path, want_checks = sys.argv[1:6]
     want_checks = int(want_checks)
-    k = {name: int(value, 16) for name, value in (a.split("=", 1) for a in sys.argv[6:])}
+    paths = dict(a.split("=", 1) for a in sys.argv[6:] if a.split("=", 1)[0] in PATH_ARGS)
+    k = {name: int(value, 16) for name, value in (a.split("=", 1) for a in sys.argv[6:]) if name not in PATH_ARGS}
     program = "/" + elf.rsplit("/", 1)[-1]
     res = Results(result_path)
     sized = read_elf_symbols(elf, sizes=True)
@@ -72,6 +133,10 @@ def main():
     for addr in (wait_at, end_at):
         r.add_breakpoint(addr)
     res.add("attached", True)
+    kernel = Kernel(paths["kernel"]) if "kernel" in paths else None
+    fail_at = None      # the heap's failure path, watched from a wrapper's call to the program's next stop
+    armed = False
+    failures = []       # (site, callers) of every kernel heap allocation that failed while watched
 
     def ready():
         with open(ready_path, "w") as f:
@@ -86,10 +151,19 @@ def main():
     ended = None
     failed = None
     try:
+        if kernel:
+            fail_at = kernel.failure_address(r, k["enomem"])
+            print("  kernel heap allocations fail at %#x" % fail_at, flush=True)
         first = True
         while True:
             eip = r.cont(TIMEOUT, ready if first else None)
             first = False
+            if armed and eip == fail_at:
+                chain = kernel.callers(r)
+                site = next((name for name in chain if name not in ALLOCATOR), "unknown")
+                failures.append((site, chain))
+                print("  a kernel heap allocation failed in %s (%s)" % (site, " < ".join(chain)), flush=True)
+                continue
             current = r.read32(k["current_task"])
             tasks = walk(r, k)
             running = [t for t in tasks if t[0] == current]
@@ -134,7 +208,14 @@ def main():
                 r.remove_breakpoint(pending)
                 pending = None
                 checks += 1
+                if fail_at is not None:
+                    # Until the program's next stop (the syscall has returned by then).
+                    r.add_breakpoint(fail_at)
+                    armed = True
                 continue
+            if armed:
+                r.remove_breakpoint(fail_at)
+                armed = False
             if eip == end_at:
                 ended = r.read32(r.reg("esp") + 4)
                 break
@@ -168,6 +249,13 @@ def main():
 
     print("  %d copies, %d wrapper checks, %d stops in other tasks, heap_snapshot_end(%s)" %
           (given, checks, other_stops, ended), flush=True)
+    if "sites" in paths:
+        with open(paths["sites"], "w") as f:
+            f.write("failures=%d\n" % len(failures) if fail_at is not None else "failures=not watched\n")
+            for i, (site, chain) in enumerate(failures, 1):
+                f.write("failure %d site=%s callers=%s\n" % (i, site, "<".join(chain)))
+                for name in chain:
+                    f.write("failure %d caller %s\n" % (i, name))
     if failed:
         res.add(failed[0], False, failed[1])
     for ident in ("other_stops", "identity", "task_context", "requests", "unchanged"):

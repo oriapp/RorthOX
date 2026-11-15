@@ -3,7 +3,8 @@
 # which process gets the keys. Source it after qemu-lib.sh, start QEMU with
 # "-gdb unix:<socket>,server=on,wait=off", then:
 #   guest_state_setup <outdir>     once: kernel symbols and offsets (kernel-symbols.sh); writes
-#                                  <outdir>/symbols.txt ("found" or "missing")
+#                                  <outdir>/symbols.txt ("found" or "missing"); returns 1 when
+#                                  they are missing, and the caller must stop before QEMU
 #   guest_state <socket> <results> <tag> [option=value...]
 #                                  stop at the next getkey syscall of the shell (at=first) or of the
 #                                  last task (at=last) with the expected number of tasks (tasks=1),
@@ -18,7 +19,7 @@
 . ./scripts/tests/lib/kernel-symbols.sh
 
 guest_state_setup() {
-    if kernel_symbols "$1"; then echo "found" > "$1/symbols.txt"; else echo "missing" > "$1/symbols.txt"; fi
+    kernel_symbols_or_stop "$1" guest-state || return 1
     GUEST_STATE_ARGS="isr80h_handler=$SYM_ISR80H_HANDLER current_task=$SYM_CURRENT_TASK task_head=$SYM_TASK_HEAD"
     GUEST_STATE_ARGS+=" task_tail=$SYM_TASK_TAIL current_process=$SYM_CURRENT_PROCESS processes=$SYM_PROCESSES"
     GUEST_STATE_ARGS+=" max=$MAX_PROCESSES next=$TASK_NEXT_OFFSET prev=$TASK_PREV_OFFSET tid=$TASK_ID_OFFSET"

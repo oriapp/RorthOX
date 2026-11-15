@@ -45,7 +45,7 @@ rm -rf "$OUT"/snap-* "$OUT"/*.txt "$OUT"/*.bin
 [ -f bin/os.bin ] && [ -f "$PROGRAM" ] && [ -f build/kernelfull.o ] || { echo "sleep-idle: run 'make all' first" >&2; exit 1; }
 
 echo "sleep-idle: kernel symbols"
-if kernel_symbols "$OUT"; then echo "found" > "$OUT/symbols.txt"; else echo "missing" > "$OUT/symbols.txt"; fi
+kernel_symbols_or_stop "$OUT" sleep-idle || exit 1
 PAUSE_RESUME=$(printf '%08x' $((0x${SYM_PAUSE:-0} + 2)))
 
 hash_before=$(sha256sum bin/os.bin | cut -d' ' -f1)

@@ -19,6 +19,12 @@
 # request (done printing, nothing more to allocate) and oomtest has the keyboard; an "arg..." case
 # must still be oomtest's after the failed syscall with no new task; after oomtest and after blank.elf
 # the shell is alone, the same task, and has the keyboard.
+# The heap must really run out: for the cases case_site (below) names, the debugger also records the
+# one kernel heap allocation that fails in the syscall and the functions it was called from
+# (lib/heap_snapshot.py), and that must be the allocation the case is about, not a refusal before
+# the heap is asked.
+# The QEMU part runs on a separately built copy where only the per-process allocation budget is
+# raised to the whole heap (lib/pressure-profile.sh), so the budget never refuses first.
 # The script stops after the first failing case. bin/os.bin itself must not change.
 #
 # Needs python3. Env: BOOT_TIMEOUT=60 (seconds to wait for the shell)   RUN_TIMEOUT=60 (for each oomtest run)
@@ -29,6 +35,9 @@
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+# The QEMU part runs on the 100 MiB process-budget profile (lib/pressure-profile.sh).
+. ./scripts/tests/lib/pressure-profile.sh
+pressure_profile heap-oom.sh "$@"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-60}"
 EXIT_TIMEOUT="${EXIT_TIMEOUT:-15}"
@@ -46,6 +55,25 @@ BLANK_ELF=programs/blank/build/blank.elf
 SHELL_ELF=programs/shell/build/shell.elf
 # The later page table first: it is the case that crashed before.
 CASES="${OOM_CASES:-table second wrapper elfobject elfdata process}"
+# case_site <case>: a kernel function the failing heap allocation must be called from. Under TCG,
+# recording it slows the syscall's other allocations down (lib/heap-snapshot.sh); one case that
+# fails after the whole page directory is set up (argv) is recorded, the others like it (table,
+# wrapper, arg1-arg3) are not.
+case_site() {
+    case "$1" in
+        second)    echo paging_new_4gb ;;                       # the second page table
+        elfobject | elfdata) echo elf_load ;;                   # the ELF object, the file buffer
+        process)   echo process_load_for_slot_with_arguments ;;
+        openroot)  echo pathparser_create_root ;;
+        openpart)  echo pathparser_get_path_part ;;
+        opennode)  echo pathparser_parse_path_part ;;
+        openfat)   echo fat16_open ;;
+        openitem)  echo fat16_new_fat_item_for_directory_item ;;
+        openclone) echo fat_16_clone_directory_item ;;
+        openvfs)   echo file_new_descriptor ;;
+        argv)      echo process_inject_arguments ;;
+    esac
+}
 mkdir -p "$OUT"
 
 # All ELF files must fit in one FAT cluster (64 KiB). oomtest.elf works out the block budget
@@ -76,7 +104,7 @@ done
 [ "$QEMU_RAM_MIB" -ge 128 ] || { echo "$SUITE: needs QEMU_RAM_MIB >= 128 (is $QEMU_RAM_MIB)" >&2; exit 1; }
 
 echo "$SUITE: kernel symbols for the debugger"
-heap_snapshot_setup "$OUT" || { echo "$SUITE: cannot read the heap settings" >&2; exit 1; }
+heap_snapshot_setup "$OUT" || { echo "$SUITE: setup failed (kernel symbols or heap settings)" >&2; exit 1; }
 guest_state_setup "$OUT"
 
 # state <dir> <tag> [options]: the guest-state rendezvous, results in <dir>/state-<tag>.txt.
@@ -103,7 +131,8 @@ stop_checks() {
 
 # run_case <case>: one fresh boot. Adds to $failures.
 run_case() {
-    local name="$1" dir="$OUT/$1" returned=0
+    local name="$1" dir="$OUT/$1" returned=0 site
+    site=$(case_site "$name")
     mkdir -p "$dir"
     rm -f "$dir"/state-*.txt "$dir"/state-*.txt.log "$dir/shell.txt" "$dir"/screen-*.txt
     : > "$dir/screen-before-blank.txt"
@@ -118,7 +147,7 @@ run_case() {
         # heap debugger is attached. One syscall is checked against the last copy.
         if wait_screen_lines "$RUN_TIMEOUT" "prompt:oomtest $name: ready" &&
             state "$dir" ready tasks=2 shell="$dir/shell.txt" owner=last &&
-            heap_snapshot_attach "$PROGRAM" "$dir" 1; then
+            heap_snapshot_attach "$PROGRAM" "$dir" 1 ${site:+sites}; then
             qemu_cmd "sendkey g"
             # "armed": the free blocks are set up. It waits for a second key before the syscall,
             # so the line is on screen even if the kernel crashes in the syscall.
@@ -184,6 +213,10 @@ run_case() {
     stop_checks "$dir" after "$name: blank.elf ended (the shell alone)"
     check "$name: both processes ended (each seen gone)"       "$dir/ended.txt"      "ended=2" line
     heap_snapshot_checks "$name: " "$dir"
+    if [ -n "$site" ]; then
+        sed 's/^/  heap: /' "$dir/heap-sites.txt" 2> /dev/null || true
+        heap_snapshot_site "$name: " "$dir" "$site"
+    fi
 }
 
 for name in $CASES; do
@@ -197,4 +230,5 @@ done
 hash_after=$(image_hash)
 [ "$hash_before" = "$hash_after" ] && echo "unchanged" > "$OUT/image.txt" || echo "changed" > "$OUT/image.txt"
 check "bin/os.bin not changed by the test"  "$OUT/image.txt"  "unchanged" line
+pressure_profile_checks "$OUT"
 finish "$SUITE"

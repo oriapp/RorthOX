@@ -415,9 +415,9 @@ qemu-system-i386 -m 128 -drive file=bin/os.bin,format=raw,index=0,media=disk \
 make test
 ```
 
-This builds everything (and the GRUB ISO, when its packages are installed) and runs 88 tests (`scripts/smoke.sh` plus
+This builds everything (and the GRUB ISO, when its packages are installed) and runs 89 tests (`scripts/smoke.sh` plus
 every `scripts/tests/*.sh`), as many at once as there are CPUs (about 2 minutes with 16); it keeps going after a
-failure and prints a summary (`88 passed, 0 failed, 0 skipped`) and where the output went. `make test TEST_JOBS=1`
+failure and prints a summary (`89 passed, 0 failed, 0 skipped`) and where the output went. `make test TEST_JOBS=1`
 runs them one after the other (about 14 minutes; as at any `-j`, a test's output shows when it ends);
 `TEST_JOBS=4` runs four at once. `make smoke` runs
 only the smoke test, and `./scripts/run-tests.sh scripts/tests/panic.sh` runs single tests (a test named twice runs
@@ -506,6 +506,20 @@ test program reads kernel memory itself), and some compile the real kernel sourc
 where it matters) to check one function against every input. Tests that need extra programs (`programs/*test*`,
 `programs/syscheck` and so on) add them to a copy of `bin/os.bin`, never to the real image.
 
+The real out-of-memory tests (`heap`, `heap-oom` and the tests that run its cases, `open-oom`, `argument-oom` and
+`elf-unwind`, and `print-oom`) fill the kernel heap from one program, and a per-process allocation budget
+(`PROCESS_HEAP_LIMIT_BYTES`) would stop that program long before the heap is full. So their QEMU part runs on a
+pressure profile: the same source, copied and built in the test's own output directory
+(`scripts/tests/lib/budget-profile.sh`), with only the copied `config.mk` setting the budget to 100 MiB, the whole
+heap. Their host checks still run on the checkout. Each of them checks that it ran on the profile, that the
+profile's kernel was built with that value, that the profile's `config.mk` differs from the checkout's only there,
+and that the checkout keeps the shipped 8 MiB; the real image is never built with the bigger value. For most cases
+the heap debugger also records which kernel allocation ran out (a breakpoint on the heap's one "no free run" return,
+then the callers read from the stack): the page table, the ELF object or file buffer, the process, the step of
+opening the file or argv that the case is about, so a refusal made before the heap is asked can't pass for the heap
+running out. `print-oom` checks that no allocation failed at all. Under TCG that breakpoint slows down the heap
+code, so the cases that fail only after the whole page directory is set up record it for argv alone.
+
 Tests can run side by side. Every test boots its own copy of the disk (QEMU locks a disk image it writes) and only
 reads `bin/`, `build/` and `programs/*/build/` (fixtures it compiles go to its own output directory); no test builds
 the ISO. The runner gives every test it starts its own output directory and temporary directory: a run's output goes
@@ -537,7 +551,8 @@ test started outlives it (also after TERM or INT to the runner), and no output l
 command (`::error`, also after a carriage return); `--shard` splits a selection exactly, by the timings, and a bad
 shard or timings file runs nothing.
 `runner-startup` holds a test the runner has just started before it has a session of its own (a `setsid`
-stand-in): TERM, INT and `--timeout` still stop it there, by its own process and not the runner's session, it
+stand-in): TERM, INT, `--timeout` and USR1 (a signal the runner doesn't trap, handled by its exit cleanup) still stop
+it there, by its own process and not the runner's session, it
 ends up interrupted or timed out, not passed, the next test doesn't start after TERM or INT, and nothing of it is left.
 `ci-artifact` checks the build archive manifest, checksums and member safety before extraction, including unsafe tar
 headers and missing files. `ci-image` checks the minimal build context, digest and container launch boundary;
@@ -576,6 +591,9 @@ and that only the QEMU helpers start a guest and no test relies on `-d int` outp
 the step before's result, a half printed row, a scroll half done) the old ways to wait (a substring, a count of rows)
 accept too early, the new ones wait for the step's own rows on one screen and give up when they never come; and a
 test that ends normally, by an error or by TERM right after starting QEMU leaves no QEMU and runs its own cleanup.
+`symbol-setup` checks the debugger tests' kernel symbol setup without QEMU: with the cross toolchain missing from
+`PATH`, or a linker that fails, it says which tool or step failed, writes `missing` to `symbols.txt` and returns
+an error, and a test that uses it stops before it starts QEMU instead of running its debugger with blank addresses.
 
 `grub-boot` needs the GRUB packages. Without them it is reported as skipped (`1 skipped` and a `SKIPPED:` line)
 instead of failing; `RORTHOX_REQUIRE_ISO=1 make test` turns that into a failure. With the packages, `grub-boot` and
