@@ -79,6 +79,9 @@ struct process
 
     // Local handles 1..16 map to private VFS descriptors; zero means a free slot.
     int files[RORTHOX_FILE_MAX_OPEN];
+
+    // Page-rounded charges for live process allocations, including argv.
+    size_t heap_used_bytes;
 };
 
 int process_switch(struct process *process);

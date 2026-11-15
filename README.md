@@ -28,8 +28,9 @@ Everything in this list is checked by `make test` or was run in QEMU.
   in kernel code stops the machine with a panic screen showing the reason and `file:line`, and one line on the debug
   port.
 - **Memory:** a block allocator for the kernel heap (100 MiB, 4 KiB blocks) that refuses requests it can't satisfy, and
-  one paging directory per process. User `malloc` clears every byte of its backing pages, including trailing padding.
-  Programs that exit give their memory back.
+  one paging directory per process. Each process has an 8 MiB allocation budget, counting every `malloc` and copied
+  argument allocation rounded up to 4 KiB. User `malloc` clears every byte of its backing pages, including trailing
+  padding. A successful `free` returns its charge to the budget; programs that exit give their memory back.
 - **Disk:** ATA PIO (LBA28) with polling and status checks: reads, writes (WRITE SECTORS), FLUSH CACHE, and IDENTIFY
   DEVICE to find out whether and how far the disk can be written.
 - **FAT16:** a path parser (`0:/dir/file`), a small VFS and a FAT16 driver with 8.3 names, subdirectories and cluster
@@ -149,7 +150,7 @@ holds the program search list, `PROGRAM_SEARCH_PATHS`: 1 to 4 directory prefixes
 
 | Config key | Default | Constraint |
 |---|---:|---|
-| `PROCESS_HEAP_LIMIT_BYTES` | 8 MiB | Positive 4 KiB multiple no larger than the 100 MiB kernel heap; reserved for a per-process allocation budget (not enforced yet). |
+| `PROCESS_HEAP_LIMIT_BYTES` | 8 MiB | Positive 4 KiB multiple no larger than the 100 MiB kernel heap; limits page-rounded process allocations, including copied arguments (not total process memory). |
 | `ELF_FILE_LIMIT_BYTES` | 8 MiB | Positive 4 KiB multiple no larger than the 100 MiB kernel heap; limits the ELF file buffer (not aggregate process memory). |
 
 ### Disk image
@@ -200,7 +201,7 @@ numbers are in `config.mk`, the handlers in `kernel/isr80h/`, the wrappers in `p
 | 1 | `print(str)` | prints a string (copied through a 1 KiB kernel buffer) |
 | 2 | `rorthox_getkey()` | next key from the process's keyboard queue: a byte (1-255) or a special key code (0x100-0x109), 0 if there is none |
 | 3 | `rorthox_putchar(c)` | prints one character |
-| 4 | `rorthox_malloc(size)` | allocates kernel heap memory and maps it into the process |
+| 4 | `rorthox_malloc(size)` | allocates zeroed kernel heap memory and maps it into the process; charges the size rounded up to 4 KiB against its 8 MiB budget, returning NULL on refusal |
 | 5 | `rorthox_free(ptr)` | frees an allocation of the process |
 | 6 | `rorthox_process_load_start(name)` | finds the program (see program lookup above), loads it and switches to it |
 | 7 | `rorthox_system(args)` | runs a command from a list of arguments; the first word is looked up the same way (at most 32 words, program name included) |
@@ -508,7 +509,7 @@ where it matters) to check one function against every input. Tests that need ext
 
 The real out-of-memory tests (`heap`, `heap-oom` and the tests that run its cases, `open-oom`, `argument-oom` and
 `elf-unwind`, and `print-oom`) fill the kernel heap from one program, and a per-process allocation budget
-(`PROCESS_HEAP_LIMIT_BYTES`) would stop that program long before the heap is full. So their QEMU part runs on a
+(`PROCESS_HEAP_LIMIT_BYTES`) stops that program long before the heap is full. So their QEMU part runs on a
 pressure profile: the same source, copied and built in the test's own output directory
 (`scripts/tests/lib/budget-profile.sh`), with only the copied `config.mk` setting the budget to 100 MiB, the whole
 heap. Their host checks still run on the checkout. Each of them checks that it ran on the profile, that the
@@ -702,11 +703,14 @@ isolate every resource or protect against every kernel bug.
   can't raise an IRQ or another exception vector with `int`: it gets a #GP instead.
 - **Command length.** A command with more than 32 words (program name included) is refused. The shell prints the
   maximum and returns to the prompt. Other command errors still produce no diagnostic.
-- **Resources.** There's no per-process memory limit: one program can take most of the kernel heap. Raw programs
-  must be 1 byte to 1 MiB. ELF file buffers are limited by `ELF_FILE_LIMIT_BYTES` (8 MiB by default); a larger ELF is
-  refused with `-ENOMEM` after checking its magic, before allocating or reading the rest of the file. This is not a
+- **Resources.** `PROCESS_HEAP_LIMIT_BYTES` limits each process's live `malloc` allocations and copied argv pointer
+  array and strings to 8 MiB by default. Each allocation is charged rounded up to 4 KiB, while checked user copies
+  still accept only the requested bytes, not the padding. Freeing an allocation returns its rounded charge. Raw
+  programs must be 1 byte to 1 MiB. ELF file buffers are limited by `ELF_FILE_LIMIT_BYTES` (8 MiB by default); a larger
+  ELF is refused with `-ENOMEM` after checking its magic, before allocating or reading the rest of the file. This is not a
   total-resident-memory or aggregate-process limit: segment backing, the 16 KiB stack, roughly 4 MiB of page tables
-  per process, metadata and filesystem work are separate. Several processes can still exhaust the shared heap.
+  per process, metadata and filesystem work are separate. One program can still exhaust the shared heap by
+  starting children through syscalls 6 or 7: each child has an independent budget, and there is no kill syscall.
 - **Keyboard.** The per-process key queue holds 1024 unread keys; more are dropped. The keyboard LEDs aren't set,
   so the Num Lock light can disagree with the state the driver keeps. With Num Lock off the keypad keys don't act as
   arrows, Home and so on (they type nothing), and Shift doesn't flip the keypad between digits and those keys.

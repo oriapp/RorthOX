@@ -58,28 +58,50 @@ static int process_find_free_allocation_index(struct process *process)
     return res;
 }
 
-static void *process_zalloc_user(size_t size)
+static size_t process_allocation_charge(size_t size)
 {
     if (!size || size > UINT32_MAX - (PAGING_PAGE_SIZE - 1U))
     {
-        return NULL;
+        return 0;
     }
 
-    size = ((size + PAGING_PAGE_SIZE - 1U) / PAGING_PAGE_SIZE) * PAGING_PAGE_SIZE;
-    return kzalloc(size);
+    return ((size + PAGING_PAGE_SIZE - 1U) / PAGING_PAGE_SIZE) * PAGING_PAGE_SIZE;
+}
+
+static void *process_zalloc_user(size_t size)
+{
+    size_t charge = process_allocation_charge(size);
+    return charge ? kzalloc(charge) : NULL;
+}
+
+static void process_uncharge_allocation(struct process *process, size_t size)
+{
+    size_t charge = process_allocation_charge(size);
+    if (!charge || charge > process->heap_used_bytes)
+    {
+        PANIC("Invalid process heap accounting", __FILE__, __LINE__);
+    }
+    process->heap_used_bytes -= charge;
 }
 
 // User mappings are changed with IF=0, under kernel CR3, while the task directory is inactive.
 void *process_malloc(struct process *process, size_t size)
 {
-    void *ptr = process_zalloc_user(size);
-    if (!ptr)
+    size_t charge = process_allocation_charge(size);
+    if (!process || !charge)
     {
-        goto out_err;
+        return 0;
     }
 
     int index = process_find_free_allocation_index(process);
-    if (index < 0)
+    if (index < 0 || process->heap_used_bytes > PROCESS_HEAP_LIMIT_BYTES ||
+        charge > PROCESS_HEAP_LIMIT_BYTES - process->heap_used_bytes)
+    {
+        return 0;
+    }
+
+    void *ptr = process_zalloc_user(size);
+    if (!ptr)
     {
         goto out_err;
     }
@@ -93,6 +115,7 @@ void *process_malloc(struct process *process, size_t size)
 
     process->allocations[index].ptr = ptr;
     process->allocations[index].size = size;
+    process->heap_used_bytes += charge;
     return ptr;
 
 out_err:
@@ -207,7 +230,7 @@ static struct process_allocation *process_get_allocation_by_addr(struct process 
 
 void process_free(struct process *process, void *ptr)
 {
-    if (!ptr)
+    if (!process || !ptr)
     {
         return;
     }
@@ -225,6 +248,8 @@ void process_free(struct process *process, void *ptr)
     {
         return;
     }
+
+    process_uncharge_allocation(process, allocation->size);
 
     // Unjoin the allocation
     process_allocation_unjoin(process, ptr);
@@ -254,6 +279,7 @@ static void process_release_remaining_allocations(struct process *process)
     {
         if (process->allocations[i].ptr)
         {
+            process_uncharge_allocation(process, process->allocations[i].size);
             kfree(process->allocations[i].ptr);
             process->allocations[i].ptr = 0;
             process->allocations[i].size = 0;
