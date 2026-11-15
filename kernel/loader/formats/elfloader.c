@@ -307,6 +307,12 @@ int elf_load(const char *filename, struct elf_file **file_out)
         goto out;
     }
 
+    if (stat.filesize > ELF_FILE_LIMIT_BYTES)
+    {
+        res = -ENOMEM;
+        goto out;
+    }
+
     elf_file->in_memory_size = stat.filesize;
     elf_file->elf_memory = kzalloc(stat.filesize);
     if (!elf_file->elf_memory)

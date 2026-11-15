@@ -146,26 +146,6 @@ char *strchr(const char *str, int c)
     return NULL;
 }
 
-char *strcat(char *dest, const char *src)
-{
-    char *res = dest;
-    while (*dest != 0)
-    {
-        dest += 1;
-    }
-
-    while (*src != 0)
-    {
-        *dest = *src;
-        src += 1;
-        dest += 1;
-    }
-
-    *dest = 0x00;
-
-    return res;
-}
-
 bool isdigit(char c)
 {
     return c >= 48 && c <= 57;

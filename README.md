@@ -39,9 +39,9 @@ Everything in this list is checked by `make test` or was run in QEMU.
 - **Files from programs:** syscalls 13-18 open, read, write, seek, stat and close files. Each process has its own
   16 handles, which are closed when it exits or faults. A file written this way stays on the disk image and can be
   read back after a reboot, and a program copied this way can be run from the shell.
-- **Programs:** ELF32 executables (each load segment gets its own zeroed memory, mapped writable only when the segment
-  is) and flat binaries up to 1 MiB, loaded at 0x400000 and run in ring 3 with their own 16 KiB stack. Program page
-  padding is zeroed before the program runs. Checked syscall copies still accept only the requested allocation bytes,
+- **Programs:** ELF32 executables up to 8 MiB per file by default (each load segment gets its own zeroed memory, mapped
+  writable only when the segment is) and flat binaries up to 1 MiB, loaded at 0x400000 and run in ring 3 with their own
+  16 KiB stack. Program page padding is zeroed before the program runs. Checked syscall copies still accept only the requested allocation bytes,
   raw file bytes, ELF segment bytes and the stack, not page padding.
 - **Process memory isolation:** ring 3 can access only its own program pages, stack pages and live allocation pages.
   Kernel memory and other processes' backing pages are supervisor-only. Permissions work in 4 KiB pages, so a program
@@ -681,7 +681,10 @@ isolate every resource or protect against every kernel bug.
 - **Command length.** A command with more than 32 words (program name included) is refused. The shell prints the
   maximum and returns to the prompt. Other command errors still produce no diagnostic.
 - **Resources.** There's no per-process memory limit: one program can take most of the kernel heap. Raw programs
-  must be 1 byte to 1 MiB; ELF files get a kernel buffer as big as the file.
+  must be 1 byte to 1 MiB. ELF file buffers are limited by `ELF_FILE_LIMIT_BYTES` (8 MiB by default); a larger ELF is
+  refused with `-ENOMEM` after checking its magic, before allocating or reading the rest of the file. This is not a
+  total-resident-memory or aggregate-process limit: segment backing, the 16 KiB stack, roughly 4 MiB of page tables
+  per process, metadata and filesystem work are separate. Several processes can still exhaust the shared heap.
 - **Keyboard.** The per-process key queue holds 1024 unread keys; more are dropped. The keyboard LEDs aren't set,
   so the Num Lock light can disagree with the state the driver keeps. With Num Lock off the keypad keys don't act as
   arrows, Home and so on (they type nothing), and Shift doesn't flip the keypad between digits and those keys.

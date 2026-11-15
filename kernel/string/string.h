@@ -17,7 +17,6 @@ char *strncpy(char *dest, const char *src, int count);
 char *strstr(const char *haystack, const char *needle);
 // char *strrev(char *str);
 char *strchr(const char *str, int c);
-char *strcat(char *dest, const char *src);
 int strncmp(const char *str1, const char *str2, int n);
 int istrncmp(const char *s1, const char *s2, int n);
 int strnlen_terminator(const char *str, int max, char terminator);
