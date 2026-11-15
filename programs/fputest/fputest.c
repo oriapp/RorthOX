@@ -35,7 +35,7 @@
  * "fputest.elf mf": divides by zero with the zero-divide exception unmasked, then FWAIT: the x87
  *     error (#MF) must end it.
  * "fputest.elf pending <how>" (P) and "fputest.elf survivor <how>" (W): P leaves that x87 error
- *     pending and is switched away (preempt, sleep or syscall, see pending()) while W runs with its
+ *     pending and is switched away (preempt, sleep) or makes syscalls (see pending()) while W runs with its
  *     own state; P must still have the error pending when it comes back and end at its FWAIT, and
  *     W must keep its state and never have an error pending. "fputest.elf pendexit" and
  *     "fputest.elf pendfault" end by exit / a page fault with the error pending, W running.

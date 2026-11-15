@@ -37,7 +37,9 @@
 #         FWAIT and process_terminate on P's process; W must keep its state, never see an error
 #         pending (FNSTSW, then FWAIT) and have been switched away. "pendexit" and "pendfault" end
 #         by exit / a page fault with the error pending: W as before, and the next program, which
-#         gets the same task block, starts clean and its FWAIT doesn't fault. Needs python3.
+#         gets the same task block, starts clean and its FWAIT doesn't fault. The shell, which the
+#         kernel loads right after the owner dies, doesn't check its own state: the host case
+#         "freeowner" (fpu-owner.c) proves it doesn't inherit the error. Needs python3.
 #   idle  fputest.elf as shell.elf, the only program, on a Pentium III CPU model (SSE, no SSE2): it
 #         loads its state and sleeps in 100 ms steps until a key, so the kernel idles with
 #         interrupts on. All 20 samples meanwhile (some halted in ring 0) must show its registers,
