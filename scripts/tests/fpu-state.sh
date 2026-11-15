@@ -6,6 +6,12 @@
 # copies of bin/os.bin only; QEMU monitor samples ("stop", "info registers", "cont") show the CPU's
 # registers from outside.
 #
+#   host  scripts/tests/host/fpu-owner.c: the real kernel/task/task.c with a stand-in FPU that keeps a
+#         ledger of every save and restore. It checks which task's state is in the CPU (the owner)
+#         after a first launch, a return to the same task, A -> B -> A, a sleeping owner and the
+#         idle halt, the owner freed (never saved into afterwards, also when the next task gets its
+#         block), another task freed, a task discarded before it was published, task_page_task,
+#         a misaligned area, and that a new task starts clean while another one's state is loaded.
 #   disk  the default boot. The shell starts fputest.elf (A), which starts "fresh" children (clean
 #         registers while A's own x87, then x87 and SSE, state is loaded; A's is the same afterwards)
 #         and B. A and B each load their own x87 values, control word, XMM0-7 and MXCSR and spin
@@ -37,13 +43,14 @@
 # (FNSTENV), which FXSAVE may store as zero: they must be zero, and a program's own or zero after
 # its child ran.
 #
-# Env: BOOT_TIMEOUT=60   RUN_TIMEOUT=120   FPU_STATE_CASES="disk idle grub"
+# Env: HOST_CC=cc   BOOT_TIMEOUT=60   RUN_TIMEOUT=120   FPU_STATE_CASES="host disk idle grub"
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+HOST_CC="${HOST_CC:-cc}"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-120}"
-CASES="${FPU_STATE_CASES:-disk idle grub}"
+CASES="${FPU_STATE_CASES:-host disk idle grub}"
 . ./scripts/qemu-lib.sh
 . ./scripts/tests/lib/iso-check.sh
 . ./scripts/tests/lib/kernel-symbols.sh
@@ -52,7 +59,7 @@ OUT=${RORTHOX_TEST_ROOT:-build/tests}/fpu-state
 PROGRAM=programs/fputest/build/fputest.elf
 mkdir -p "$OUT"
 Q_OUT=$OUT   # finish reads it; qemu_start sets it for each boot
-rm -rf "${OUT:?}"/disk "$OUT"/idle "$OUT"/grub
+rm -rf "${OUT:?}"/disk "$OUT"/idle "$OUT"/grub "$OUT"/host-*
 [ -f "$PROGRAM" ] && [ -f build/kernelfull.o ] || { echo "fpu-state: run 'make all' first" >&2; exit 1; }
 image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
@@ -239,6 +246,26 @@ x87_error() {
     look "$RUN_TIMEOUT" 0 "mf=fputest mf: .*"
 }
 
+host_case() {
+    local status="not built"
+    echo "fpu-state: host check of kernel/task/task.c"
+    if "$HOST_CC" -std=gnu99 -g -O0 -fno-builtin -no-pie -fno-pie -w -fsanitize=undefined -fno-sanitize=alignment \
+            -fno-sanitize-recover=all -Wl,--wrap=kzalloc,--wrap=kfree -I kernel -I build/config -I scripts/tests/host \
+            scripts/tests/host/fpu-owner.c scripts/tests/host/kalloc.c kernel/task/task.c kernel/memory/memory.c \
+            -o "$OUT/host-check" > "$OUT/host-build.log" 2>&1; then
+        if "$OUT/host-check" > "$OUT/host-check.log" 2>&1; then status=0; else status=$?; fi
+        sed 's/^/  /' "$OUT/host-check.log"
+    else
+        echo "  host build failed, see $OUT/host-build.log"
+        head -n 20 "$OUT/host-build.log" | sed 's/^/  /' || true
+        : > "$OUT/host-check.log"
+    fi
+    echo "exit=$status" > "$OUT/host-status.txt"
+    check "host: built and exited with status 0" "$OUT/host-status.txt" "exit=0" line
+    check "host: every ownership case passed" "$OUT/host-check.log" "fpu-owner host check: 0 of 12 cases failed" line
+    check "host: no undefined behaviour" "$OUT/host-check.log" "runtime error" absent
+}
+
 disk_case() {
     C=disk D="$OUT/disk"
     mkdir -p "$D"
@@ -346,6 +373,7 @@ idle_case() {
 
 for c in $CASES; do
     case "$c" in
+        host) host_case ;;
         disk) disk_case ;;
         idle | grub)
             mkdir -p "$OUT/$c"
