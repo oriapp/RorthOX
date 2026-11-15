@@ -11,7 +11,8 @@
 # 2. The summary stays within its size limit and lists the failures first.
 # 3. --shard: a failing test fails only its own shard, and shows up in that shard's reports and
 #    annotations; the two shards' results.json hold the selection exactly.
-# 4. TERM: the test that was stopped and the one never started are in the reports.
+# 4. TERM once the first test runs (it says so itself): it is in the reports as interrupted, the
+#    one never started as not run.
 # 5. A run whose reports can't be written fails.
 
 set -uo pipefail
@@ -204,21 +205,47 @@ expect "... and in shard 2's JUnit, summary and annotations only" \
      grep -Fq "1 passed, 0 failed, 0 skipped, 0 not run of 1 in " "$tmp/shard1.md" && [ ! -e "$RES/shard1/failed" ]'
 
 echo "reports: 4. an interrupted run"
+# stop: tells the check it runs (from inside the test, so after the runner has started it), then
+# blocks until it is stopped. It never ends by itself.
+cat > "$fx/stop.sh" <<'EOF'
+mkfifo "$TMPDIR/block"
+exec 3<> "$TMPDIR/block"
+sid=$(ps -o sid= -p $$)
+echo "${sid// /}" > "$REPORT_READY.part"
+mv "$REPORT_READY.part" "$REPORT_READY"
+read -r -u 3 _
+echo "stop: the block ended without a signal"
+exit 1
+EOF
 mkdir -p "$RES/cancel"
-env -u RORTHOX_TEST_ROOT GITHUB_STEP_SUMMARY="$tmp/cancel.md" "$runner" --results "$RES/cancel" "$fx/hang.sh" "$fx/pass.sh" \
-    > "$OUT/cancel.log" 2>&1 &
+REPORT_READY="$tmp/stop.ready" env -u RORTHOX_TEST_ROOT GITHUB_STEP_SUMMARY="$tmp/cancel.md" \
+    "$runner" --results "$RES/cancel" "$fx/stop.sh" "$fx/pass.sh" > "$OUT/cancel.log" 2>&1 &
 pid=$!
-for ((i = 0; i < 100; i++)); do
-    [ -s "$RES/cancel/instances" ] && break
+# Up to 30 s for the test to start, and as long for the runner to end after TERM: bounds for a
+# failure, not the waits themselves.
+for ((i = 0; i < 300; i++)); do
+    [ -s "$tmp/stop.ready" ] && break
     sleep 0.1
 done
+expect "the stopped test is running before TERM" '[ -s "$tmp/stop.ready" ]'
 kill -TERM "$pid"
+for ((i = 0; i < 300; i++)); do
+    kill -0 "$pid" 2> /dev/null || break
+    sleep 0.1
+done
+if kill -0 "$pid" 2> /dev/null; then
+    fail "the runner ends after TERM"
+    kill -KILL "$pid" 2> /dev/null
+fi
 if wait "$pid"; then status=0; else status=$?; fi
+stop_sid=$(cat "$tmp/stop.ready" 2> /dev/null)
+expect "nothing of the stopped test is left" '[ -n "$stop_sid" ] && ! pgrep -s "$stop_sid" > /dev/null'
+[ -z "$stop_sid" ] || [ "$stop_sid" = "$(ps -o sid= -p $$ | tr -d ' ')" ] || pkill -KILL -s "$stop_sid" 2> /dev/null
 # shellcheck disable=SC2016
 expect "exit 1; the stopped test interrupted, the other not run, in every report" "[ \"\$status\" -eq 1 ] && py '
 import json, sys, xml.etree.ElementTree as ET
 r = json.load(open(sys.argv[1] + \"/results.json\"))
-assert [(t[\"result\"], t[\"output_dir\"]) for t in r[\"tests\"]] == [(\"interrupted\", \"001-hang\"), (\"not run\", None)], r
+assert [(t[\"result\"], t[\"output_dir\"]) for t in r[\"tests\"]] == [(\"interrupted\", \"001-stop\"), (\"not run\", None)], r
 s = ET.parse(sys.argv[1] + \"/junit.xml\").getroot().find(\"testsuite\")
 assert (s.get(\"failures\"), s.get(\"errors\")) == (\"1\", \"1\")
 assert s.findall(\"testcase\")[1].find(\"error\").get(\"message\") == \"not run: the run was interrupted\"

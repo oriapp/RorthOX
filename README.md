@@ -414,9 +414,9 @@ qemu-system-i386 -m 128 -drive file=bin/os.bin,format=raw,index=0,media=disk \
 make test
 ```
 
-This builds everything (and the GRUB ISO, when its packages are installed) and runs 87 tests (`scripts/smoke.sh` plus
+This builds everything (and the GRUB ISO, when its packages are installed) and runs 88 tests (`scripts/smoke.sh` plus
 every `scripts/tests/*.sh`), as many at once as there are CPUs (about 2 minutes with 16); it keeps going after a
-failure and prints a summary (`87 passed, 0 failed, 0 skipped`) and where the output went. `make test TEST_JOBS=1`
+failure and prints a summary (`88 passed, 0 failed, 0 skipped`) and where the output went. `make test TEST_JOBS=1`
 runs them one after the other (about 14 minutes; as at any `-j`, a test's output shows when it ends);
 `TEST_JOBS=4` runs four at once. `make smoke` runs
 only the smoke test, and `./scripts/run-tests.sh scripts/tests/panic.sh` runs single tests (a test named twice runs
@@ -535,6 +535,9 @@ test that hangs past `--timeout`) are kept, no more than `-j` tests run at once,
 test started outlives it (also after TERM or INT to the runner), and no output line of a test can pass for a CI
 command (`::error`, also after a carriage return); `--shard` splits a selection exactly, by the timings, and a bad
 shard or timings file runs nothing.
+`runner-startup` holds a test the runner has just started before it has a session of its own (a `setsid`
+stand-in): TERM, INT and `--timeout` still stop it there, by its own process and not the runner's session, it
+ends up interrupted or timed out, not passed, the next test doesn't start after TERM or INT, and nothing of it is left.
 `ci-artifact` checks the build archive manifest, checksums and member safety before extraction, including unsafe tar
 headers and missing files. `ci-image` checks the minimal build context, digest and container launch boundary;
 `ci-image-job` checks archive integrity and publication order. `workflow` checks action pins, job permissions and

@@ -6,9 +6,10 @@
 # 1. Host check (scripts/tests/host/elf-limit.c): the real ELF loader and process loader on the
 #    host with a ledger of every allocation request and read: a file of exactly the limit loads,
 #    the limit + 1, + 4096, 2 GiB and 4 GiB - 1 are refused right after the magic with nothing
-#    allocated or read after it, the output pointer kept, the file closed, the heap and task list
-#    as before and the file opened once. A file of the limit + 1 without the ELF magic still goes
-#    to the flat binary loader, which refuses it by the load window.
+#    allocated or read after it and no request above 64 KiB before it, the output pointer kept,
+#    the file closed, the heap and task list as before and the file opened once. A file of the
+#    limit + 1 without the ELF magic still goes to the flat binary loader, which refuses it by the
+#    load window.
 # 2. QEMU: a copy of the image gets syscheck.elf and big.elf (blank.elf padded with zeroes to the
 #    limit + 1 bytes). syscheck starts big.elf with syscall 7 and must get -3 (-ENOMEM); nothing
 #    may start, the shell stays alone with the keyboard, and blank.elf still runs afterwards.

@@ -13,7 +13,9 @@
  *
  * Refused loads: elf_load() and process_load() return -ENOMEM, leave their output pointer alone,
  * close the file and free everything (process_load: the task list, slots and heap as before), the
- * first read is at most an ELF header, and after it nothing is allocated or read. The file is
+ * first read is at most an ELF header, no allocation request is above EARLY_REQUEST_LIMIT (only the
+ * loader's own objects come before the refusal), and after the first read nothing is allocated or
+ * read. The file is
  * opened once: a too-large ELF file is never tried as a flat binary. A file of exactly the limit
  * loads, its buffer is the limit, and every byte is read. A file without the ELF magic above the
  * limit still goes to the flat binary loader and is refused there by the load window (-EINVARG).
@@ -43,6 +45,8 @@ unsigned int alarm(unsigned int seconds);
 #define WINDOW ((uint32_t)(RORTHOX_PROGRAM_VIRTUAL_ADDRESS_LIMIT - RORTHOX_PROGRAM_VIRTUAL_ADDRESS))
 // The host heap (kalloc.c) is 64 MiB; bigger requests are counted and refused, not tried.
 #define HOST_HEAP_ROOM (48u * 1024 * 1024)
+// A refused load asks only for objects such as struct elf_file and struct process, none this big.
+#define EARLY_REQUEST_LIMIT (64u * 1024)
 // The bytes served: enough for the limit plus one page.
 #define SERVED (LIMIT + 4096u)
 
@@ -220,6 +224,8 @@ static int refused_early(const char *what)
         FAIL("%d read(s) after the first read, %llu bytes read in all", late_reads, read_bytes);
     if (file_sized_requests)
         FAIL("%llu allocation request(s) of the file size or more", file_sized_requests);
+    if (largest_request > EARLY_REQUEST_LIMIT)
+        FAIL("an allocation request of %llu bytes, more than %u", largest_request, EARLY_REQUEST_LIMIT);
     if (host_open_calls != 1)
         FAIL("the file was opened %d times (a second open is the flat binary loader)", host_open_calls);
     if (host_open_files)
