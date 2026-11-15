@@ -3,6 +3,7 @@
   "tests": {
     "scripts/smoke.sh": 3.4,
     "scripts/tests/argument-oom.sh": 38.2,
+    "scripts/tests/boot-clock.sh": 7.5,
     "scripts/tests/ci-annotations.sh": 3.0,
     "scripts/tests/clock.sh": 6.4,
     "scripts/tests/command-arguments.sh": 85.8,
@@ -57,6 +58,7 @@
     "scripts/tests/raw-program.sh": 20.8,
     "scripts/tests/readline-edit.sh": 30.3,
     "scripts/tests/readline.sh": 3.2,
+    "scripts/tests/rtc-helpers.sh": 1.0,
     "scripts/tests/runner.sh": 12.5,
     "scripts/tests/screen-waits.sh": 8.2,
     "scripts/tests/shell-command.sh": 22.0,
