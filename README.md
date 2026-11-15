@@ -149,6 +149,7 @@ holds the program search list, `PROGRAM_SEARCH_PATHS`: 1 to 4 directory prefixes
 
 | Config key | Default | Constraint |
 |---|---:|---|
+| `PROCESS_HEAP_LIMIT_BYTES` | 8 MiB | Positive 4 KiB multiple no larger than the 100 MiB kernel heap; reserved for a per-process allocation budget (not enforced yet). |
 | `ELF_FILE_LIMIT_BYTES` | 8 MiB | Positive 4 KiB multiple no larger than the 100 MiB kernel heap; limits the ELF file buffer (not aggregate process memory). |
 
 ### Disk image

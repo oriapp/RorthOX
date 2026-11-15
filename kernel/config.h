@@ -13,6 +13,10 @@
 #define RORTHOX_HEAP_ADDRESS 0x01000000
 #define RORTHOX_HEAP_TABLE_ADDRESS 0x00007E00
 
+_Static_assert(PROCESS_HEAP_LIMIT_BYTES > 0 && PROCESS_HEAP_LIMIT_BYTES <= RORTHOX_HEAP_SIZE_BYTES &&
+               PROCESS_HEAP_LIMIT_BYTES % RORTHOX_HEAP_BLOCK_SIZE == 0,
+               "process heap limit must be a positive page multiple within the kernel heap");
+
 _Static_assert(ELF_FILE_LIMIT_BYTES > 0 && ELF_FILE_LIMIT_BYTES <= RORTHOX_HEAP_SIZE_BYTES &&
                ELF_FILE_LIMIT_BYTES % RORTHOX_HEAP_BLOCK_SIZE == 0,
                "ELF file limit must be a positive page multiple within the kernel heap");

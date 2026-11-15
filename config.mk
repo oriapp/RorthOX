@@ -74,7 +74,8 @@ COMMAND_ARGUMENT_SIZE = 512
 # Includes the program name.
 MAX_COMMAND_ARGUMENTS = 32
 
-# Maximum retained ELF file buffer (bytes; whole heap pages).
+# Per-process allocation budget and maximum retained ELF file buffer (bytes; whole heap pages).
+PROCESS_HEAP_LIMIT_BYTES = 8388608
 ELF_FILE_LIMIT_BYTES = 8388608
 
 # Ordered directories searched for bare program names.
