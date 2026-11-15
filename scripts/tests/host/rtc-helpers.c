@@ -11,7 +11,8 @@
  * Every case runs in its own process with a time limit.
  *
  * getformattedtime(format): h m s = hour, minute, second as two digits with a leading zero;
- * H M S = the same with a leading space below 10; every other byte is copied as it is. Any token
+ * H M S = the same with a leading space below 10; values of 100 and more (a CMOS byte holds up to
+ * 255) get three digits; every other byte is copied as it is. Any token
  * may repeat, so the text can be longer than the format. Returns an allocation of at least
  * length + 1 bytes holding the terminated text, and nothing else stays allocated; NULL when an
  * allocation fails, with nothing left allocated.
@@ -247,6 +248,8 @@ static void format_case(const char *format)
 
 static const int times[][3] = {
     { 0, 0, 0 }, { 1, 2, 3 }, { 9, 5, 7 }, { 10, 10, 10 }, { 12, 34, 56 }, { 23, 59, 59 }, { 0, 9, 10 }, { 7, 30, 0 },
+    // Out of range, as a broken or garbage CMOS clock can give: three digits each.
+    { 255, 100, 99 }, { 100, 255, 165 }, { 9, 165, 255 },
 };
 #define TIMES (sizeof(times) / sizeof(times[0]))
 

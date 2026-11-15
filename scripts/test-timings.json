@@ -11,6 +11,7 @@
     "scripts/tests/debugger-step.sh": 0.1,
     "scripts/tests/descriptor-tables.sh": 3.8,
     "scripts/tests/disk-read.sh": 8.0,
+    "scripts/tests/elf-limit.sh": 8.5,
     "scripts/tests/elf-segments.sh": 13.3,
     "scripts/tests/elf-unwind.sh": 9.6,
     "scripts/tests/exception-frames.sh": 3.5,

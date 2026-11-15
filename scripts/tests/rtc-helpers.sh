@@ -10,7 +10,7 @@
 # an unmapped page, every case runs in its own process with a time limit.
 # Cases:
 #   tokens      h m s (leading zero) and H M S (leading space) alone and in clock formats, at
-#               several times
+#               several times, also out-of-range values of 100 to 255 (three digits)
 #   repeat      repeated tokens: the text is longer than the format (up to 8192 characters)
 #   literals    every other byte is copied as it is (%, backslashes, bytes above 0x7f)
 #   empty       an empty format gives an empty string
