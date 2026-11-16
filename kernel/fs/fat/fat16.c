@@ -117,10 +117,18 @@ struct fat_item
     int entry_pos;
 };
 
+struct fat_file_cursor
+{
+    uint32_t index;
+    int cluster;
+    int valid;
+};
+
 struct fat_file_descriptor
 {
     struct fat_item *item;
     uint32_t pos; // current position in file
+    struct fat_file_cursor cursor;
     FILE_MODE mode;
     struct disk *disk;
     struct fat_file_descriptor *next;
@@ -646,7 +654,7 @@ static int fat16_get_cluster_for_offset(struct disk *disk, int starting_cluster,
     return cluster;
 }
 
-static int fat16_read_internal_from_stream(struct disk *disk, struct disk_stream *stream, int cluster, int offset, int total, void *out)
+static int fat16_read_internal_from_stream(struct disk *disk, struct disk_stream *stream, int cluster, int offset, int total, void *out, struct fat_file_cursor *cursor)
 {
     struct fat_private *private = disk->fs_private;
     int bytes = private->header.primary_header.sectors_per_cluster * disk->sector_size;
@@ -654,7 +662,18 @@ static int fat16_read_internal_from_stream(struct disk *disk, struct disk_stream
     {
         return -EIO;
     }
-    int current = fat16_get_cluster_for_offset(disk, cluster, offset);
+    int index = offset / bytes;
+    if (index >= fat16_cluster_limit(disk) - 1)
+    {
+        return -EIO;
+    }
+    int ahead = offset;
+    if (cursor->valid && cursor->index <= (uint32_t) index)
+    {
+        cluster = cursor->cluster;
+        ahead -= cursor->index * bytes;
+    }
+    int current = fat16_get_cluster_for_offset(disk, cluster, ahead);
     if (current < 0)
     {
         return current;
@@ -699,14 +718,19 @@ static int fat16_read_internal_from_stream(struct disk *disk, struct disk_stream
             }
         }
     }
+    // Commit only after the whole item/byte read succeeds, just like its position.
+    cursor->index = traversed - 1;
+    cursor->cluster = current;
+    cursor->valid = 1;
     return 0;
 }
 
-static int fat16_read_internal(struct disk *disk, int starting_cluster, int offset, int total, void *out)
+static int fat16_read_internal(struct disk *disk, struct fat_file_descriptor *desc, int total, void *out)
 {
     struct fat_private *fs_private = disk->fs_private;
     struct disk_stream *stream = fs_private->cluster_read_stream;
-    return fat16_read_internal_from_stream(disk, stream, starting_cluster, offset, total, out);
+    return fat16_read_internal_from_stream(disk, stream, fat16_get_first_cluster(desc->item->item),
+                                          desc->pos, total, out, &desc->cursor);
 }
 
 void fat16_free_directory(struct fat_directory *directory)
@@ -1086,7 +1110,7 @@ int fat16_read(struct disk *disk, void *descriptor, uint32_t size, uint32_t nmem
         {
             return -EIO;
         }
-        int res = fat16_read_internal(disk, fat16_get_first_cluster(item), fat_desc->pos, bytes, out_ptr);
+        int res = fat16_read_internal(disk, fat_desc, bytes, out_ptr);
         if (res < 0)
         {
             // A failed internal read may have copied a prefix; the destination is not rolled back.
@@ -1124,6 +1148,10 @@ int fat16_seek(void *private, uint32_t offset, FILE_SEEK_MODE seek_mode)
             {
                 res = -EIO;
                 goto out;
+            }
+            if (offset < desc->pos)
+            {
+                desc->cursor.valid = 0;
             }
             desc->pos = offset;
         break;
@@ -1275,6 +1303,11 @@ static void fat16_publish(struct disk *disk, int pos, struct fat_directory_item 
     {
         if (desc->item->type == FAT_ITEM_TYPE_FILE && desc->item->entry_pos == pos)
         {
+            if (desc->item->item->filesize != item->filesize ||
+                fat16_get_first_cluster(desc->item->item) != fat16_get_first_cluster(item))
+            {
+                desc->cursor.valid = 0;
+            }
             *desc->item->item = *item;
         }
     }
@@ -1765,7 +1798,7 @@ static int fat16_read_bytes(struct disk *disk, void *private, void *out, uint32_
     {
         return -EIO;
     }
-    int res = fat16_read_internal(disk, fat16_get_first_cluster(item), desc->pos, count, out);
+    int res = fat16_read_internal(disk, desc, count, out);
     if (res < 0)
     {
         return res;
@@ -1793,6 +1826,10 @@ static int fat16_seek_signed(void *private, int offset, FILE_SEEK_MODE whence)
     if (pos < 0 || pos > INT_MAX || pos > desc->item->item->filesize)
     {
         return -EINVARG;
+    }
+    if (pos < desc->pos)
+    {
+        desc->cursor.valid = 0;
     }
     desc->pos = pos;
     return pos;
