@@ -140,16 +140,20 @@ FILE_MODE file_get_mode_by_string(const char *str)
 
 // It's the interface of opening a file.
 // Its responsibale for locating the correct file system to open a file on.
-int fopen_status(const char *filename, const char *mode_str)
+static int file_open_status_policy(const char *filename, FILE_MODE mode, FILE_OPEN_POLICY policy)
 {
     int res = 0;
-    FILE_MODE mode = file_get_mode_by_string(mode_str);
-    if (mode != FILE_MODE_READ && file_validate_path(filename) < 0)
+    if (policy == FILE_OPEN_LEGACY && mode != FILE_MODE_READ && file_validate_path(filename) < 0)
     {
         return -EINVARG;
     }
     struct file_descriptor *desc = 0;
-    struct path_root *root_path = pathparser_parse(filename, NULL);
+    struct path_root *root_path = policy == FILE_OPEN_LEGACY ? pathparser_parse(filename, NULL) :
+        pathparser_parse_extended(filename, 0);
+    if (ISERR(root_path))
+    {
+        return ERROR_I(root_path);
+    }
     if (!root_path)
     {
         res = -EINVARG;
@@ -192,7 +196,16 @@ int fopen_status(const char *filename, const char *mode_str)
             goto out;
         }
     }
-    void *descriptor_private_data = disk->filesystem->open(disk, root_path->first, mode);
+    void *descriptor_private_data;
+    if (policy == FILE_OPEN_LEGACY)
+    {
+        descriptor_private_data = disk->filesystem->open(disk, root_path->first, mode);
+    }
+    else
+    {
+        descriptor_private_data = disk->filesystem->open_policy ?
+            disk->filesystem->open_policy(disk, root_path->first, mode, policy) : ERROR(-EUNIMP);
+    }
     if (ISERR(descriptor_private_data))
     {
         res = ERROR_I(descriptor_private_data);
@@ -216,8 +229,20 @@ out:
     {
         file_free_descriptor(desc);
     }
-    pathparser_free(root_path);
+    if (policy == FILE_OPEN_LEGACY)
+    {
+        pathparser_free(root_path);
+    }
+    else
+    {
+        pathparser_free_extended(root_path);
+    }
     return res;
+}
+
+int fopen_status(const char *filename, const char *mode_str)
+{
+    return file_open_status_policy(filename, file_get_mode_by_string(mode_str), FILE_OPEN_LEGACY);
 }
 
 int file_validate_path(const char *filename)
@@ -277,12 +302,17 @@ int file_validate_path(const char *filename)
 
 int file_open(const char *filename, FILE_MODE mode)
 {
-    if (mode > FILE_MODE_APPEND || file_validate_path(filename) < 0)
+    return file_open_policy(filename, mode, FILE_OPEN_LEGACY);
+}
+
+int file_open_policy(const char *filename, FILE_MODE mode, FILE_OPEN_POLICY policy)
+{
+    if (mode > FILE_MODE_APPEND || policy > FILE_OPEN_EXTENDED ||
+        (policy == FILE_OPEN_LEGACY && file_validate_path(filename) < 0))
     {
         return -EINVARG;
     }
-    const char *modes[] = {"r", "w", "a"};
-    int fd = fopen_status(filename, modes[mode]);
+    int fd = file_open_status_policy(filename, mode, policy);
     if (fd > 0)
     {
         struct file_stat stat;

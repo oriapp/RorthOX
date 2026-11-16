@@ -6,6 +6,7 @@
 
 #include "task.h"
 #include "config.h"
+#include "fs/policy.h"
 #include "../../include/rorthox/file.h"
 
 #ifdef __cplusplus
@@ -101,6 +102,7 @@ struct process *process_current();
 struct process *process_get(int process_id);
 int process_terminate(struct process *process);
 int process_open_file(struct process *process, const char *path, int mode);
+int process_open_file_policy(struct process *process, const char *path, int mode, FILE_OPEN_POLICY policy);
 int process_file_descriptor(struct process *process, int handle);
 int process_close_file(struct process *process, int handle);
 void process_close_files(struct process *process);

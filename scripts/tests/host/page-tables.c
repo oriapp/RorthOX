@@ -65,7 +65,7 @@ int fopen(const char *filename, const char *mode_str) { return -EIO; }
 int fread(void *ptr, uint32_t size, uint32_t nmemb, int fd) { return -EIO; }
 int fstat(int fd, struct file_stat *stat) { return -EIO; }
 int fclose(int fd) { return 0; }
-int file_open(const char *filename, FILE_MODE mode) { return -EIO; }
+int file_open_policy(const char *filename, FILE_MODE mode, FILE_OPEN_POLICY policy) { return -EIO; }
 struct elf_header *elf_header(struct elf_file *file) { return 0; }
 struct elf32_phdr *elf_pheader(struct elf_header *header) { return 0; }
 struct elf32_phdr *elf_program_header(struct elf_header *header, int index) { return 0; }

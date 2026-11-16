@@ -1,6 +1,7 @@
 #ifndef FILE_H
 #define FILE_H
 #include "pparser.h"
+#include "policy.h"
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -54,6 +55,7 @@ struct filesystem
     // Filesystem should return zero from resolve if the provided disk in using its filesystem
     FS_RESOLVE_FUNCTION resolve;
     FS_OPEN_FUNCTION open;
+    void *(*open_policy)(struct disk *disk, struct path_part *path, FILE_MODE mode, FILE_OPEN_POLICY policy);
     FS_READ_FUNCTION read;
     FS_SEEK_FUNCTION seek;
     FS_STAT_FUNCTION stat;
@@ -88,6 +90,7 @@ int fstat(int fd, struct file_stat *stat);
 int fclose(int fd);
 // Strict paths and byte counts for the file interface; buffers are kernel addresses.
 int file_open(const char *filename, FILE_MODE mode);
+int file_open_policy(const char *filename, FILE_MODE mode, FILE_OPEN_POLICY policy);
 int file_read(int fd, void *buffer, uint32_t count);
 int file_write(int fd, const void *buffer, uint32_t count);
 int file_seek(int fd, int offset, FILE_SEEK_MODE whence);

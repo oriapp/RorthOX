@@ -347,6 +347,11 @@ static void process_unlink(struct process *process)
 
 int process_open_file(struct process *process, const char *path, int mode)
 {
+    return process_open_file_policy(process, path, mode, FILE_OPEN_LEGACY);
+}
+
+int process_open_file_policy(struct process *process, const char *path, int mode, FILE_OPEN_POLICY policy)
+{
     if (!process)
     {
         return -EINVARG;
@@ -360,7 +365,7 @@ int process_open_file(struct process *process, const char *path, int mode)
 
         // IF=0: reserve before an open that may create or truncate, publish only on success.
         process->files[i] = -1;
-        int fd = file_open(path, mode);
+        int fd = file_open_policy(path, mode, policy);
         if (fd < 0)
         {
             process->files[i] = 0;

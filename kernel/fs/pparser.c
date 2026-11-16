@@ -180,6 +180,83 @@ out:
     return path_root;
 }
 
+struct path_root *pathparser_parse_extended(const char *path, int allow_root)
+{
+    if (!path)
+    {
+        return ERROR(-EINVARG);
+    }
+    int len = strnlen(path, RORTHOX_FS_PATH_MAX);
+    if (len < 3 || len >= RORTHOX_FS_PATH_MAX || memcmp((void *)path, "0:/", 3) != 0 ||
+        (len == 3 && !allow_root))
+    {
+        return ERROR(-EINVARG);
+    }
+
+    int count = 0;
+    int start = 3;
+    for (int i = 3; i < len; i++)
+    {
+        unsigned char c = path[i];
+        if (c < 0x20 || c > 0x7E)
+        {
+            return ERROR(-EINVARG);
+        }
+        const char *bad = "\"*:<>?\\|";
+        for (int j = 0; bad[j]; j++)
+        {
+            if (c == bad[j])
+            {
+                return ERROR(-EINVARG);
+            }
+        }
+        if (c == '/' || i == len - 1)
+        {
+            int end = c == '/' ? i : i + 1;
+            int size = end - start;
+            if (size < 1 || size > RORTHOX_FS_COMPONENT_MAX || path[start] == ' ' ||
+                path[end - 1] == ' ' || path[end - 1] == '.' || (c == '/' && i == len - 1))
+            {
+                return ERROR(-EINVARG);
+            }
+            // Defence in depth: 129 components already exceed the path byte limit.
+            if (++count > RORTHOX_FS_COMPONENTS_MAX)
+            {
+                return ERROR(-EINVARG);
+            }
+            start = i + 1;
+        }
+    }
+
+    struct path_root *root = kzalloc(sizeof(*root) + count * sizeof(struct path_part) + len + 1);
+    if (!root)
+    {
+        return ERROR(-ENOMEM);
+    }
+    struct path_part *parts = (struct path_part *)(root + 1);
+    char *copy = (char *)(parts + count);
+    memcpy(copy, (void *)path, len + 1);
+    root->drive_no = 0;
+    root->first = count ? parts : 0;
+    char *p = copy + 3;
+    for (int i = 0; i < count; i++)
+    {
+        parts[i].part = p;
+        parts[i].next = i + 1 < count ? &parts[i + 1] : 0;
+        while (*p && *p != '/')
+        {
+            p++;
+        }
+        *p++ = 0;
+    }
+    return root;
+}
+
+void pathparser_free_extended(struct path_root *root)
+{
+    kfree(root);
+}
+
 /*
 Test:
     1. gdb

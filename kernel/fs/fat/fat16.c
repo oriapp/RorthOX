@@ -185,6 +185,7 @@ static int fat16_seek_signed(void *private, int offset, FILE_SEEK_MODE whence);
 
 int fat16_resolve(struct disk *disk);
 void *fat16_open(struct disk *disk, struct path_part *path, FILE_MODE mode);
+static void *fat16_open_core(struct disk *disk, struct path_part *path, FILE_MODE mode, FILE_OPEN_POLICY policy);
 int fat16_read(struct disk *disk, void *descriptor, uint32_t size, uint32_t nmemb, char *out_ptr);
 int fat16_seek(void *private, uint32_t offset, FILE_SEEK_MODE seek_mode);
 int fat16_stat(struct disk *disk, void *private, struct file_stat *stat);
@@ -194,6 +195,7 @@ struct filesystem fat16_fs =
     {
         .resolve = fat16_resolve,
         .open = fat16_open,
+        .open_policy = fat16_open_core,
         .read = fat16_read,
         .seek = fat16_seek,
         .stat = fat16_stat,
@@ -968,6 +970,20 @@ out:
 
 void *fat16_open(struct disk *disk, struct path_part *path, FILE_MODE mode)
 {
+    return fat16_open_core(disk, path, mode, FILE_OPEN_LEGACY);
+}
+
+static void *fat16_open_core(struct disk *disk, struct path_part *path, FILE_MODE mode, FILE_OPEN_POLICY policy)
+{
+    if (policy > FILE_OPEN_EXTENDED)
+    {
+        return ERROR(-EINVARG);
+    }
+    // Extended lookup and creation must not use the legacy short-name buffers.
+    if (policy == FILE_OPEN_EXTENDED)
+    {
+        return ERROR(-EUNIMP);
+    }
     struct fat_file_descriptor *descriptor = 0;
     int err_code = 0;
     if (mode > FILE_MODE_APPEND)

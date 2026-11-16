@@ -71,7 +71,7 @@ case_site() {
         openroot)  echo pathparser_create_root ;;
         openpart)  echo pathparser_get_path_part ;;
         opennode)  echo pathparser_parse_path_part ;;
-        openfat)   echo fat16_open ;;
+        openfat)   echo fat16_open_core ;;
         openitem)  echo fat16_new_fat_item_for_directory_item ;;
         openclone) echo fat_16_clone_directory_item ;;
         openvfs)   echo file_new_descriptor ;;

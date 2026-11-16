@@ -119,7 +119,7 @@ int fopen_status(const char *filename, const char *mode_str)
     return FD;
 }
 
-int file_open(const char *filename, FILE_MODE mode)
+int file_open_policy(const char *filename, FILE_MODE mode, FILE_OPEN_POLICY policy)
 {
     return mode == FILE_MODE_READ ? fopen_status(filename, "r") : -ERDONLY;
 }
