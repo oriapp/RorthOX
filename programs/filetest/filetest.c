@@ -31,6 +31,9 @@
  *                          exits without closing them.
  *   filetest.elf crash     the same ("filetest: crash armed"), then raises #UD instead of exiting.
  *   filetest.elf verify    reads back what "write" left (after a reboot).
+ *   filetest.elf oldread   the same files made on the host, with DATA.BIN read-only: stat, a
+ *                          seek and read across byte 65536, a seek from the end, EOF, a WRITE
+ *                          open refused with -ERDONLY, then everything "verify" reads.
  *
  * No large globals: big buffers come from malloc.
  */
@@ -529,6 +532,27 @@ static int verify_mode(void)
     return 0;
 }
 
+static int oldread_mode(void)
+{
+    int fd = rorthox_open("0:/DATA.BIN", RORTHOX_FILE_READ);
+    CHECK(fd == 1, "open DATA.BIN", fd);
+    struct rorthox_file_stat st;
+    CHECK(rorthox_stat(fd, &st) == 0 && st.filesize == DATA_SIZE + 5, "stat size", st.filesize);
+    CHECK(st.flags == RORTHOX_FILE_STAT_READ_ONLY, "stat flags", st.flags);
+    CHECK(rorthox_seek(fd, 65530, RORTHOX_SEEK_SET) == 65530, "seek to 65530", 0);
+    CHECK(rorthox_read(fd, buf, 12) == 12, "read across byte 65536", 0);
+    for (int i = 0; i < 12; i++)
+    {
+        CHECK((unsigned char)buf[i] == data_byte(65530 + i), "byte across 65536", 65530 + i);
+    }
+    CHECK(rorthox_seek(fd, -5, RORTHOX_SEEK_END) == DATA_SIZE, "seek -5 from the end", 0);
+    CHECK(rorthox_read(fd, buf, 100) == 5 && same(buf, "tail\n", 5), "the tail", 0);
+    CHECK(rorthox_read(fd, buf, 100) == 0, "EOF", 0);
+    CHECK(rorthox_close(fd) == 0, "close", 0);
+    CHECK(rorthox_open("0:/DATA.BIN", RORTHOX_FILE_WRITE) == -ERDONLY, "WRITE open of a read-only file", 0);
+    return verify_mode();
+}
+
 int main(int argc, char **argv)
 {
     buf = malloc(BUF_SIZE);
@@ -548,6 +572,7 @@ int main(int argc, char **argv)
     else if (is(mode, "hold")) res = hold_mode(0);
     else if (is(mode, "crash")) res = hold_mode(1);
     else if (is(mode, "verify")) res = verify_mode();
+    else if (is(mode, "oldread")) res = oldread_mode();
     else fail("unknown mode", 0);
     if (!res)
     {
