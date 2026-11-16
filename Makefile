@@ -267,7 +267,17 @@ iso_tools:
 	@if ! grub-mkrescue -d /usr/lib/grub/i386-pc -o $@.tmp build/iso; then rm -f $@.tmp; exit 1; fi
 	mv $@.tmp $@
 
-./bin/os.bin: ./bin/boot.bin ./bin/kernel.bin $(IMAGE_FILES) | user_programs
+# Recursive user builds run first. Hash only the shipped program paths and bytes;
+# refreshing the image on every make would erase files written into the disk.
+.PHONY: image_files_check
+image_files_check: | user_programs
+
+build/config/image-files.sha256: image_files_check
+	@mkdir -p build/config
+	@sha256sum $(IMAGE_FILES) > $@.tmp
+	@if ! cmp -s $@.tmp $@; then mv $@.tmp $@; else rm $@.tmp; fi
+
+./bin/os.bin: ./bin/boot.bin ./bin/kernel.bin build/config/image-files.sha256
 	rm -f $@
 	cat ./bin/boot.bin ./bin/kernel.bin > $@
 	# Append 16 MiB of zeroes: the FAT tables, root directory and data area of the filesystem.
@@ -279,8 +289,6 @@ iso_tools:
 	# The shipped programs are read-only, so the file syscalls can't overwrite them.
 	mattrib -i $@ +r $(addprefix ::,$(notdir $(IMAGE_FILES)))
 	mdir -i $@ ::
-
-$(IMAGE_FILES): | user_programs
 
 ./bin/kernel.bin: $(FILES) ./kernel/linker.ld $(CONFIG_LD) config.mk scripts/check-kernel-fpu.py
 	python3 scripts/check-kernel-fpu.py $(FILES)
