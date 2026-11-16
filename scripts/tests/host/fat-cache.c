@@ -22,7 +22,9 @@
  *   both copies           after fat16_set_entry on the first copy, the next lookup reads the
  *                         sector and gives the new value; after both copies, it still does
  *                         (pending, then flushed: both durable copies hold it); a file
- *                         rewritten after a warm read reads back right
+ *                         rewritten after a warm read reads back right, and so does a file
+ *                         written with two calls on one handle (the second call follows the
+ *                         chain the first one linked)
  *   uncertain write       a failed write (fat16_write_at) and a failed flush drop the cache
  *   preparation           write preparation drops the cache, and a warm first-FAT sector never
  *                         hides a difference between the copies on the disk (either copy changed
@@ -356,6 +358,24 @@ static void c_both_copies(void)
     static unsigned char other_back[sizeof(other)];
     CHECK(read_file("0:/OTHER.BIN", other_back, sizeof(other)) == (int)sizeof(other) &&
           memcmp(other_back, other, sizeof(other)) == 0, "OTHER.BIN reads back");
+
+    // Two write calls on one handle, then a read: the second call walks the chain the first one
+    // linked (FAT entries written while their sector may be cached), and the read walks it all.
+    static unsigned char two[5 * 4 * S + 77], two_back[sizeof(two)];
+    for (int i = 0; i < (int)sizeof(two); i++)
+    {
+        two[i] = (unsigned char)(i * 7 + 3);
+    }
+    int first = 4 * S + 10;
+    int fd = file_open("0:/TWO.BIN", FILE_MODE_WRITE);
+    CHECK(fd > 0, "open TWO.BIN");
+    CHECK(file_write(fd, two, first) == first, "TWO.BIN first write");
+    CHECK(file_write(fd, two + first, sizeof(two) - first) == (int)(sizeof(two) - first), "TWO.BIN second write");
+    CHECK(fclose(fd) == 0, "close TWO.BIN");
+    int got = read_file("0:/TWO.BIN", two_back, sizeof(two));
+    CHECK(got == (int)sizeof(two) && memcmp(two_back, two, sizeof(two)) == 0,
+          "TWO.BIN, written with two calls on one handle, reads back (%d)", got);
+
     long differ = 0;
     for (long s = 0; s < spf; s++)
     {

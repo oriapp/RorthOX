@@ -14,7 +14,8 @@
 #     sector again, whichever it is;
 #   - after a write of the first FAT the next lookup reads the sector and sees the new value,
 #     and it still does after the second copy is written and flushed; files rewritten after a
-#     warm read read back, and the two FATs agree on the media;
+#     warm read, and a file written with two calls on one handle, read back, and the two FATs
+#     agree on the media;
 #   - a failed write or flush, and every write preparation, drop the cache;
 #   - write preparation compares the copies on the disk, so a warm first-FAT sector never hides
 #     a difference (either copy changed behind the cache gives -EIO, a file write is refused).
