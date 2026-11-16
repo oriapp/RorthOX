@@ -47,17 +47,17 @@ nop
 
 OEMIdentifier           db OEM_ID
 BytesPerSector          dw SECTOR_SIZE
-SectorsPerCluster       db 0x80
+SectorsPerCluster       db SECTORS_PER_CLUSTER
 ReservedSectors         dw RESERVED_SECTORS
 FATCopies               db 0x02
-RootDirEntries          dw 0x40
-NumSectors              dw 0x00
+RootDirEntries          dw ROOT_DIR_ENTRIES
+NumSectors              dw TOTAL_SECTORS
 MediaType               db 0xF8
 SectorsPerFat           dw SECTORS_PER_FAT
 SectorsPerTrack         dw 0x20
 NumberOfHeads           dw 0x40
 HiddenSectors           dd 0x00
-SectorsBig              dd 0x773594
+SectorsBig              dd 0x00
 
 ; Extended BPB (Dos 4.0)
 DriveNumber             db 0x80

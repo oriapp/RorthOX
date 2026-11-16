@@ -163,22 +163,28 @@ holds the program search list, `PROGRAM_SEARCH_PATHS`: 1 to 4 directory prefixes
 
 ### Disk image
 
-`bin/os.bin` is the boot sector, then `kernel.bin`, then 16 MiB of zeroes. The FAT16 layout comes from `config.mk`:
+`bin/os.bin` has a boot sector, a kernel area padded to 200 sectors, then FAT16 metadata and data. Its exact
+length is 16,879,616 bytes (32,968 sectors); the geometry comes from `config.mk`:
 
 | Sectors | What |
 |---|---|
 | 0 | boot sector with the BPB |
 | 1-199 | kernel area (`kernel.bin`; the build fails if it doesn't fit) |
-| 200 onwards | FAT 1 and FAT 2 (256 sectors each), root directory, data |
+| 200–231 / 232–263 | FAT 1 and FAT 2 (32 sectors each) |
+| 264–295 | root directory (512 entries, including the volume label) |
+| 296–32967 | data (8,168 clusters of 2 KiB) |
 
 The build copies `shell.elf` and `blank.elf` into the root directory with mtools, so no root access is needed,
 and marks them read-only: opening them for writing or appending returns `-ERDONLY`. To replace one in an image,
 clear the flag first (`mattrib -i bin/os.bin -r ::shell.elf`).
 
-A cluster is 64 KiB (128 sectors) and the root directory has 64 entries. The BPB describes a volume of about 4 GB
-(that's what `mdir` reports as free), but the image file is only about 16 MiB. Before its first write, the kernel
-asks the disk for its real size (IDENTIFY) and only ever allocates whole clusters that fit inside it. On the image
-the build makes right now (16,850,264 bytes) that is clusters 2 to 252, about 15.7 MiB; the image doesn't grow.
+The root has 511 file slots after its volume-label entry; unlike subdirectories it cannot grow. Each file
+uses whole 2 KiB clusters (numbers 2–8,169). The BPB and image length agree; the kernel still checks the
+actual drive capacity through IDENTIFY before allocating clusters. On this default image, writing past the
+remaining 2 KiB clusters returns `-ENOSPC` (earlier images reached this limit in 64 KiB steps); the
+2 GiB - 1 `-EFBIG` limit is unchanged. Existing FAT16 images with the earlier
+64 KiB-cluster, 64-root-entry layout can still be read: attach one as the primary drive instead of `bin/os.bin`.
+Building a new image does not convert an old image or alter the kernel's BPB-based reader.
 
 ### Subsystems
 
@@ -272,7 +278,7 @@ in `include/rorthox/status.h`. Errors come back as negative numbers.
 | `ERDONLY` | -6 | write or append on a read-only file, or the disk can't be written |
 | `ENOENT` | -10 | the file (for reading) or a parent directory doesn't exist |
 | `EBADF` | -11 | not an open handle of this process, or the wrong kind of handle |
-| `ENOSPC` | -12 | no free cluster left in the writable area, or the directory is full |
+| `ENOSPC` | -12 | no free 2 KiB cluster left on the default image, or the directory is full |
 | `EMFILE` | -13 | the process already has 16 open files |
 | `EFBIG` | -14 | the file would pass 2 GiB - 1 |
 
@@ -302,17 +308,19 @@ different.
 There's no rollback and no journal. If a disk write or flush fails, the call returns `-EIO`, whatever was already
 written stays, and every later write, create or truncate on that disk returns `-EIO` until the next boot; reads keep
 working. The "clean shutdown" bits in FAT entry 1 aren't used, so nothing marks the volume as dirty. After a crash or
-an I/O error, check the image with `fsck.fat -n` (package `dosfstools`) on a copy padded to the size the BPB gives:
+an I/O error, check a copy of the image with `fsck.fat -n` (package `dosfstools`):
 
 ```sh
 cp bin/os.bin /tmp/check.img
-truncate -s 4000000000 /tmp/check.img
-fsck.fat -n /tmp/check.img
+LC_ALL=C fsck.fat -n /tmp/check.img
 ```
 
-On a freshly built image this prints one finding, that the boot sector has the label `RORTHOX` but the root
-directory has no label entry, then "Leaving filesystem unchanged" and the summary line, and exits with 1. Any other
-finding is a real problem. `-n` never changes the copy.
+A clean new image needs no extension or repair. An old short-backed image with a 4 GB BPB must be
+extended on a **copy** to its BPB length before checking it; that historical image may also lack a
+matching volume-label record.
+
+A fresh image prints only the version and filesystem-summary lines and exits with 0. Check the output as well
+as the exit status: some FAT errors are reported even when `fsck.fat -n` exits with 0. `-n` does not repair the copy.
 
 The FAT lookup is one scanner for reading and writing. It skips long-filename (LFN) entries and the volume label,
 follows a directory's cluster chain past its first cluster, and checks every cluster number against the volume.
@@ -344,7 +352,7 @@ builds for i686. `make all` gives:
 |---|---|
 | `bin/boot.bin` | the boot sector (512 bytes) |
 | `bin/kernel.bin` | the kernel (72,536 bytes right now) |
-| `bin/os.bin` | the disk image with `shell.elf` and `blank.elf` on it (16,850,264 bytes) |
+| `bin/os.bin` | the disk image with `shell.elf` and `blank.elf` on it (16,879,616 bytes) |
 | `bin/rorthox.iso` | the GRUB ISO, only with `make iso` (5,195,776 bytes) |
 
 `./build.sh` does the same as `make all` and adds `~/opt/cross/bin` to the PATH itself. `./clean.sh` (or
@@ -738,9 +746,9 @@ isolate every resource or protect against every kernel bug.
 - **Program lookup.** The search list is fixed when the kernel is built. There's no current directory and no
   environment, so there's no `PATH` to change at run time.
 - **Filesystem.** 8.3 names only, no long file names. There's no mkdir, delete or rename, and directories don't
-  grow: when the root directory (64 entries) or a subdirectory's clusters are full, creating a file gives `-ENOSPC`.
+  grow: when the root directory (511 file entries) or a subdirectory's clusters are full, creating a file gives `-ENOSPC`.
   Only the clusters that fit inside the real disk can be written (see [Disk image](#disk-image)), and every file,
-  even a 1-byte one, takes a whole 64 KiB cluster. There are no permissions: any program can write any file that
+  even a 1-byte one, takes a whole 2 KiB cluster on the default image. There are no permissions: any program can write any file that
   isn't marked read-only. Reads walk cluster chains with a cap at the volume's cluster count rather than detecting
   loops, so a crafted image can still make them slow; file writes refuse looped or broken file chains.
 - **Crash safety.** Writes follow a fixed order (see [Writing files](#writing-files)), but there is no journal and
@@ -749,7 +757,7 @@ isolate every resource or protect against every kernel bug.
   return `-EIO`), or bytes overwritten in place only partly. Nothing marks the volume dirty, so run `fsck.fat -n`
   after a crash. The order has been checked against a disk model and in QEMU, not with power cuts on a real drive.
 - **Disk writes stop everything else.** The driver polls with IRQ14 masked and interrupts off, so a long write
-  (zero-filling a new 64 KiB cluster, several flushes) delays timer ticks, which makes the clock and sleeps run
+  (zero-filling a new 2 KiB cluster on the default image, several flushes) delays timer ticks, which makes the clock and sleeps run
   late, and keys typed meanwhile can be lost. Every read or write call also follows the file's cluster chain from
   its start, one FAT sector read per cluster, so small reads and writes of a big file take longer the bigger the
   file is. After a timeout or a drive error the driver returns `-EIO` and doesn't

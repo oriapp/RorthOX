@@ -1,7 +1,7 @@
 include config.mk
 
 # Config values must come from config.mk, not untracked make command-line overrides.
-CONFIG_KEYS := RESERVED_SECTORS SECTORS_PER_FAT SECTOR_SIZE KERNEL_LOAD_ADDRESS KERNEL_BOOT_STACK_TOP KERNEL_TSS_STACK_TOP KERNEL_TSS_STACK_SIZE PROGRAM_LOAD_ADDRESS PROGRAM_LOAD_LIMIT USER_STACK_TOP USER_STACK_SIZE KERNEL_CODE_SELECTOR KERNEL_DATA_SELECTOR USER_CODE_SELECTOR USER_DATA_SELECTOR TSS_SELECTOR SYSCALL_VECTOR PIC_MASTER_VECTOR_BASE PIC_SLAVE_VECTOR_BASE TOTAL_INTERRUPTS SYSCALL_SUM SYSCALL_PRINT SYSCALL_GETKEY SYSCALL_PUTCHAR SYSCALL_MALLOC SYSCALL_FREE SYSCALL_PROCESS_LOAD_START SYSCALL_INVOKE_SYSTEM_COMMAND SYSCALL_GET_PROGRAM_ARGUMENTS SYSCALL_EXIT SYSCALL_PRINTC SYSCALL_TERMINAL_MOVE_CURSOR SYSCALL_SLEEP SYSCALL_FILE_OPEN SYSCALL_FILE_READ SYSCALL_FILE_WRITE SYSCALL_FILE_SEEK SYSCALL_FILE_STAT SYSCALL_FILE_CLOSE SYSCALL_GET_TICKS KEY_UP KEY_DOWN KEY_LEFT KEY_RIGHT KEY_HOME KEY_END KEY_INSERT KEY_DELETE KEY_PAGE_UP KEY_PAGE_DOWN COMMAND_ARGUMENT_SIZE MAX_COMMAND_ARGUMENTS PROCESS_HEAP_LIMIT_BYTES ELF_FILE_LIMIT_BYTES PROGRAM_SEARCH_PATHS RORTHOX_NAME RORTHOX_VERSION QEMU_RAM_MIB
+CONFIG_KEYS := RESERVED_SECTORS SECTORS_PER_FAT SECTORS_PER_CLUSTER ROOT_DIR_ENTRIES TOTAL_SECTORS SECTOR_SIZE KERNEL_LOAD_ADDRESS KERNEL_BOOT_STACK_TOP KERNEL_TSS_STACK_TOP KERNEL_TSS_STACK_SIZE PROGRAM_LOAD_ADDRESS PROGRAM_LOAD_LIMIT USER_STACK_TOP USER_STACK_SIZE KERNEL_CODE_SELECTOR KERNEL_DATA_SELECTOR USER_CODE_SELECTOR USER_DATA_SELECTOR TSS_SELECTOR SYSCALL_VECTOR PIC_MASTER_VECTOR_BASE PIC_SLAVE_VECTOR_BASE TOTAL_INTERRUPTS SYSCALL_SUM SYSCALL_PRINT SYSCALL_GETKEY SYSCALL_PUTCHAR SYSCALL_MALLOC SYSCALL_FREE SYSCALL_PROCESS_LOAD_START SYSCALL_INVOKE_SYSTEM_COMMAND SYSCALL_GET_PROGRAM_ARGUMENTS SYSCALL_EXIT SYSCALL_PRINTC SYSCALL_TERMINAL_MOVE_CURSOR SYSCALL_SLEEP SYSCALL_FILE_OPEN SYSCALL_FILE_READ SYSCALL_FILE_WRITE SYSCALL_FILE_SEEK SYSCALL_FILE_STAT SYSCALL_FILE_CLOSE SYSCALL_GET_TICKS KEY_UP KEY_DOWN KEY_LEFT KEY_RIGHT KEY_HOME KEY_END KEY_INSERT KEY_DELETE KEY_PAGE_UP KEY_PAGE_DOWN COMMAND_ARGUMENT_SIZE MAX_COMMAND_ARGUMENTS PROCESS_HEAP_LIMIT_BYTES ELF_FILE_LIMIT_BYTES PROGRAM_SEARCH_PATHS RORTHOX_NAME RORTHOX_VERSION QEMU_RAM_MIB
 $(foreach key,$(CONFIG_KEYS),$(if $(filter command line,$(origin $(key))),$(error $(key) must be set in config.mk, not on the command line)))
 
 FILES = ./build/kernel.asm.o ./build/arch/sys.o ./build/arch/pit.o ./build/arch/sys.asm.o ./build/arch/fpu.o ./build/arch/fpu.asm.o ./build/kernel.o ./build/arch/tty.o ./build/idt/idt.asm.o ./build/idt/idt.o ./build/memory/memory.o ./build/io/io.asm.o ./build/loader/formats/elfloader.o ./build/loader/formats/elf.o ./build/gdt/gdt.o ./build/gdt/gdt.asm.o ./build/memory/heap/heap.o ./build/memory/heap/kheap.o ./build/memory/paging/paging.o ./build/memory/paging/paging.asm.o ./build/isr80h/isr80h.o ./build/isr80h/heap.o ./build/keyboard/keyboard.o ./build/keyboard/classic.o ./build/isr80h/io.o ./build/isr80h/process.o ./build/isr80h/file.o ./build/isr80h/misc.o ./build/disk/disk.o ./build/disk/streamer.o ./build/task/process.o ./build/task/task.o ./build/task/task.asm.o ./build/task/tss.asm.o ./build/fs/pparser.o ./build/fs/file.o ./build/fs/fat/fat16.o ./build/string/string.o
@@ -15,6 +15,7 @@ KERNEL_FLAGS = $(FLAGS) -mgeneral-regs-only
 KERNEL_SECTORS := $(shell echo $$(($(RESERVED_SECTORS) - 1)))
 FAT1_SECTOR := $(RESERVED_SECTORS)
 FAT2_SECTOR := $(shell echo $$(($(RESERVED_SECTORS) + $(SECTORS_PER_FAT))))
+ROOT_SECTOR := $(shell echo $$(($(RESERVED_SECTORS) + 2 * $(SECTORS_PER_FAT))))
 
 # Files copied into the FAT16 filesystem of the disk image (with mtools, no root needed).
 IMAGE_FILES = ./programs/shell/build/shell.elf ./programs/blank/build/blank.elf
@@ -82,6 +83,9 @@ $(CONFIG_INC): config.mk Makefile
 	@printf '%s\n' \
 		'%define RESERVED_SECTORS $(RESERVED_SECTORS)' \
 		'%define SECTORS_PER_FAT $(SECTORS_PER_FAT)' \
+		'%define SECTORS_PER_CLUSTER $(SECTORS_PER_CLUSTER)' \
+		'%define ROOT_DIR_ENTRIES $(ROOT_DIR_ENTRIES)' \
+		'%define TOTAL_SECTORS $(TOTAL_SECTORS)' \
 		'%define KERNEL_SECTORS $(KERNEL_SECTORS)' \
 		'%define SECTOR_SIZE $(SECTOR_SIZE)' \
 		'%define KERNEL_LOAD_ADDRESS $(KERNEL_LOAD_ADDRESS)' \
@@ -241,6 +245,25 @@ endif
 ifneq ($(SECTOR_SIZE),512)
 $(error SECTOR_SIZE must be 512: the BPB and ATA driver support only 512-byte sectors)
 endif
+# The BPB's 8/16-bit fields, complete root sectors, FAT16 cluster range and
+# FAT entry capacity must all describe the same fully backed disk image.
+# Limit input spelling before shell arithmetic (dash can saturate on overflow).
+ifneq ($(shell r='$(strip $(RESERVED_SECTORS))'; f='$(strip $(SECTORS_PER_FAT))'; \
+ c='$(strip $(SECTORS_PER_CLUSTER))'; e='$(strip $(ROOT_DIR_ENTRIES))'; \
+ t='$(strip $(TOTAL_SECTORS))'; \
+ for n in "$$r" "$$f" "$$c" "$$e" "$$t"; do [ $${#n} -le 10 ] || exit 1; done; \
+ r=$$((r)); f=$$((f)); c=$$((c)); e=$$((e)); t=$$((t)); \
+ [ "$$r" -ge 2 ] && [ "$$r" -le 256 ] && \
+ [ "$$f" -ge 1 ] && [ "$$f" -le 65535 ] && \
+ [ "$$c" -ge 1 ] && [ "$$c" -le 64 ] && [ $$((c & (c - 1))) -eq 0 ] && \
+ [ "$$e" -ge 16 ] && [ "$$e" -le 65520 ] && [ $$((e % 16)) -eq 0 ] && \
+ [ "$$t" -ge 1 ] && [ "$$t" -le 65535 ] || exit 1; \
+ data=$$((t - r - 2 * f - e / 16)); [ "$$data" -gt 0 ] && \
+ [ $$((data % c)) -eq 0 ] || exit 1; clusters=$$((data / c)); \
+ [ "$$clusters" -ge 4101 ] && [ "$$clusters" -le 65508 ] && \
+ [ $$((clusters + 2)) -le $$((f * 256)) ] && echo valid),valid)
+$(error FAT16 geometry must fit the BPB fields, sector-aligned root/data, both FATs and 16-cluster type margins)
+endif
 # Identity values are emitted into C strings and shell assignments.
 ifneq ($(shell printf '%s\n' '$(RORTHOX_NAME)' '$(RORTHOX_VERSION)' | LC_ALL=C grep -Ec '^[A-Za-z0-9][A-Za-z0-9._-]*$$'),2)
 $(error RORTHOX_NAME and RORTHOX_VERSION must use ASCII letters, digits, dots, underscores or hyphens)
@@ -280,11 +303,14 @@ build/config/image-files.sha256: image_files_check
 ./bin/os.bin: ./bin/boot.bin ./bin/kernel.bin build/config/image-files.sha256
 	rm -f $@
 	cat ./bin/boot.bin ./bin/kernel.bin > $@
-	# Append 16 MiB of zeroes: the FAT tables, root directory and data area of the filesystem.
-	dd if=/dev/zero bs=1048576 count=16 status=none >> $@
+	# Pad the kernel area before sizing the fully backed FAT16 volume.
+	truncate -s $$(( $(RESERVED_SECTORS) * $(SECTOR_SIZE) )) $@
+	truncate -s $$(( $(TOTAL_SECTORS) * $(SECTOR_SIZE) )) $@
 	# Mark FAT entries 0 and 1 (media byte 0xF8, end-of-chain) in both FAT copies.
 	printf '\370\377\377\377' | dd of=$@ bs=$(SECTOR_SIZE) seek=$(FAT1_SECTOR) conv=notrunc status=none
 	printf '\370\377\377\377' | dd of=$@ bs=$(SECTOR_SIZE) seek=$(FAT2_SECTOR) conv=notrunc status=none
+	# A matching root label is required for a clean fsck.fat check.
+	printf 'RORTHOX    \010' | dd of=$@ bs=$(SECTOR_SIZE) seek=$(ROOT_SECTOR) conv=notrunc status=none
 	mcopy -i $@ $(IMAGE_FILES) ::
 	# The shipped programs are read-only, so the file syscalls can't overwrite them.
 	mattrib -i $@ +r $(addprefix ::,$(notdir $(IMAGE_FILES)))

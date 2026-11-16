@@ -4,7 +4,10 @@
 #   RESERVED ..                    FAT 1, FAT 2 (SECTORS_PER_FAT each), root directory, data
 # The kernel size guard prevents truncation by the bootloader.
 RESERVED_SECTORS = 200
-SECTORS_PER_FAT = 256
+SECTORS_PER_FAT = 32
+SECTORS_PER_CLUSTER = 4
+ROOT_DIR_ENTRIES = 512
+TOTAL_SECTORS = 32968
 
 # Logical disk sector (bytes; only 512 is supported)
 SECTOR_SIZE = 512
