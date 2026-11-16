@@ -19,6 +19,7 @@
     "scripts/tests/fat-chain.sh": 6.0,
     "scripts/tests/fat-directory.sh": 15.5,
     "scripts/tests/fat-entry.sh": 0.3,
+    "scripts/tests/fat-fixtures.sh": 1.0,
     "scripts/tests/fat-lookup.sh": 6.3,
     "scripts/tests/fat-write.sh": 6.4,
     "scripts/tests/file-descriptors.sh": 0.3,
