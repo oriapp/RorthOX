@@ -7,12 +7,13 @@
  *
  *   marker  first link = 0x0000, 0x0001, every out-of-range value 0xFFF0-0xFFF6, the bad cluster mark
  *           0xFFF7 and every end of chain mark 0xFFF8-0xFFFF: fread() returns -EIO, and no seek or
- *           sector read goes anywhere but the first cluster's data and its own FAT entry (the
+ *           sector read goes anywhere but the first cluster's data and its FAT sector (the
  *           value is never used as a cluster or looked up as a link).
  *   link    first link = 0x0FF0, 0x0FF6, 0x0FF7, 0x0FF8, 0x0FFF (FAT12 marks, but ordinary FAT16
  *           clusters; the model disk serves them from pair.bin's real second cluster and their own
  *           entry is end of chain): the whole file reads back.
- *   error   four.bin (4 clusters) with the k-th FAT entry read failing, for every k, with -ENOMEM
+ *   error   four.bin (4 clusters), mapped to distinct FAT sectors, with the k-th lookup failing
+ *           for every k, with -ENOMEM
  *           (an error the FAT code doesn't make itself): fread() returns that error unchanged, and
  *           nothing is sought or read after the failed read (the error is never used as a cluster).
  *   start   the first cluster of a file (from its directory entry) given straight to fat16.c's
@@ -97,8 +98,8 @@ static int seen_seek(long pos)
     return 0;
 }
 
-// Every seek and sector read stayed in the data of the given clusters or at the link entries
-// of the given clusters.
+// Every seek and sector read stayed in the data of the given clusters or in the FAT sectors
+// holding their link entries.
 static int stayed_in(const char *what, const long *data_clusters, int nd, const long *links, int nl)
 {
     for (int i = 0; i < seek_count; i++)
@@ -111,7 +112,7 @@ static int stayed_in(const char *what, const long *data_clusters, int nd, const 
         }
         for (int k = 0; k < nl; k++)
         {
-            ok |= pos == fat_entry_pos(links[k]);
+            ok |= pos == fat_sector_pos(links[k]);
         }
         if (!ok)
         {
@@ -181,7 +182,7 @@ static int marker(unsigned int value)
     fat_host_set_entry(f.chain[0], value);
     int res = read_whole(&f, data);
     host_snprintf(what, sizeof(what), "first link %#06x", value);
-    if (!seen_seek(fat_entry_pos(f.chain[0])))
+    if (!seen_seek(fat_sector_pos(f.chain[0])))
     {
         printf("    %s: the link was never looked up\n", what);
         return 1;
@@ -226,7 +227,7 @@ static int link(unsigned int value)
     return 0;
 }
 
-// The k-th FAT entry read of four.bin fails.
+// Put each link in a different FAT sector so the k-th lookup is a real cache miss.
 static int lookup_fails(int k)
 {
     struct file f;
@@ -235,6 +236,14 @@ static int lookup_fails(int k)
     {
         return 1;
     }
+    for (int i = 1; i < f.n; i++)
+    {
+        long previous = i == 1 ? f.chain[0] : 0x1000 + (i - 2) * 256;
+        long cluster = 0x1000 + (i - 1) * 256;
+        fat_host_set_entry(previous, cluster);
+        fat_host_map_cluster(cluster, f.chain[i]);
+    }
+    fat_host_set_entry(0x1200, 0xFFFF);
     int fd = fopen(f.path, "r");
     if (fd <= 0)
     {

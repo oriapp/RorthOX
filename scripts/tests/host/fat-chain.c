@@ -3,10 +3,10 @@
  * kernel/fs/file.c, pparser.c, fat/fat16.c and disk/streamer.c, built with the host C compiler, from
  * a copy of the RorthOX image (fat-host.c is the disk). Each file is read with one
  * fread(filesize, 1) from position 0 and compared byte for byte with its source. Every position
- * fat16.c seeks to during the read must be either the entry of a chain cluster in the first FAT
- * (reserved sectors * sector size + 2 * cluster, from the BPB) or inside a data cluster of the
- * chain, and every link of the chain must have been looked up there. Sector reads must stay in
- * the same places.
+ * fat16.c seeks to during the read must be either the sector of a chain link in the first FAT
+ * (from the BPB) or inside a data cluster of the chain. Each link's FAT sector must have been
+ * fetched, though multiple links can share one cached sector. Sector reads must stay in the
+ * same places, and the byte comparison proves the links were followed correctly.
  *
  * Usage: fat-chain <image> <8.3 name> <source file> [<8.3 name> <source file>]...
  *        (8.3 names as in the directory entry, e.g. "CHAIN   BIN")
@@ -37,12 +37,12 @@ static int in_chain(long cluster, const long *chain, int n)
     return 0;
 }
 
-// The link of chain[i] (i < n - 1) is looked up at its first-FAT entry.
-static int is_link_entry(long pos, const long *chain, int n)
+// The sector of chain[i] (i < n - 1) in the first FAT.
+static int is_link_sector(long pos, const long *chain, int n)
 {
     for (int i = 0; i < n - 1; i++)
     {
-        if (pos == fat_entry_pos(chain[i]))
+        if (pos == fat_sector_pos(chain[i]))
         {
             return 1;
         }
@@ -105,11 +105,11 @@ static int check_file(const char *name83, const char *source)
     for (int i = 0; i < seek_count && !failed; i++)
     {
         long pos = seek_log[i];
-        if (is_link_entry(pos, chain, n) || in_chain(cluster_of_pos(pos), chain, n))
+        if (is_link_sector(pos, chain, n) || in_chain(cluster_of_pos(pos), chain, n))
         {
             continue;
         }
-        printf("  FAIL %s: seek to byte %ld, neither a link entry (%ld + 2 * cluster) nor chain data\n",
+        printf("  FAIL %s: seek to byte %ld, neither a link sector (FAT starts at %ld) nor chain data\n",
                path, pos, fat_start);
         failed = 1;
     }
@@ -118,11 +118,11 @@ static int check_file(const char *name83, const char *source)
         int seen = 0;
         for (int k = 0; k < seek_count; k++)
         {
-            seen |= seek_log[k] == fat_entry_pos(chain[i]);
+            seen |= seek_log[k] == fat_sector_pos(chain[i]);
         }
         if (!seen)
         {
-            printf("  FAIL %s: link of cluster %ld never looked up at byte %ld\n", path, chain[i], fat_entry_pos(chain[i]));
+            printf("  FAIL %s: FAT sector of cluster %ld never fetched at byte %ld\n", path, chain[i], fat_sector_pos(chain[i]));
             failed = 1;
         }
     }
@@ -172,7 +172,7 @@ static int check_file(const char *name83, const char *source)
         {
             lookups += seek_log[k] >= fat_start && seek_log[k] < fat_end;
         }
-        printf("  ok   %s: %ld bytes, %d %s clusters, %d FAT lookups, every byte read back\n",
+        printf("  ok   %s: %ld bytes, %d %s clusters, %d FAT sector fetches, every byte read back\n",
                path, size, n, contiguous ? "contiguous" : "fragmented", lookups);
     }
     return failed;

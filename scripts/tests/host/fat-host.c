@@ -80,6 +80,11 @@ long fat_entry_pos(long cluster)
     return geo.reserved_sectors * geo.sector_size + 2 * cluster;
 }
 
+long fat_sector_pos(long cluster)
+{
+    return fat_entry_pos(cluster) / geo.sector_size * geo.sector_size;
+}
+
 long cluster_pos(long cluster)
 {
     return (geo.data_sector + (cluster - 2) * geo.sectors_per_cluster) * geo.sector_size;

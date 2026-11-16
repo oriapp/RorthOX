@@ -57,7 +57,7 @@ unsigned int fat_host_image_entry(long cluster);
 // Reads of cluster <virt> get the bytes of cluster <real>.
 void fat_host_map_cluster(long virt, long real);
 // Fail the disk read that follows the <n>-th seek into the first FAT from now (n counts from 1),
-// i.e. the <n>-th FAT entry lookup, with the status <error> (e.g. -ENOMEM).
+// i.e. the <n>-th FAT cache miss, with the status <error> (e.g. -ENOMEM).
 void fat_host_fail_fat_lookup(int n, int error);
 
 // Fail the <n>-th disk read from now (n counts from 1) with <error>. 0 = no such failure.
@@ -67,6 +67,7 @@ void fat_host_fail_sector(long lba, int error);
 
 // Byte positions the FAT16 code should use.
 long fat_entry_pos(long cluster);    // entry <cluster> in the first FAT
+long fat_sector_pos(long cluster);   // sector containing that entry
 long cluster_pos(long cluster);      // first byte of data cluster <cluster>
 long cluster_of_pos(long pos);       // data cluster that holds byte <pos>, -1 if outside the data area
 

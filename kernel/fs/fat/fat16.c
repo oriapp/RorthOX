@@ -135,6 +135,9 @@ struct fat_private
     struct disk_stream *cluster_read_stream;
     // Used to stream the file allocation table
     struct disk_stream *fat_read_stream;
+    unsigned char fat_cache[RORTHOX_SECTOR_SIZE];
+    uint32_t fat_cache_sector;
+    int fat_cache_valid;
 
     // Used in situations where we stream the directory
     struct disk_stream *directory_stream;
@@ -584,20 +587,27 @@ static int fat16_get_fat_entry(struct disk *disk, int cluster)
     }
 
     uint32_t fat_table_position = fat16_get_first_fat_sector(private) * disk->sector_size;
-    res = diskstreamer_seek(stream, fat_table_position + (cluster * RORTHOX_FAT16_FAT_ENTRY_SIZE));
-    if (res < 0)
+    uint32_t position = fat_table_position + cluster * RORTHOX_FAT16_FAT_ENTRY_SIZE;
+    uint32_t sector = position / RORTHOX_SECTOR_SIZE;
+    uint32_t offset = position % RORTHOX_SECTOR_SIZE;
+    if (!private->fat_cache_valid || private->fat_cache_sector != sector)
     {
-        goto out;
+        private->fat_cache_valid = 0;
+        res = diskstreamer_seek(stream, sector * RORTHOX_SECTOR_SIZE);
+        if (res < 0)
+        {
+            goto out;
+        }
+        res = diskstreamer_read(stream, private->fat_cache, sizeof(private->fat_cache));
+        if (res < 0)
+        {
+            goto out;
+        }
+        private->fat_cache_sector = sector;
+        private->fat_cache_valid = 1;
     }
 
-    uint16_t result = 0;
-    res = diskstreamer_read(stream, &result, sizeof(result));
-    if (res < 0)
-    {
-        goto out;
-    }
-
-    res = result;
+    res = private->fat_cache[offset] | (private->fat_cache[offset + 1] << 8);
 
 out:
     return res;
@@ -1143,6 +1153,7 @@ out:
 static int fat16_prepare_write(struct disk *disk)
 {
     struct fat_private *private = disk->fs_private;
+    private->fat_cache_valid = 0;
     if (private->mutation_disabled)
     {
         return -EIO;
@@ -1216,6 +1227,7 @@ static int fat16_write_at(struct disk *disk, int pos, const void *data, int byte
         // -EINVARG with the position unmoved: the request was refused before any sector went to the drive
         if (res != -EINVARG || private->directory_stream->pos != pos)
         {
+            private->fat_cache_valid = 0;
             private->mutation_disabled = 1;
         }
         return -EIO;
@@ -1228,6 +1240,7 @@ static int fat16_flush(struct disk *disk)
     struct fat_private *private = disk->fs_private;
     if (disk_flush(disk) < 0)
     {
+        private->fat_cache_valid = 0;
         private->mutation_disabled = 1;
         return -EIO;
     }
@@ -1237,6 +1250,7 @@ static int fat16_flush(struct disk *disk)
 static int fat16_set_entry(struct disk *disk, int copy, int cluster, uint16_t value)
 {
     struct fat_private *private = disk->fs_private;
+    private->fat_cache_valid = 0;
     struct fat_header *h = &private->header.primary_header;
     int pos = (h->reserved_sectors + copy * h->sectors_per_fat) * disk->sector_size + cluster * 2;
     return fat16_write_at(disk, pos, &value, sizeof(value));
