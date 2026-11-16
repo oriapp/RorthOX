@@ -15,10 +15,12 @@
 # seeks, read back, truncate, copy BLANK.ELF to COPY.ELF, create in SUB), then copy.elf from the
 # shell (the loader finds and runs the new file), errors (bad handles, paths, pointers and stack
 # operands, wrong modes, 17th open, read-only file, directory), parent/child (a handle number is
-# only valid in the process that opened it), nospace (until -ENOSPC), fullroot (until -ENOSPC),
-# hold and crash (16 handles open at exit and at a #UD). The kernel's global descriptor table
-# (file_descriptors, from build/kernel.map) is read with the QEMU monitor: 16 entries while a
-# program holds its handles, none after it ended, by exit or by the fault.
+# only valid in the process that opened it; the parent stops waiting once the child has created
+# CHILD.TXT, so the child can still be printing after the parent ended: the test waits until each
+# one's last line is followed by "Process was terminated"), nospace (until -ENOSPC), fullroot
+# (until -ENOSPC), hold and crash (16 handles open at exit and at a #UD). The kernel's global
+# descriptor table (file_descriptors, from build/kernel.map) is read with the QEMU monitor: 16
+# entries while a program holds its handles, none after it ended, by exit or by the fault.
 #
 # After boot 1: mdir/mtype show every file with the expected bytes, both FATs are the same, every
 # cluster up to the last usable one is taken and the partial cluster after it is not, the root is
@@ -169,6 +171,34 @@ step() {
     alive=0
     return 1
 }
+# ended <tag> <mode>...: until one screen shows, for each mode, the row "filetest: end <mode>"
+# right above a row "Process was terminated" (either may start with the shell's "> "): every one
+# of those programs has printed its last line and ended. Keeps that screen as screen-<tag>.txt.
+ended() {
+    local tag="$1" deadline=$((SECONDS + RUN_TIMEOUT)) m all
+    shift
+    [ "$alive" = 1 ] || return 1
+    while ((SECONDS < deadline)); do
+        qemu_running || break
+        screen_snapshot
+        all=1
+        for m in "$@"; do
+            awk -v t="filetest: end $m" '{ sub(/^> /, "") }
+                prev == t && $0 == "Process was terminated" { found = 1 }
+                { prev = $0 } END { exit !found }' "$Q_OUT/screen.txt" || { all=0; break; }
+        done
+        if [ "$all" = 1 ]; then
+            echo "  filetest $* ended after ${SECONDS} s"
+            cp "$Q_OUT/screen.txt" "$OUT/screen-$tag.txt"
+            return 0
+        fi
+        sleep 0.5
+    done
+    echo "  gave up waiting for filetest $* to end"
+    cp "$Q_OUT/screen.txt" "$OUT/screen-$tag.txt" 2> /dev/null || true
+    alive=0
+    return 1
+}
 # The mode passed: stop the later steps if not (an old kernel fails the first one at once).
 passed() {
     grep -qF "filetest: $1 PASS" "$OUT/screen-$1.txt" 2> /dev/null && return 0
@@ -186,7 +216,7 @@ if wait_screen "${RORTHOX_NAME} v${RORTHOX_VERSION}" "$BOOT_TIMEOUT"; then
     { step "filetest.elf write" "filetest: end write" write && passed write; } || true
     step "copy.elf copied1" "copied1" copy || true
     { step "filetest.elf errors" "filetest: end errors" errors && passed errors; } || true
-    { step "filetest.elf parent" "filetest: end parent" parent && passed parent; } || true
+    { step "filetest.elf parent" "filetest: end parent" parent && ended parent child parent && passed parent; } || true
     { step "filetest.elf nospace" "filetest: end nospace" nospace && passed nospace; } || true
     { step "filetest.elf fullroot" "filetest: end fullroot" fullroot && passed fullroot; } || true
     if step "filetest.elf hold" "filetest: hold armed" hold; then
