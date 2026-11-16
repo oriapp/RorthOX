@@ -24,8 +24,8 @@
  *                   one component, 259 and 260 bytes, 260 bytes with no NUL at all, 128
  *                   components in 258 and 259 bytes, 129 components (260 bytes)
  *   allocation      the parser's one allocation failing: -ENOMEM, nothing left; an extended
- *                   open with each allocation failing in turn: -ENOMEM or -EUNIMP, nothing left,
- *                   no descriptor slot taken
+ *                   open for reading, writing and appending with each allocation failing in turn:
+ *                   -ENOMEM or -EUNIMP, nothing left, no descriptor slot taken
  *   fail closed     an extended open of any FAT path in any mode is -EUNIMP without one disk
  *                   read or write (even with no disk at all); a bad extended path, mode or policy
  *                   is -EINVARG; the legacy policy behaves as file_open
@@ -372,31 +372,38 @@ static void c_allocation(void)
               "%.20s with its allocation failing: %d, want -ENOMEM", paths[i], ERROR_I(r));
     }
 
-    // An extended open, each allocation failing in turn: refused, nothing left, no slot taken.
-    int n;
-    for (n = 1; n < 16; n++)
+    // An extended open in each mode, each allocation failing in turn: refused, nothing left, no
+    // slot taken. Reading allocates the path only; writing and appending also take a descriptor
+    // (and its slot) before the filesystem refuses them.
+    static const int allocations[] = {1, 2, 2};
+    for (int mode = FILE_MODE_READ; mode <= FILE_MODE_APPEND; mode++)
     {
-        CHECK(fimg_mount() == 0, "mount");
-        int live = kalloc_live();
-        fimg_fail_alloc(n);
-        int res = file_open_policy("0:/blank.elf", FILE_MODE_READ, FILE_OPEN_EXTENDED);
-        int failed = kalloc_failed();
-        fimg_fail_alloc(0);
-        CHECK(res == (failed ? -ENOMEM : -EUNIMP), "allocation %d failing: %d", n, res);
-        CHECK(kalloc_live() == live && !kalloc_bad_frees() && !kalloc_poison_errors(),
-              "allocation %d failing: %d left", n, kalloc_live() - live);
-        int fd = file_open("0:/blank.elf", FILE_MODE_READ);
-        CHECK(fd == 1, "after it, the first handle is free (%d)", fd);
-        if (fd > 0)
+        int n;
+        for (n = 1; n < 16; n++)
         {
-            fclose(fd);
+            CHECK(fimg_mount() == 0, "mount");
+            int live = kalloc_live();
+            fimg_fail_alloc(n);
+            int res = file_open_policy("0:/blank.elf", mode, FILE_OPEN_EXTENDED);
+            int failed = kalloc_failed();
+            fimg_fail_alloc(0);
+            CHECK(res == (failed ? -ENOMEM : -EUNIMP), "mode %d, allocation %d failing: %d", mode, n, res);
+            CHECK(kalloc_live() == live && !kalloc_bad_frees() && !kalloc_poison_errors(),
+                  "mode %d, allocation %d failing: %d left", mode, n, kalloc_live() - live);
+            int fd = file_open("0:/blank.elf", FILE_MODE_READ);
+            CHECK(fd == 1, "mode %d: after it, the first handle is free (%d)", mode, fd);
+            if (fd > 0)
+            {
+                fclose(fd);
+            }
+            if (!failed)
+            {
+                break;
+            }
         }
-        if (!failed)
-        {
-            break;
-        }
+        CHECK(n == allocations[mode] + 1, "mode %d: the extended open allocates %d times before it is refused (%d)",
+              mode, allocations[mode], n - 1);
     }
-    CHECK(n == 2, "the extended open allocates once before it is refused (%d)", n);
 }
 
 static void c_fail_closed(void)
