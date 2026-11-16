@@ -229,7 +229,9 @@ fi
 qemu_stop || true
 grep -F 'filetest:' "$OUT/boot/screen.txt" 2> /dev/null | sed 's/^/  /' || true
 check "kernel: fullroot passed"                       "$OUT/boot/screen.txt" "filetest: fullroot PASS"
-check "kernel: the 511th file created, the 512th refused" "$OUT/boot/screen.txt" "filetest: fullroot created 1"
+# The whole line (behind an optional prompt), so "created 10" can't pass for "created 1".
+grep -Ex '(> )?filetest: fullroot created 1' "$OUT/boot/screen.txt" > "$OUT/fullroot-created.txt" 2> /dev/null || true
+check "kernel: the 511th file created, the 512th refused" "$OUT/fullroot-created.txt" "filetest: fullroot created 1"
 check "no kernel panic"                               "$OUT/boot/debugcon.log" "PANIC" absent
 {
     echo "root_files=$($FATIMG slots "$IMG" | grep -c ' used ')"

@@ -183,7 +183,9 @@ uses whole 2 KiB clusters (numbers 2–8,169). The BPB and image length agree; t
 actual drive capacity through IDENTIFY before allocating clusters. On this default image, writing past the
 remaining 2 KiB clusters returns `-ENOSPC` (earlier images reached this limit in 64 KiB steps); the
 2 GiB - 1 `-EFBIG` limit is unchanged. Existing FAT16 images with the earlier
-64 KiB-cluster, 64-root-entry layout can still be read: attach one as the primary drive instead of `bin/os.bin`.
+64 KiB-cluster, 64-root-entry layout can still be read. An old image holds its own old kernel in sectors 1-199,
+so don't boot from it: boot this kernel from the GRUB ISO with the old image as drive 0, e.g.
+`qemu-system-i386 -m 128 -drive file=old.img,format=raw,index=0 -cdrom bin/rorthox.iso -boot d`.
 Building a new image does not convert an old image or alter the kernel's BPB-based reader.
 
 ### Subsystems
