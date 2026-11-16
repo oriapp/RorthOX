@@ -129,6 +129,9 @@ struct fat_file_descriptor
     struct fat_item *item;
     uint32_t pos; // current position in file
     struct fat_file_cursor cursor;
+    int chain_count;
+    int chain_tail;
+    int chain_valid;
     FILE_MODE mode;
     struct disk *disk;
     struct fat_file_descriptor *next;
@@ -175,7 +178,7 @@ static int fat16_directory_next(struct fat_directory_cursor *cursor, struct fat_
 static int fat16_prepare_write(struct disk *disk);
 static int fat16_truncate(struct disk *disk, struct fat_item *item);
 static struct fat_item *fat16_create(struct disk *disk, struct path_part *path);
-static int fat16_check_file_chain(struct disk *disk, struct fat_directory_item *item);
+static int fat16_check_file_chain(struct disk *disk, struct fat_file_descriptor *desc);
 static int fat16_read_bytes(struct disk *disk, void *private, void *out, uint32_t count);
 static int fat16_write_bytes(struct disk *disk, void *private, const void *in, uint32_t count);
 static int fat16_seek_signed(void *private, int offset, FILE_SEEK_MODE whence);
@@ -1005,7 +1008,7 @@ void *fat16_open(struct disk *disk, struct path_part *path, FILE_MODE mode)
             goto err_out;
         }
         err_code = mode == FILE_MODE_WRITE ? fat16_truncate(disk, descriptor->item) :
-                   fat16_check_file_chain(disk, descriptor->item->item);
+                   fat16_check_file_chain(disk, descriptor);
         if (err_code < 0)
         {
             goto err_out;
@@ -1017,6 +1020,10 @@ void *fat16_open(struct disk *disk, struct path_part *path, FILE_MODE mode)
         goto err_out;
     }
 
+    if (mode != FILE_MODE_READ && !descriptor->item->item->filesize)
+    {
+        descriptor->chain_valid = 1;
+    }
     descriptor->pos = mode == FILE_MODE_APPEND ? descriptor->item->item->filesize : 0;
     descriptor->mode = mode;
     descriptor->disk = disk;
@@ -1307,6 +1314,7 @@ static void fat16_publish(struct disk *disk, int pos, struct fat_directory_item 
                 fat16_get_first_cluster(desc->item->item) != fat16_get_first_cluster(item))
             {
                 desc->cursor.valid = 0;
+                desc->chain_valid = 0;
             }
             *desc->item->item = *item;
         }
@@ -1405,23 +1413,53 @@ out:
     return res;
 }
 
-static int fat16_check_file_chain(struct disk *disk, struct fat_directory_item *item)
+static int fat16_check_file_chain(struct disk *disk, struct fat_file_descriptor *desc)
 {
-    struct fat_private *private = disk->fs_private;
-    uint16_t *chain;
-    int count;
-    int res = fat16_collect_chain(disk, item, &chain, &count);
-    if (res < 0)
+    if (desc->chain_valid)
     {
-        return res;
+        return 0;
+    }
+    struct fat_private *private = disk->fs_private;
+    struct fat_directory_item *item = desc->item->item;
+    if (item->high_16_bits_first_cluster)
+    {
+        return -EIO;
+    }
+    if (item->filesize > INT_MAX)
+    {
+        return -EFBIG;
     }
     uint32_t bytes = private->header.primary_header.sectors_per_cluster * disk->sector_size;
-    if ((uint32_t) count != item->filesize / bytes + (item->filesize % bytes != 0))
+    int count = item->filesize / bytes + (item->filesize % bytes != 0);
+    int current = item->low_16_bits_first_cluster;
+    int tail = 0;
+    if (count > private->max_writable - 1 || (!count && current))
     {
-        res = -EIO;
+        return -EIO;
     }
-    kfree(chain);
-    return res;
+    // An exact count followed by EOC rejects loops without retaining the chain.
+    for (int i = 0; i < count; i++)
+    {
+        if (!fat16_valid_cluster(disk, current) || current > private->max_writable)
+        {
+            return -EIO;
+        }
+        tail = current;
+        int next = fat16_get_fat_entry(disk, current);
+        if (next < 0)
+        {
+            return next;
+        }
+        if (i + 1 == count && next < RORTHOX_FAT16_EOC_START)
+        {
+            return -EIO;
+        }
+        current = next;
+    }
+    desc->chain_count = count;
+    desc->chain_tail = tail;
+    desc->chain_valid = 1;
+    return 0;
 }
 
 static int fat16_truncate(struct disk *disk, struct fat_item *item)
@@ -1599,7 +1637,7 @@ out:
     return result;
 }
 
-static int fat16_allocate(struct disk *disk, uint16_t *chain, int old_count, int needed)
+static int fat16_allocate(struct disk *disk, uint16_t *chain, int needed)
 {
     struct fat_private *private = disk->fs_private;
     struct fat_header *h = &private->header.primary_header;
@@ -1610,7 +1648,7 @@ static int fat16_allocate(struct disk *disk, uint16_t *chain, int old_count, int
     uint16_t first[256];
     uint16_t second[256];
     int loaded = -1;
-    int count = old_count;
+    int count = 0;
     for (int cluster = 2; count < needed && cluster <= private->max_writable; cluster++)
     {
         int sector = cluster / 256;
@@ -1667,26 +1705,61 @@ static int fat16_write_bytes(struct disk *disk, void *private_data, const void *
     uint32_t size = end > item.filesize ? end : item.filesize;
     int bytes = private->header.primary_header.sectors_per_cluster * disk->sector_size;
     int needed = size / bytes + (size % bytes != 0);
-    uint16_t *chain;
-    int old_count;
-    res = fat16_collect_chain(disk, &item, &chain, &old_count);
+    res = fat16_check_file_chain(disk, desc);
     if (res < 0)
     {
         return res;
     }
-    if ((uint32_t) old_count != item.filesize / bytes + (item.filesize % bytes != 0))
+    int old_count = desc->chain_count;
+    int old_tail = desc->chain_tail;
+    if (needed > private->max_writable - 1)
     {
-        res = -EIO;
-        goto out;
+        return -ENOSPC;
     }
-    res = fat16_allocate(disk, chain, old_count, needed);
-    if (res < 0)
+    int extra = needed - old_count;
+    uint16_t *chain = 0;
+    int changed = 0;
+    if (extra)
     {
-        goto out;
+        chain = kzalloc(extra * sizeof(uint16_t));
+        if (!chain)
+        {
+            return -ENOMEM;
+        }
+        res = fat16_allocate(disk, chain, extra);
+        if (res < 0)
+        {
+            goto out;
+        }
+    }
+    struct fat_file_cursor cursor = desc->cursor;
+    int index = start / bytes;
+    if (index < old_count)
+    {
+        int current = item.low_16_bits_first_cluster;
+        int ahead = index;
+        if (index == old_count - 1)
+        {
+            current = old_tail;
+            ahead = 0;
+        }
+        else if (cursor.valid && cursor.index <= (uint32_t) index)
+        {
+            current = cursor.cluster;
+            ahead -= cursor.index;
+        }
+        res = fat16_get_cluster_for_offset(disk, current, ahead * bytes);
+        if (res < 0)
+        {
+            goto out;
+        }
+        cursor.cluster = res;
+        cursor.index = index;
+        cursor.valid = 1;
     }
     char zero[512];
     memset(zero, 0, sizeof(zero));
-    for (int i = old_count; i < needed; i++)
+    for (int i = 0; i < extra; i++)
     {
         int pos = fat16_cluster_to_sector(private, chain[i]) * disk->sector_size;
         for (int offset = 0; offset < bytes; offset += sizeof(zero))
@@ -1696,6 +1769,7 @@ static int fat16_write_bytes(struct disk *disk, void *private_data, const void *
             {
                 goto out;
             }
+            changed = 1;
         }
     }
     uint32_t position = start;
@@ -1708,12 +1782,34 @@ static int fat16_write_bytes(struct disk *disk, void *private_data, const void *
         {
             part = left;
         }
-        int pos = fat16_cluster_to_sector(private, chain[position / bytes]) * disk->sector_size + offset;
+        index = position / bytes;
+        if (index >= old_count)
+        {
+            cursor.cluster = chain[index - old_count];
+        }
+        else if (cursor.index != (uint32_t) index)
+        {
+            res = fat16_get_fat_entry(disk, cursor.cluster);
+            if (res < 0)
+            {
+                goto out;
+            }
+            if (!fat16_valid_cluster(disk, res) || res > private->max_writable)
+            {
+                res = -EIO;
+                goto out;
+            }
+            cursor.cluster = res;
+        }
+        cursor.index = index;
+        cursor.valid = 1;
+        int pos = fat16_cluster_to_sector(private, cursor.cluster) * disk->sector_size + offset;
         res = fat16_write_at(disk, pos, in, part);
         if (res < 0)
         {
             goto out;
         }
+        changed = 1;
         in = (const char *) in + part;
         position += part;
         left -= part;
@@ -1723,14 +1819,14 @@ static int fat16_write_bytes(struct disk *disk, void *private_data, const void *
     {
         goto out;
     }
-    if (needed > old_count)
+    if (extra)
     {
         // The detached extension must be durable in both copies before attaching the old tail.
         for (int copy = 0; copy < 2; copy++)
         {
-            for (int i = old_count; i < needed; i++)
+            for (int i = 0; i < extra; i++)
             {
-                res = fat16_set_entry(disk, copy, chain[i], i + 1 < needed ? chain[i + 1] : 0xFFFF);
+                res = fat16_set_entry(disk, copy, chain[i], i + 1 < extra ? chain[i + 1] : 0xFFFF);
                 if (res < 0)
                 {
                     goto out;
@@ -1746,7 +1842,7 @@ static int fat16_write_bytes(struct disk *disk, void *private_data, const void *
         {
             for (int copy = 0; copy < 2; copy++)
             {
-                res = fat16_set_entry(disk, copy, chain[old_count - 1], chain[old_count]);
+                res = fat16_set_entry(disk, copy, old_tail, chain[0]);
                 if (res < 0)
                 {
                     goto out;
@@ -1759,16 +1855,29 @@ static int fat16_write_bytes(struct disk *disk, void *private_data, const void *
             }
         }
     }
-    item.low_16_bits_first_cluster = chain[0];
+    if (!old_count)
+    {
+        item.low_16_bits_first_cluster = chain[0];
+    }
     item.filesize = size;
     fat16_modified(&item);
     res = fat16_commit_item(disk, desc->item->entry_pos, &item);
     if (res == 0)
     {
         desc->pos = end;
+        desc->cursor = cursor;
+        desc->chain_count = needed;
+        desc->chain_tail = extra ? chain[extra - 1] : old_tail;
+        desc->chain_valid = 1;
         res = count;
     }
 out:
+    if (res < 0 && changed)
+    {
+        private->fat_cache_valid = 0;
+        private->mutation_disabled = 1;
+        res = -EIO;
+    }
     kfree(chain);
     return res;
 }
