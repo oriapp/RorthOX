@@ -24,8 +24,10 @@
 #                                     caller outside the heap) and, with <via>, reached through <via>;
 #                                     or none
 #   heap_snapshot_from <label> <dir> <from>
-#                                     after an attach with "sites <from>": the watch began at <from>,
-#                                     once
+#                                     after an attach with "sites <from>": the watch began at <from>
+#                                     (<from> was entered before the program's next stop; its
+#                                     breakpoint goes at the first entry, so this says "reached",
+#                                     not how often)
 # Every wait is bounded; without a debugger the program fails its own acknowledgement checks.
 . ./scripts/tests/lib/kernel-symbols.sh
 
@@ -135,5 +137,5 @@ heap_snapshot_site() {
 heap_snapshot_from() {
     local label="$1" dir="$2" from="$3"
     [ -f "$dir/heap-sites.txt" ] || : > "$dir/heap-sites.txt"
-    check "${label}the failure path was watched from $from on" "$dir/heap-sites.txt" "from $from reached=1" line
+    check "${label}the failure path was watched from $from on (reached)" "$dir/heap-sites.txt" "from $from reached=1" line
 }

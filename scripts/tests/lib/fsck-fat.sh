@@ -10,7 +10,8 @@
 #       one check for a fixture damaged on purpose: exactly that exit status, and exactly the
 #       lines of <diagnostics file> between the version line and the summary line.
 #
-# fsck.fat runs with LC_ALL=C on a sparse copy (in $TMPDIR, removed afterwards) made as long
+# fsck.fat runs with LC_ALL=C on a sparse copy (in $TMPDIR, removed afterwards, also on TERM or
+# INT, after which the caller's own trap runs) made as long
 # as the BPB says (TotSec * BytsPerSec): fsck.fat refuses an image file shorter than its
 # volume. <image> itself is never changed. <log> gets the output, the exit status, the tool
 # versions and the verdict ("clean", "expected" or what was wrong). A missing fsck.fat (package
@@ -18,8 +19,21 @@
 #
 # Env: FSCK_FAT=fsck.fat
 
+# fsck_trap_command <"trap -p" line> <default>: FSCK_TRAP_COMMAND = that trap's command, or <default>.
+fsck_trap_command() {
+    FSCK_TRAP_COMMAND="$2"
+    [ -n "$1" ] || return 0
+    eval "set -- ${1#trap -- }"
+    FSCK_TRAP_COMMAND="$1"
+}
+
+# fsck_trap_restore <signal> <"trap -p" line>: put the caller's trap back (or the default).
+fsck_trap_restore() {
+    if [ -n "$2" ]; then eval "$2"; else trap - "$1"; fi
+}
+
 fsck_run() {
-    local image="$1" log="$2" dir copy bytes s
+    local image="$1" log="$2" dir copy bytes s old_term old_int
     : > "$log"
     if ! command -v "${FSCK_FAT:-fsck.fat}" > /dev/null 2>&1; then
         echo "verdict: fsck.fat not found (install dosfstools)" >> "$log"
@@ -31,6 +45,14 @@ print((struct.unpack_from("<H", d, 19)[0] or struct.unpack_from("<I", d, 32)[0])
         { echo "verdict: no BPB in $image" >> "$log"; return 1; }
     dir=$(mktemp -d)
     copy="$dir/check.img"
+    # A TERM or INT while the copy exists (a runner timeout during a long check) removes it, then
+    # does what the caller's trap does (or ends the script). The caller's traps come back after.
+    old_term=$(trap -p TERM)
+    old_int=$(trap -p INT)
+    fsck_trap_command "$old_term" "exit 143"
+    trap "rm -rf '$dir'; $FSCK_TRAP_COMMAND" TERM
+    fsck_trap_command "$old_int" "exit 130"
+    trap "rm -rf '$dir'; $FSCK_TRAP_COMMAND" INT
     cp --sparse=always "$image" "$copy"
     [ "$(stat -c %s "$copy")" -ge "$bytes" ] || truncate -s "$bytes" "$copy"
     if LC_ALL=C "${FSCK_FAT:-fsck.fat}" -n "$copy" > "$dir/out" 2> "$dir/err"; then s=0; else s=$?; fi
@@ -39,6 +61,8 @@ print((struct.unpack_from("<H", d, 19)[0] or struct.unpack_from("<I", d, 32)[0])
     sed "s|^$copy: |check.img: |" "$dir/out" > "$log.out"
     cp "$dir/err" "$log.err"
     rm -rf "$dir"
+    fsck_trap_restore TERM "$old_term"
+    fsck_trap_restore INT "$old_int"
     {
         echo "exit=$s"
         echo "fsck: $(head -n 1 "$log.out")"

@@ -80,6 +80,8 @@ case_site() {
 }
 case_from() {
     case "$1" in
+        # Only allocations from process_inject_arguments on are watched: a failure between
+        # process_map_memory and the injection would not count. Nothing allocates there today.
         argv) echo process_inject_arguments ;;
     esac
 }

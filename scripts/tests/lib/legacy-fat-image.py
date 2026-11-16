@@ -18,7 +18,10 @@ the same cases.
                                         that write and then expect a clean volume.
   legacy-fat-image.py check <image>     exit 1 unless the image has the legacy BPB and length.
 
-Run from the repository root after 'make all'. Prints the geometry as key=value lines.
+Run from the repository root after 'make all'. Prints the geometry as key=value lines. The boot
+sector comes from this build, so it must still load 199 kernel sectors and say 200 reserved
+sectors: the builder refuses otherwise (with more, the legacy boot sector would read the legacy
+FATs and root directory into memory after the kernel).
 """
 import os
 import struct
@@ -74,10 +77,26 @@ def check(path):
     print('image_bytes=%d' % len(data))
 
 
-def build(variant, out):
-    boot, kernel = read('bin/boot.bin'), read('bin/kernel.bin')
+def boot_kernel_sectors(boot):
+    """The kernel sector count the boot code loads: mov eax, 1 (first sector), then mov ecx, n."""
+    at = boot.find(b'\xb8\x01\x00\x00\x00\xb9')
+    if at < 0 or boot.find(b'\xb8\x01\x00\x00\x00\xb9', at + 1) >= 0:
+        return None
+    return struct.unpack_from('<I', boot, at + 6)[0]
+
+
+def check_boot(boot):
     if len(boot) != SECTOR or boot[510:512] != b'\x55\xaa':
         fail('bin/boot.bin is not a boot sector')
+    if struct.unpack_from('<H', boot, 14)[0] != RESERVED or boot_kernel_sectors(boot) != RESERVED - 1:
+        fail('bin/boot.bin says %s reserved sectors and loads %s kernel sectors, the legacy layout '
+             'needs %d and %d' % (struct.unpack_from('<H', boot, 14)[0], boot_kernel_sectors(boot),
+                                  RESERVED, RESERVED - 1))
+
+
+def build(variant, out):
+    boot, kernel = read('bin/boot.bin'), read('bin/kernel.bin')
+    check_boot(boot)
     if len(kernel) > (RESERVED - 1) * SECTOR:
         fail('bin/kernel.bin does not fit in the %d legacy reserved sectors' % RESERVED)
     image = bytearray(boot[:3] + BPB + boot[62:] + kernel + bytes(DATA_BYTES))

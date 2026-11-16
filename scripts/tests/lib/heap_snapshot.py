@@ -36,7 +36,8 @@ function is entered (after the wrapper check, before the program's next stop); t
 lie on another 4 KiB page. Under TCG a breakpoint makes QEMU run every instruction of its page on
 its own, and the heap's search loop shares a page with the failure path: watched from the wrapper
 on, a syscall that builds a page directory (1024 allocations) runs slow enough to miss the test's
-deadlines on a busy host. The file then also gets "from <function> reached=<n>".
+deadlines on a busy host. The file then also gets "from <function> reached=<n>" (0 or 1: the
+breakpoint on <function> is removed at its first hit).
 All reads (task list, heap table) go through the CR3 of the stopped task, so the kernel must stay
 mapped (supervisor-only is enough) in task page directories; if it isn't, the session fails.
 """

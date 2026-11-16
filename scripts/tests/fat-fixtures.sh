@@ -15,7 +15,9 @@
 # copies that differ, a lost cluster, and a BPB with fewer sectors (another cluster count).
 # The helper must refuse: a missing fsck.fat, the exit-0 finding, a checker that exits nonzero,
 # writes to stderr or prints another version line around normal output, wrong pinned findings
-# or exit, and the other geometry. bin/os.bin must not change.
+# or exit, and the other geometry. The builder must refuse a boot sector made for another
+# reserved area (it would load the legacy FATs as kernel), and a TERM while fsck.fat runs must
+# remove the helper's copy and then run the caller's own trap. bin/os.bin must not change.
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -184,6 +186,81 @@ refused geometry "summary is not" \
 fsck_clean "the 7,800,000-sector copy is clean as a 60931-cluster volume" "$OUT/geometry.img" 60931 "$OUT/geometry.log"
 { $LEGACY check "$OUT/geometry.img" > /dev/null 2>&1 && echo accepted || echo refused; } > "$OUT/geometry-check.txt"
 check "legacy-fat-image.py check refuses the other BPB" "$OUT/geometry-check.txt" "refused" line
+
+echo "fat-fixtures: the builder refuses a boot sector made for another reserved area"
+# build() with bin/boot.bin as built, with ReservedSectors 208, and loading 207 kernel sectors.
+python3 -B - "$OUT/boot-build.img" > "$OUT/boot-check.txt" 2>&1 << 'EOF' || true
+import contextlib, importlib.util, io, struct, sys
+spec = importlib.util.spec_from_file_location('legacy', 'scripts/tests/lib/legacy-fat-image.py')
+legacy = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(legacy)
+read = legacy.read
+boot = read('bin/boot.bin')
+n = boot.find(bytes([0xb8, 1, 0, 0, 0, 0xb9])) + 6
+for tag, at, value in (('as built', None, None), ('reserved=208', 14, struct.pack('<H', 208)),
+                       ('kernel=207', n, struct.pack('<I', 207))):
+    b = bytearray(boot)
+    if at is not None:
+        b[at:at + len(value)] = value
+    legacy.read = lambda path, b=bytes(b): b if path == 'bin/boot.bin' else read(path)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            legacy.build('history', sys.argv[1])
+        print('boot %s accepted' % tag)
+    except SystemExit:
+        print('boot %s refused' % tag)
+EOF
+check "builder takes this build's boot sector"          "$OUT/boot-check.txt" "boot as built accepted" line
+check "builder refuses 208 reserved sectors"           "$OUT/boot-check.txt" "boot reserved=208 refused" line
+check "builder refuses a boot sector loading 207 sectors" "$OUT/boot-check.txt" "boot kernel=207 refused" line
+
+echo "fat-fixtures: the fsck copy is removed on TERM, and the caller's traps stay"
+# term-driver.sh sets its own TERM trap, makes one normal check (its traps must be the same
+# afterwards), then one with a checker that never ends; it gets TERM (its whole process group)
+# while that checker runs: the copy must be gone and the driver's own trap must have run.
+mkdir -p "$OUT/tmp"
+cat > "$OUT/hang-fsck" << 'EOF'
+#!/bin/sh
+: > "$HANG_STARTED"
+exec sleep 600
+EOF
+chmod +x "$OUT/hang-fsck"
+cat > "$OUT/term-driver.sh" << 'EOF'
+. ./scripts/qemu-lib.sh
+. ./scripts/tests/lib/fsck-fat.sh
+failures=0
+trap 'echo "caller trap ran" >> "$TRAPLOG"; exit 7' TERM
+term=$(trap -p TERM)
+int=$(trap -p INT)
+fsck_clean x "$OUT/labelled.img" 61029 "$OUT/term-1.log" > /dev/null
+[ "$(trap -p TERM)" = "$term" ] && [ "$(trap -p INT)" = "$int" ] && echo "traps restored" >> "$TRAPLOG"
+FSCK_FAT="$OUT/hang-fsck" fsck_clean x "$OUT/labelled.img" 61029 "$OUT/term-2.log" > /dev/null
+echo "not reached" >> "$TRAPLOG"
+EOF
+: > "$OUT/term-trap.txt"
+rm -f "$OUT/hang-started"
+OUT="$OUT" TRAPLOG="$OUT/term-trap.txt" HANG_STARTED="$OUT/hang-started" TMPDIR="$OUT/tmp" \
+    setsid bash "$OUT/term-driver.sh" > "$OUT/term-driver.out" 2>&1 &
+driver=$!
+for ((i = 0; i < 200; i++)); do [ -f "$OUT/hang-started" ] && break; sleep 0.1; done
+{
+    [ -f "$OUT/hang-started" ] && echo "checker started"
+    echo "copies while it runs: $(find "$OUT/tmp" -name check.img | wc -l)"
+    [ "$(ps -o pgid= -p "$driver" | tr -d ' ')" = "$driver" ] && echo "driver leads its group"
+} > "$OUT/term.txt"
+kill -TERM -- -"$driver" 2> /dev/null || kill -TERM "$driver" 2> /dev/null || true
+if wait "$driver"; then s=0; else s=$?; fi
+{
+    echo "driver exit=$s"
+    echo "left in TMPDIR: $(find "$OUT/tmp" -mindepth 1 | wc -l)"
+} >> "$OUT/term.txt"
+check "normal check: the caller's TERM and INT traps unchanged" "$OUT/term-trap.txt" "traps restored" line
+check "hanging checker started with its copy in TMPDIR"      "$OUT/term.txt" "copies while it runs: 1" line
+check "driver got TERM as a process group"                  "$OUT/term.txt" "driver leads its group" line
+check "TERM: the copy is removed"                           "$OUT/term.txt" "left in TMPDIR: 0" line
+check "TERM: then the caller's own trap ran"                "$OUT/term-trap.txt" "caller trap ran" line
+check "TERM: with the caller's exit status"                 "$OUT/term.txt" "driver exit=7" line
+check "TERM: the script did not go on"                      "$OUT/term-trap.txt" "not reached" absent
 
 [ "$(sha256sum bin/os.bin | cut -d' ' -f1)" = "$hash_before" ] && echo unchanged > "$OUT/image.txt" || echo changed > "$OUT/image.txt"
 check "bin/os.bin not changed by the test" "$OUT/image.txt" "unchanged" line
