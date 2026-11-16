@@ -25,9 +25,10 @@
  *                   components in 258 and 259 bytes, 129 components (260 bytes)
  *   allocation      the parser's one allocation failing: -ENOMEM, nothing left; an extended
  *                   open for reading, writing and appending with each allocation failing in turn:
- *                   -ENOMEM or -EUNIMP, nothing left, no descriptor slot taken
- *   fail closed     an extended open of any FAT path in any mode is -EUNIMP without one disk
- *                   read or write (even with no disk at all); a bad extended path, mode or policy
+ *                   -ENOMEM, nothing left, no descriptor slot taken; then reading opens the file
+ *                   and writing or appending is -EUNIMP
+ *   fail closed     an extended open of any FAT path for writing or appending is -EUNIMP without
+ *                   one disk read or write (even with no disk at all); a bad extended path, mode or policy
  *                   is -EINVARG; the legacy policy behaves as file_open
  *
  * Each case runs in its own process, so a crash (a read past an input) fails that case only.
@@ -373,9 +374,10 @@ static void c_allocation(void)
     }
 
     // An extended open in each mode, each allocation failing in turn: refused, nothing left, no
-    // slot taken. Reading allocates the path only; writing and appending also take a descriptor
-    // (and its slot) before the filesystem refuses them.
-    static const int allocations[] = {1, 2, 2};
+    // slot taken. Reading opens the file (path, FAT descriptor, file item and its entry copy,
+    // descriptor); writing and appending take the path and a descriptor (and its slot) before the
+    // filesystem refuses them.
+    static const int allocations[] = {5, 2, 2};
     for (int mode = FILE_MODE_READ; mode <= FILE_MODE_APPEND; mode++)
     {
         int n;
@@ -387,7 +389,14 @@ static void c_allocation(void)
             int res = file_open_policy("0:/blank.elf", mode, FILE_OPEN_EXTENDED);
             int failed = kalloc_failed();
             fimg_fail_alloc(0);
-            CHECK(res == (failed ? -ENOMEM : -EUNIMP), "mode %d, allocation %d failing: %d", mode, n, res);
+            if (!failed && mode == FILE_MODE_READ)
+            {
+                CHECK(res > 0 && fclose(res) == 0, "mode %d, no allocation failing: %d", mode, res);
+            }
+            else
+            {
+                CHECK(res == (failed ? -ENOMEM : -EUNIMP), "mode %d, allocation %d failing: %d", mode, n, res);
+            }
             CHECK(kalloc_live() == live && !kalloc_bad_frees() && !kalloc_poison_errors(),
                   "mode %d, allocation %d failing: %d left", mode, n, kalloc_live() - live);
             int fd = file_open("0:/blank.elf", FILE_MODE_READ);
@@ -401,7 +410,7 @@ static void c_allocation(void)
                 break;
             }
         }
-        CHECK(n == allocations[mode] + 1, "mode %d: the extended open allocates %d times before it is refused (%d)",
+        CHECK(n == allocations[mode] + 1, "mode %d: the extended open makes %d allocations (%d)",
               mode, allocations[mode], n - 1);
     }
 }
@@ -416,14 +425,14 @@ static void c_fail_closed(void)
                            "0:/new file.txt", "0:/dir/new file.txt", "0:/blank.elf/x"};
     for (unsigned int i = 0; i < sizeof(paths) / sizeof(paths[0]); i++)
     {
-        for (int mode = FILE_MODE_READ; mode <= FILE_MODE_APPEND; mode++)
+        for (int mode = FILE_MODE_WRITE; mode <= FILE_MODE_APPEND; mode++)
         {
             int res = file_open_policy(paths[i], mode, FILE_OPEN_EXTENDED);
             CHECK(res == -EUNIMP, "extended open of %s, mode %d: %d, want -EUNIMP", paths[i], mode, res);
         }
     }
     struct path_part part = {"blank.elf", 0};
-    for (int mode = FILE_MODE_READ; mode <= FILE_MODE_APPEND; mode++)
+    for (int mode = FILE_MODE_WRITE; mode <= FILE_MODE_APPEND; mode++)
     {
         void *p = d->filesystem->open_policy(0, &part, mode, FILE_OPEN_EXTENDED);
         CHECK(ERROR_I(p) == -EUNIMP, "FAT open_policy with no disk, mode %d: %d", mode, ERROR_I(p));

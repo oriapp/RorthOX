@@ -1,4 +1,5 @@
 #include "fat16.h"
+#include "vfat.h"
 #include "config.h"
 #include "string/string.h"
 #include "disk/disk.h"
@@ -968,6 +969,140 @@ out:
     return current_item;
 }
 
+struct fat_record
+{
+    struct fat_directory_item entry;
+    int pos;
+    int lfn_valid;
+    char name[256];
+    char short_name[13];
+};
+
+// IF=0, kernel addresses only. Each call consumes one complete record without retaining a directory.
+static int fat16_scan_record(struct fat_directory_cursor *cursor, struct fat_record *record)
+{
+    struct vfat_lfn lfn;
+    vfat_lfn_reset(&lfn);
+    for (;;)
+    {
+        int res = fat16_directory_next(cursor, &record->entry, &record->pos);
+        if (res <= 0)
+        {
+            return res;
+        }
+        if ((cursor->clusters ? (cursor->clusters - 1) * cursor->slots : 0) + cursor->index > 65536)
+        {
+            return -EIO;
+        }
+        uint8_t *raw = (uint8_t *)&record->entry;
+        if (!raw[0])
+        {
+            return 0;
+        }
+        if (raw[0] == 0xE5)
+        {
+            vfat_lfn_reset(&lfn);
+            continue;
+        }
+        if (raw[11] == 0x0F)
+        {
+            vfat_lfn_feed(&lfn, raw);
+            continue;
+        }
+        if ((raw[11] & FAT_FILE_VOLUME_LABEL) || memcmp(raw, ".          ", 11) == 0 ||
+            memcmp(raw, "..         ", 11) == 0)
+        {
+            vfat_lfn_reset(&lfn);
+            continue;
+        }
+        if ((raw[11] & FAT_FILE_SUBDIRECTORY) &&
+            !fat16_valid_cluster(cursor->disk, fat16_get_first_cluster(&record->entry)))
+        {
+            return -EIO;
+        }
+        vfat_short_name(raw, record->short_name);
+        record->lfn_valid = vfat_lfn_finish(&lfn, raw);
+        strncpy(record->name, record->lfn_valid ? lfn.name : record->short_name, sizeof(record->name));
+        return 1;
+    }
+}
+
+static int fat16_lookup_extended(struct disk *disk, struct path_part *path, int *parent,
+                                 struct fat_record *target)
+{
+    int cluster = 0;
+    int depth = 0;
+    if (!path)
+    {
+        return -EINVARG;
+    }
+    for (; path; path = path->next)
+    {
+        if (++depth > RORTHOX_FS_COMPONENTS_MAX || !vfat_name_valid(path->part))
+        {
+            return -EINVARG;
+        }
+        struct fat_directory_cursor cursor;
+        int res = fat16_directory_start(disk, cluster, &cursor);
+        if (res < 0)
+        {
+            return res;
+        }
+        struct fat_record record;
+        int found = 0;
+        while ((res = fat16_scan_record(&cursor, &record)) > 0)
+        {
+            if (!vfat_short_match((uint8_t *)&record.entry, path->part) &&
+                !(record.lfn_valid && istrncmp(record.name, path->part, sizeof(record.name)) == 0))
+            {
+                continue;
+            }
+            if (found && target->pos != record.pos)
+            {
+                return -EIO;
+            }
+            *target = record;
+            found = 1;
+        }
+        if (res < 0 || !found)
+        {
+            return res < 0 ? res : -ENOENT;
+        }
+        *parent = cluster;
+        if (path->next)
+        {
+            if (!(target->entry.attribute & FAT_FILE_SUBDIRECTORY))
+            {
+                return -EIO;
+            }
+            cluster = fat16_get_first_cluster(&target->entry);
+        }
+    }
+    return 0;
+}
+
+static struct fat_item *fat16_get_extended_file(struct disk *disk, struct path_part *path)
+{
+    struct fat_record record;
+    int parent;
+    int res = fat16_lookup_extended(disk, path, &parent, &record);
+    if (res < 0)
+    {
+        return ERROR(res);
+    }
+    if (record.entry.attribute & FAT_FILE_SUBDIRECTORY)
+    {
+        return ERROR(-EINVARG);
+    }
+    struct fat_item *item = fat16_new_fat_item_for_directory_item(disk, &record.entry);
+    if (!item)
+    {
+        return ERROR(-ENOMEM);
+    }
+    item->entry_pos = record.pos;
+    return item;
+}
+
 void *fat16_open(struct disk *disk, struct path_part *path, FILE_MODE mode)
 {
     return fat16_open_core(disk, path, mode, FILE_OPEN_LEGACY);
@@ -979,8 +1114,8 @@ static void *fat16_open_core(struct disk *disk, struct path_part *path, FILE_MOD
     {
         return ERROR(-EINVARG);
     }
-    // Extended lookup and creation must not use the legacy short-name buffers.
-    if (policy == FILE_OPEN_EXTENDED)
+    // Extended creation must not use the legacy short-name buffers.
+    if (policy == FILE_OPEN_EXTENDED && mode != FILE_MODE_READ)
     {
         return ERROR(-EUNIMP);
     }
@@ -1006,7 +1141,8 @@ static void *fat16_open_core(struct disk *disk, struct path_part *path, FILE_MOD
         goto err_out;
     }
 
-    descriptor->item = fat16_get_directory_entry(disk, path);
+    descriptor->item = policy == FILE_OPEN_EXTENDED ? fat16_get_extended_file(disk, path) :
+        fat16_get_directory_entry(disk, path);
     if (descriptor->item == ERROR(-ENOENT) && mode != FILE_MODE_READ)
     {
         descriptor->item = fat16_create(disk, path);

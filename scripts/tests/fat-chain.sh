@@ -90,7 +90,7 @@ host_status="not built"
 if "$HOST_CC" -std=gnu99 -g -O0 -fno-builtin -no-pie -fno-pie -w -Wl,--wrap=diskstreamer_seek \
         -I kernel -I build/config -I scripts/tests/host \
         scripts/tests/host/fat-chain.c scripts/tests/host/fat-host.c scripts/tests/host/kalloc.c \
-        kernel/fs/pparser.c kernel/fs/file.c kernel/fs/fat/fat16.c kernel/disk/streamer.c \
+        kernel/fs/pparser.c kernel/fs/file.c kernel/fs/fat/fat16.c kernel/fs/fat/vfat.c kernel/disk/streamer.c \
         kernel/string/string.c kernel/memory/memory.c \
         -o "$OUT/host-check" > "$OUT/host-build.log" 2>&1; then
     if "$OUT/host-check" "$OUT/fat-chain.bin" "CHAIN   BIN" "$OUT/chain.bin" "FRAG    BIN" "$OUT/frag.bin" \

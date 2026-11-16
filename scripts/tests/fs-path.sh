@@ -14,7 +14,8 @@
 #                  no empty, "." or ".." components, the character rules for every byte, inputs
 #                  that end right before an unreadable page (also 260 bytes with no NUL), one
 #                  allocation per path and none for a refused one, allocation failures, and an
-#                  extended FAT open that is -EUNIMP in every mode without touching the disk.
+#                  extended FAT open for writing or appending that is -EUNIMP without touching
+#                  the disk (reading by long name works since the extended lookup exists).
 #
 # Built with AddressSanitizer. Env: HOST_CC=cc
 
@@ -34,7 +35,7 @@ build() {
     "$HOST_CC" -std=gnu99 -g -O0 -fno-builtin -no-pie -fno-pie -w -fsanitize=address \
         -I kernel -I build/config -I scripts/tests/host \
         "$2" scripts/tests/host/fat-image.c scripts/tests/host/kalloc.c \
-        kernel/fs/pparser.c kernel/fs/file.c kernel/fs/fat/fat16.c kernel/disk/streamer.c \
+        kernel/fs/pparser.c kernel/fs/file.c kernel/fs/fat/fat16.c kernel/fs/fat/vfat.c kernel/disk/streamer.c \
         kernel/string/string.c kernel/memory/memory.c \
         -o "$OUT/$1" > "$OUT/$1-build.log" 2>&1
 }
