@@ -14,9 +14,11 @@
 #     clusters; two appenders taking turns each append at the current end; a peer's write that
 #     keeps the size doesn't cost an appender a walk of the chain;
 #   - a write one cluster too big for the free space gives -ENOSPC and changes no sector, no
-#     heap and no position; a failed FAT read or write leaves the position, the size and the
-#     bytes as they were, also for a reader in the last cluster when the directory write fails
-#     after the new cluster was linked;
+#     heap and no position; a FAT read that fails before any data is written leaves the
+#     position and the bytes; a FAT read that fails in the middle of an overwrite gives -EIO,
+#     keeps the position, leaves the bytes written before it and turns writes off; a failed FAT
+#     or directory write leaves the position and the size, also for a reader in the last
+#     cluster when the directory write fails after the new cluster was linked;
 #   - the order on the disk stays: data, flush, the new clusters in each FAT, flush after each,
 #     the old last cluster's link in each FAT, flush after each, the directory entry, flush.
 #

@@ -28,7 +28,9 @@
  *                  flushes nothing, leaves every sector and the heap as it was and the
  *                  position where it was; a write that fits works after it
  *   failed write   a FAT read failing before any data is written gives the error and leaves the
- *                  position, the next write goes to the right place; when the new cluster's
+ *                  position, the next write goes to the right place; a FAT read failing in the
+ *                  middle of an overwrite, after data was written, gives -EIO, keeps the position
+ *                  and turns writes off (the first cluster has the new bytes); when the new cluster's
  *                  FAT entry, or the directory entry after the link, can't be written, a reader
  *                  standing in the last cluster reads the old bytes, then the end of the file
  *   order          the sectors a write changes, in order: data, flush, the new clusters' entries
@@ -535,8 +537,35 @@ static void c_failed(void)
     CHECK(file_seek(fd, 0, SEEK_CUR) == at, "position still %d", at);
     fill(buf + at, 18, at, 2 * cl);
     CHECK(file_write(fd, buf + at, 2 * cl) == 2 * cl, "the next write works");
+
+    // A FAT read fails in the middle of an overwrite, after the first cluster's data went to the
+    // disk: the call gives -EIO and keeps the position, the first cluster has the new bytes, the
+    // others the old ones, and every later write on the volume is refused (until the next mount,
+    // that is boot); reads still work.
+    CHECK(file_seek(fd, 0, SEEK_SET) == 0, "seek to 0");
+    static unsigned char fresh[3 * 4096];
+    fill(fresh, 20, 0, 3 * cl);
+    fimg_reset_counts();
+    fimg_fail_read(1, -EIO);
+    res = file_write(fd, fresh, 3 * cl);
+    CHECK(res == -EIO && fimg_counts.failed == 1 && fimg_counts.writes == cl / S && fimg_counts.flushes == 0,
+          "overwrite with the link read failing: %d after %d sector writes, %d flushes (want -EIO, %d, 0)", res,
+          fimg_counts.writes, fimg_counts.flushes, cl / S);
+    CHECK(file_seek(fd, 0, SEEK_CUR) == 0, "position still 0");
+    res = file_write(fd, fresh, 64);
+    CHECK(res == -EIO && fimg_counts.writes == cl / S, "the next write: %d (want -EIO, nothing written)", res);
+    int other = file_open("0:/OTHER.BIN", FILE_MODE_WRITE);
+    CHECK(other < 0 && fimg_counts.writes == cl / S, "creating another file: %d (want refused, nothing written)", other);
+    memcpy(buf, fresh, cl);
     CHECK(fclose(fd) == 0, "close");
     check_file("0:/FRAG.BIN", "FRAG    BIN", buf, bytes);
+    fd = file_open("0:/FRAG.BIN", FILE_MODE_APPEND);
+    CHECK((fd < 0 || file_write(fd, fresh, 1) == -EIO) && fimg_counts.writes == cl / S,
+          "an append through a new handle: refused (%d)", fd);
+    if (fd > 0)
+    {
+        fclose(fd);
+    }
 
     // The new cluster's FAT entry can't be written: a reader opened before keeps the old size and
     // bytes, and so does the media. Then the same with the directory entry failing, after the old
