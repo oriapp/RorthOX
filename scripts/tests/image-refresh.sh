@@ -31,7 +31,8 @@ RESULTS="$OUT/results.txt"
 mkdir -p "$TREE"
 git rev-parse --is-inside-work-tree > /dev/null 2>&1 || { echo "image-refresh: needs a git checkout" >&2; exit 1; }
 # The working tree's tracked bytes, including uncommitted changes.
-git ls-files -z | tar --null -T - -cf - | (cd "$TREE" && tar -xf -)
+git ls-files -z | tar --null -T - -cf - | (cd "$TREE" && tar -xf -) ||
+    { echo "image-refresh: copying the tree failed (a tracked file deleted but not staged?)" >&2; exit 1; }
 IMG="$TREE/bin/os.bin"
 SHELL_ELF="$TREE/programs/shell/build/shell.elf"
 BLANK_ELF="$TREE/programs/blank/build/blank.elf"

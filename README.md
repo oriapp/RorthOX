@@ -388,7 +388,9 @@ appears in the terminal. At the `>` prompt, type a program name with arguments:
 ```
 
 QEMU uses `bin/os.bin` itself as the disk, so files a program writes stay in it until the image is built again
-(`make clean all` gives a fresh one). Don't run mtools on the image while QEMU has it open. The shell and
+(`make clean all` gives a fresh one). A plain `make` after a change to the shell, the stdlib, the kernel or the
+boot sector builds the image again too, and the written files are gone; a `make` with nothing to do, or one that
+only rebuilds a test program, keeps it. Don't run mtools on the image while QEMU has it open. The shell and
 `blank.elf` never write; only programs that call the file syscalls do.
 
 Extra QEMU flags go after the script or in `QEMU_FLAGS`, for example without a window:

@@ -60,6 +60,9 @@ CASES="${OOM_CASES:-table second wrapper elfobject elfdata process}"
 # recording it slows the syscall's other allocations down (lib/heap-snapshot.sh); one case that
 # fails after the whole page directory is set up (argv) is recorded, the others like it (table,
 # wrapper, arg1-arg3) are not.
+# case_from <case>: for a recorded case that fails late, the kernel function from which on the
+# failure is watched. Watched from the syscall on, building the page directory first (1024
+# allocations) ran slow enough that a busy host missed the waits below.
 case_site() {
     case "$1" in
         second)    echo paging_new_4gb ;;                       # the second page table
@@ -73,6 +76,11 @@ case_site() {
         openclone) echo fat_16_clone_directory_item ;;
         openvfs)   echo file_new_descriptor ;;
         argv)      echo process_zalloc_user process_inject_arguments ;;   # site, then the caller it runs under
+    esac
+}
+case_from() {
+    case "$1" in
+        argv) echo process_inject_arguments ;;
     esac
 }
 mkdir -p "$OUT"
@@ -132,8 +140,9 @@ stop_checks() {
 
 # run_case <case>: one fresh boot. Adds to $failures.
 run_case() {
-    local name="$1" dir="$OUT/$1" returned=0 site
+    local name="$1" dir="$OUT/$1" returned=0 site from last
     site=$(case_site "$name")
+    from=$(case_from "$name")
     mkdir -p "$dir"
     rm -f "$dir"/state-*.txt "$dir"/state-*.txt.log "$dir/shell.txt" "$dir"/screen-*.txt
     : > "$dir/screen-before-blank.txt"
@@ -148,7 +157,7 @@ run_case() {
         # heap debugger is attached. One syscall is checked against the last copy.
         if wait_screen_lines "$RUN_TIMEOUT" "prompt:oomtest $name: ready" &&
             state "$dir" ready tasks=2 shell="$dir/shell.txt" owner=last &&
-            heap_snapshot_attach "$PROGRAM" "$dir" 1 ${site:+sites}; then
+            heap_snapshot_attach "$PROGRAM" "$dir" 1 ${site:+sites} $from; then
             qemu_cmd "sendkey g"
             # "armed": the free blocks are set up. It waits for a second key before the syscall,
             # so the line is on screen even if the kernel crashes in the syscall.
@@ -179,7 +188,15 @@ run_case() {
         fi
     fi
     if [ "$returned" = 0 ]; then
-        echo "  $SUITE: $name did not return; possible allocation-path crash or hang"
+        # A last look: if oomtest got past the syscall, the case only ran out of time.
+        ! qemu_running || screen_snapshot
+        if grep -qxE "(> )?oomtest $name: free blocks after the syscall -?[0-9]+" "$dir/screen.txt" 2> /dev/null; then
+            last=$(grep -xE "(> )?oomtest $name: .*" "$dir/screen.txt" | tail -n 1)
+            echo "  $SUITE: $name did not return in time, but oomtest got past the syscall (last line \"$last\"):"
+            echo "  $SUITE: a slow run or a missed step of the test, not a crash in the syscall"
+        else
+            echo "  $SUITE: $name did not return; possible allocation-path crash or hang"
+        fi
         failures=$((failures + 1))
     fi
     qemu_stop || true
@@ -206,7 +223,9 @@ run_case() {
               stop_checks "$dir" press "$name: after the failed syscall (no new task, oomtest owns the keyboard)" ;;
     esac
     check "$name: blank.elf started from the shell afterwards" "$dir/screen.txt"     "Blank loaded"
-    check "$name: blank.elf got its argument"                  "$dir/screen.txt"     "after-$name" line
+    # The shell's prompt can land in front of blank.elf's line (its wait above allows that too).
+    sed 's/^> //' "$dir/screen.txt" > "$dir/rows.txt" 2> /dev/null || : > "$dir/rows.txt"
+    check "$name: blank.elf got its argument"                  "$dir/rows.txt"       "after-$name" line
     check "$name: kernel symbols for the rendezvous found"     "$OUT/symbols.txt"    "found" line
     stop_checks "$dir" boot  "$name: boot (the shell alone)"
     stop_checks "$dir" ready "$name: shell back at its key request before the heap fills, oomtest owns the keyboard"
@@ -217,6 +236,7 @@ run_case() {
     if [ -n "$site" ]; then
         sed 's/^/  heap: /' "$dir/heap-sites.txt" 2> /dev/null || true
         heap_snapshot_site "$name: " "$dir" $site
+        [ -z "$from" ] || heap_snapshot_from "$name: " "$dir" "$from"
     fi
 }
 

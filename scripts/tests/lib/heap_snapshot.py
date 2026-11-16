@@ -31,6 +31,12 @@ run is big enough). At each hit the stack is walked for the callers, and the fir
 the heap's own allocation path (ALLOCATOR) is the site. The file gets "failures=<n>", one
 "failure <i> site=<function> callers=<a<b<...>" line per failure and a "failure <i> caller <name>"
 line for each function in that chain.
+With from=<kernel function> as well, the breakpoint on the failure path is only set once that
+function is entered (after the wrapper check, before the program's next stop); the function must
+lie on another 4 KiB page. Under TCG a breakpoint makes QEMU run every instruction of its page on
+its own, and the heap's search loop shares a page with the failure path: watched from the wrapper
+on, a syscall that builds a page directory (1024 allocations) runs slow enough to miss the test's
+deadlines on a busy host. The file then also gets "from <function> reached=<n>".
 All reads (task list, heap table) go through the CR3 of the stopped task, so the kernel must stay
 mapped (supervisor-only is enough) in task page directories; if it isn't, the session fails.
 """
@@ -46,7 +52,7 @@ MAX_OTHER_STOPS = 20
 TIMEOUT = 90
 WRAPPERS = ("rorthox_system", "print", "printc")
 # kernel=<relinked kernel ELF> and sites=<file>: record where the kernel heap runs out (see sites()).
-PATH_ARGS = ("kernel", "sites")
+PATH_ARGS = ("kernel", "sites", "from")
 # The kernel heap's own allocation path: the failing allocation site is the first caller outside it.
 ALLOCATOR = ("heap_get_start_block", "heap_malloc_blocks", "heap_malloc", "kmalloc", "kzalloc")
 MAX_FRAMES = 8
@@ -136,6 +142,9 @@ def main():
     kernel = Kernel(paths["kernel"]) if "kernel" in paths else None
     fail_at = None      # the heap's failure path, watched from a wrapper's call to the program's next stop
     armed = False
+    from_at = None      # with from=: the failure path is watched only from this kernel function on
+    arming = False      # the breakpoint on from_at is set
+    reached = 0         # stops at from_at
     failures = []       # (site, callers) of every kernel heap allocation that failed while watched
 
     def ready():
@@ -154,6 +163,13 @@ def main():
         if kernel:
             fail_at = kernel.failure_address(r, k["enomem"])
             print("  kernel heap allocations fail at %#x" % fail_at, flush=True)
+            if "from" in paths:
+                if paths["from"] not in kernel.symbols:
+                    raise RspError("no kernel function %s" % paths["from"])
+                from_at = kernel.symbols[paths["from"]][0]
+                if from_at >> 12 == fail_at >> 12:
+                    raise RspError("%s (%#x) shares a page with the failure path" % (paths["from"], from_at))
+                print("  watched from %s at %#x" % (paths["from"], from_at), flush=True)
         first = True
         while True:
             eip = r.cont(TIMEOUT, ready if first else None)
@@ -163,6 +179,13 @@ def main():
                 site = next((name for name in chain if name not in ALLOCATOR), "unknown")
                 failures.append((site, chain))
                 print("  a kernel heap allocation failed in %s (%s)" % (site, " < ".join(chain)), flush=True)
+                continue
+            if arming and eip == from_at:
+                r.remove_breakpoint(from_at)
+                arming = False
+                reached += 1
+                r.add_breakpoint(fail_at)
+                armed = True
                 continue
             current = r.read32(k["current_task"])
             tasks = walk(r, k)
@@ -208,11 +231,17 @@ def main():
                 r.remove_breakpoint(pending)
                 pending = None
                 checks += 1
-                if fail_at is not None:
+                if from_at is not None:
+                    r.add_breakpoint(from_at)
+                    arming = True
+                elif fail_at is not None:
                     # Until the program's next stop (the syscall has returned by then).
                     r.add_breakpoint(fail_at)
                     armed = True
                 continue
+            if arming:
+                r.remove_breakpoint(from_at)
+                arming = False
             if armed:
                 r.remove_breakpoint(fail_at)
                 armed = False
@@ -252,6 +281,8 @@ def main():
     if "sites" in paths:
         with open(paths["sites"], "w") as f:
             f.write("failures=%d\n" % len(failures) if fail_at is not None else "failures=not watched\n")
+            if from_at is not None:
+                f.write("from %s reached=%d\n" % (paths["from"], reached))
             for i, (site, chain) in enumerate(failures, 1):
                 f.write("failure %d site=%s callers=%s\n" % (i, site, "<".join(chain)))
                 for name in chain:

@@ -4,13 +4,15 @@
 #   heap_snapshot_setup <outdir>      once: kernel symbols, heap table geometry, gdbstub socket;
 #                                     returns 1 when the symbols or settings are missing (stop then)
 #   QEMU_FLAGS="$HEAP_QEMU_FLAGS" qemu_start ...; heap_snapshot_trap
-#   heap_snapshot_attach <program.elf> <dir> <wrapper checks> [sites]
+#   heap_snapshot_attach <program.elf> <dir> <wrapper checks> [sites [<from>]]
 #                                     while the program waits for its first key: start the debugger,
 #                                     wait until the VM runs on (keys sent while it is stopped are lost);
 #                                     with "sites", also record where the kernel heap runs out in the
 #                                     checked syscalls. Under TCG that slows them down: the breakpoint
 #                                     makes QEMU run the heap code's 4 KiB page one instruction at a
 #                                     time, and the heap's search loop runs there for every allocation.
+#                                     With <from> (a kernel function), watch only from its entry on,
+#                                     so the allocations before it run at full speed.
 #   heap_snapshot_wait <dir>          wait for the debugger to end (the program called heap_snapshot_end)
 #   heap_snapshot_detached <seconds>  wait at most <seconds> for the debugger to end, without collecting
 #                                     its status; another debugger (guest-state.sh) may attach after it
@@ -21,6 +23,9 @@
 #                                     failed allocation, made in <function> (its site=, the first
 #                                     caller outside the heap) and, with <via>, reached through <via>;
 #                                     or none
+#   heap_snapshot_from <label> <dir> <from>
+#                                     after an attach with "sites <from>": the watch began at <from>,
+#                                     once
 # Every wait is bounded; without a debugger the program fails its own acknowledgement checks.
 . ./scripts/tests/lib/kernel-symbols.sh
 
@@ -69,7 +74,7 @@ heap_snapshot_attach() {
     local elf="$1" dir="$2" checks="$3" i sites=()
     rm -f "$dir/heap-ready" "$dir/heap-result.txt" "$dir/heap-sites.txt"
     echo "not run" > "$dir/heap-status.txt"
-    [ "${4:-}" != sites ] || sites=("kernel=$HEAP_KERNEL_ELF" "sites=$dir/heap-sites.txt")
+    [ "${4:-}" != sites ] || sites=("kernel=$HEAP_KERNEL_ELF" "sites=$dir/heap-sites.txt" ${5:+"from=$5"})
     # shellcheck disable=SC2086
     timeout 300 python3 -B scripts/tests/lib/heap_snapshot.py "$HEAP_GDB_DIR/gdb" "$elf" "$dir/heap-result.txt" \
         "$dir/heap-ready" "$checks" $HEAP_SNAPSHOT_ARGS "${sites[@]}" > "$dir/heap-debugger.log" 2>&1 &
@@ -125,4 +130,10 @@ heap_snapshot_site() {
         [ -z "$via" ] ||
             check "${label}the failed allocation was reached through $via" "$dir/heap-sites.txt" "failure 1 caller $via" line
     fi
+}
+
+heap_snapshot_from() {
+    local label="$1" dir="$2" from="$3"
+    [ -f "$dir/heap-sites.txt" ] || : > "$dir/heap-sites.txt"
+    check "${label}the failure path was watched from $from on" "$dir/heap-sites.txt" "from $from reached=1" line
 }
