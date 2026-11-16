@@ -17,7 +17,9 @@
 #     position, fread the items read before it; the retry reads the right bytes and walks only
 #     from the last cluster read;
 #   - a file truncated and written again elsewhere through another handle, with poison in its
-#     old clusters: readers see end of file, then the new bytes at their old position.
+#     old clusters: readers see end of file, then the new bytes at their old position;
+#   - with the chain looped back to its start and a size past the longest chain the volume can
+#     have, a read in the cluster after that gives -EIO, also with the cursor right before it.
 #
 # The image with FRAG.BIN and the one after the rewrite must pass fsck.fat -n (scripts/tests/lib/
 # fsck-fat.sh). Built with AddressSanitizer. Env: HOST_CC=cc   FSCK_FAT=fsck.fat
@@ -51,8 +53,8 @@ else
 fi
 echo "exit=$host_status" > "$OUT/host-status.txt"
 check "host check built and exited with status 0"  "$OUT/host-status.txt" "exit=0" line
-check "host check: every case passed"              "$OUT/host-check.log"  "fat-cursor host check: 0 of 6 cases failed" line
-for c in "sequential reads" "cluster boundaries" "seeks" "failed seeks" "failed reads" "truncate"; do
+check "host check: every case passed"              "$OUT/host-check.log"  "fat-cursor host check: 0 of 7 cases failed" line
+for c in "sequential reads" "cluster boundaries" "seeks" "failed seeks" "failed reads" "truncate" "looped chain"; do
     grep -E "^  $c: [1-9][0-9]* checks, 0 failed$" "$OUT/host-check.log" > /dev/null 2>&1 && echo "$c ran" >> "$OUT/cases.txt" || true
     check "host check: $c"  "$OUT/cases.txt" "$c ran" line
 done

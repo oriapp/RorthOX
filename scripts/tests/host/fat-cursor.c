@@ -29,6 +29,10 @@
  *   truncate           another handle truncates the file (open for writing) and writes it again
  *                      somewhere else, while the old clusters hold poison: the reader sees end of
  *                      file, then the new bytes at its old position, never the old clusters
+ *   looped chain       FRAG.BIN's chain looped back to its start and its size past the longest
+ *                      chain the volume can have: a read in the cluster after that longest
+ *                      chain gives -EIO with no link walked, also right after a read one
+ *                      cluster before it (the cursor stands next to it)
  *
  * Usage: fat-cursor <image> <out dir>. Writes <out dir>/fixture.img (the image with FRAG.BIN)
  * and <out dir>/rewritten.img (after the truncate case) for fsck.fat, prints "clusters <n>",
@@ -458,6 +462,42 @@ static void c_truncate(void)
     export_live("rewritten.img");
 }
 
+// FRAG.BIN's last link goes back to its first cluster and its size says one cluster more than
+// the volume has: no chain can be that long, so a read in cluster index clusters (the volume's
+// cluster count) or later is -EIO, also when the cursor stands one cluster before it.
+static void c_loop(void)
+{
+    unsigned char *b = fimg_durable();
+    for (int copy = 0; copy < 2; copy++)
+    {
+        put16(b + fat_lba(copy, chain[N - 1]) * S + (chain[N - 1] * 2) % S, chain[0]);
+    }
+    for (long i = 0; i < root_entries; i++)
+    {
+        if (memcmp((void *)(b + root_lba * S + i * 32), "FRAG    BIN", 11) == 0)
+        {
+            put32(b + root_lba * S + i * 32 + 28, (clusters + 1) * CB);
+        }
+    }
+    int fd = open_read();
+    read_at(fd, 0, 0, 1, 0, "byte 0");
+    int last = clusters * CB;  // cluster index clusters: one past the longest chain
+    int at = last - CB + 5;
+    CHECK(file_seek(fd, at, SEEK_SET) == at, "file_seek forward to the last cluster a chain can have");
+    int index = (clusters - 1) % N;  // the loop's cluster there
+    fimg_reset_counts();
+    CHECK(file_read(fd, buf, 1) == 1 && buf[0] == pattern(1, index * CB + 5), "a byte there reads (round the loop)");
+    CHECK(file_seek(fd, last, SEEK_SET) == last, "file_seek forward to the next cluster");
+    fimg_reset_counts();
+    int res = file_read(fd, buf, 1);
+    CHECK(res == -EIO && links() == 0, "a byte in cluster index %ld: %d after %d links (want -EIO, 0)", clusters, res, links());
+    CHECK(pos_of(fd) == last, "position still %d", last);
+    CHECK(file_seek(fd, last + 7, SEEK_SET) == last + 7 && fread(buf, 1, 1, fd) == -EIO, "fread there: -EIO");
+    CHECK(file_seek(fd, CB, SEEK_SET) == CB && file_read(fd, buf, 1) == 1 && buf[0] == pattern(1, CB),
+          "back in cluster 1: reads");
+    CHECK(fclose(fd) == 0, "close");
+}
+
 struct test_case
 {
     const char *name;
@@ -471,6 +511,7 @@ static const struct test_case cases[] = {
     { "failed seeks", c_failed_seeks },
     { "failed reads", c_failed_reads },
     { "truncate", c_truncate },
+    { "looped chain", c_loop },
 };
 
 int main(int argc, char **argv)
