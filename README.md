@@ -143,8 +143,8 @@ it does not leave holes in the kernel mappings needed during entry and return.
 | 0x7C00 | boot sector |
 | 0x7E00-0xE1FF | kernel heap block table (one byte per 4 KiB block) |
 | 0xB8000 | VGA text screen |
-| 0x100000-0x111B57 | kernel image (`kernel.bin`, 72,536 bytes; the disk reserves 101,888) |
-| 0x112000-0x11466B | kernel `.bss` |
+| 0x100000-0x113B5B | kernel image (`kernel.bin`, 80,732 bytes; the disk reserves 101,888) |
+| 0x114000-0x11666B | kernel `.bss` |
 | below 0x200000 | kernel boot stack (top 0x200000) |
 | 0x3FB000-0x3FEFFF | user stack (virtual, 16 KiB, top 0x3FF000) |
 | 0x400000-0x4FFFFF | user program load window (virtual) |
@@ -355,7 +355,7 @@ builds for i686. `make all` gives:
 | File | What |
 |---|---|
 | `bin/boot.bin` | the boot sector (512 bytes) |
-| `bin/kernel.bin` | the kernel (72,536 bytes right now) |
+| `bin/kernel.bin` | the kernel (80,732 bytes right now) |
 | `bin/os.bin` | the disk image with `shell.elf` and `blank.elf` on it (16,879,616 bytes) |
 | `bin/rorthox.iso` | the GRUB ISO, only with `make iso` (5,195,776 bytes) |
 
