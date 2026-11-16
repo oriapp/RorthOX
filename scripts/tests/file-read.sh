@@ -4,7 +4,8 @@
 # whole items, and take each cluster's bytes from the cluster chain; elf_load() must not take a
 # short read for a whole file.
 #
-# The test image is a copy of bin/os.bin with pat.bin (3 clusters and 333 bytes of pattern; its
+# The test image is the legacy layout (scripts/tests/lib/legacy-fat-image.py history: 64 KiB
+# clusters), whatever layout bin/os.bin has, with pat.bin (3 clusters and 333 bytes of pattern; its
 # second cluster is moved by scripts/tests/lib/fatimg.py, so the chain jumps and the cluster after
 # the first one on disk is filled with 0xDB), small.bin (5000 bytes), empty.bin (0 bytes), huge.bin
 # (size field set to 0xFFFFFFF0), far.bin (first cluster set to 0xFF00) and a directory "dir".
@@ -33,7 +34,8 @@ rm -f "$OUT"/host-* "$OUT"/*.txt "$OUT"/*.bin "$OUT"/*.log
 
 IMG="$OUT/file-read.img"
 rm -f "$IMG"
-$FATIMG info bin/os.bin > "$OUT/geometry.txt"
+python3 -B scripts/tests/lib/legacy-fat-image.py history "$IMG" > "$OUT/legacy.txt"
+$FATIMG info "$IMG" > "$OUT/geometry.txt"
 . "$OUT/geometry.txt"
 python3 - "$OUT" "$cluster_bytes" <<'EOF'
 import sys
@@ -46,7 +48,6 @@ open(out + '/empty.bin', 'wb').write(b'')
 open(out + '/huge.bin', 'wb').write(pattern(100, 61))
 open(out + '/far.bin', 'wb').write(pattern(100, 67))
 EOF
-cp bin/os.bin "$IMG"
 for f in pat.bin small.bin empty.bin huge.bin far.bin; do
     mcopy -i "$IMG" "$OUT/$f" ::
 done

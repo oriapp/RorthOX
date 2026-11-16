@@ -6,11 +6,13 @@
 # own error (the error used to be taken as the next cluster). FAT12's marks 0xFF0-0xFFF are
 # ordinary FAT16 clusters.
 #
-# The test image is a copy of bin/os.bin with pair.bin (2 clusters) and four.bin (4 clusters) of
-# pattern bytes added by mtools. Host check (scripts/tests/host/fat-entry.c): the real file.c,
-# pparser.c, fat16.c and streamer.c read them, with pair.bin's first link changed to each value
-# and with each FAT read of four.bin failing in turn; besides fread()'s result, every seek and
-# sector read is checked, because a value used as a cluster can end in the same -EIO further on.
+# The test image is the legacy layout (scripts/tests/lib/legacy-fat-image.py history: 64 KiB
+# clusters, BPB cluster limit 61030), whatever layout bin/os.bin has, with pair.bin (2 clusters)
+# and four.bin (4 clusters) of pattern bytes added by mtools. Host check
+# (scripts/tests/host/fat-entry.c): the real file.c, pparser.c, fat16.c and streamer.c read
+# them, with pair.bin's first link changed to each value and with each FAT read of four.bin
+# failing in turn; besides fread()'s result, every seek and sector read is checked, because a
+# value used as a cluster can end in the same -EIO further on.
 # The same values as a file's first cluster must be refused before any disk access (fat-entry.c
 # includes fat16.c to call that check directly).
 # bin/os.bin must not change.
@@ -32,7 +34,8 @@ result() {
     if [ "$1" = ok ]; then echo "  ok   $2"; else echo "  FAIL $2"; failed=1; fi
 }
 
-$FATIMG info bin/os.bin > "$OUT/geometry.txt"
+python3 -B scripts/tests/lib/legacy-fat-image.py history "$OUT/fat-entry.bin" > "$OUT/legacy.txt"
+$FATIMG info "$OUT/fat-entry.bin" > "$OUT/geometry.txt"
 . "$OUT/geometry.txt"
 python3 - "$OUT" "$cluster_bytes" <<'EOF'
 import sys
@@ -41,7 +44,6 @@ for name, size, seed in (('pair.bin', cluster + 777, 13), ('four.bin', 3 * clust
     data = bytes(((i * seed) ^ (i >> 8) ^ (i >> 16) ^ seed) & 0xFF for i in range(size))
     open('%s/%s' % (out, name), 'wb').write(data)
 EOF
-cp bin/os.bin "$OUT/fat-entry.bin"
 mcopy -i "$OUT/fat-entry.bin" "$OUT/pair.bin" "$OUT/four.bin" ::
 pair_chain=$($FATIMG entry "$OUT/fat-entry.bin" pair.bin | sed -n 's/^chain=//p')
 four_chain=$($FATIMG entry "$OUT/fat-entry.bin" four.bin | sed -n 's/^chain=//p')

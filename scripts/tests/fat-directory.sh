@@ -4,8 +4,10 @@
 # fat16_load_fat_directory() returns NULL after freeing what it made, and a directory with no
 # entries at all is a valid empty directory, not an allocation of 0 bytes.
 #
-# The test image is a copy of bin/os.bin; mtools adds dir/sub/blank.elf, a normal empty directory
-# "hollow" (only . and ..), a directory "void" and a directory "bad", plus disktest.elf.
+# The test image is the legacy layout (scripts/tests/lib/legacy-fat-image.py history: a 16 MiB
+# file under a much bigger BPB volume), whatever layout bin/os.bin has; mtools adds
+# dir/sub/blank.elf, a normal empty directory "hollow" (only . and ..), a directory "void" and a
+# directory "bad", plus disktest.elf.
 # scripts/tests/lib/fatimg.py fills the cluster of "void" with zeros (a zeroed-directory fixture:
 # no entries, not even . and .., which mtools never makes) and points "bad" at the first cluster
 # past the end of the image file, so reading it fails.
@@ -51,7 +53,7 @@ count_lines() {
 }
 
 IMG="$OUT/fat-directory.bin"
-cp bin/os.bin "$IMG"
+python3 -B scripts/tests/lib/legacy-fat-image.py history "$IMG" > "$OUT/legacy.txt"
 mmd -i "$IMG" ::dir ::dir/sub ::hollow ::void ::bad
 mcopy -i "$IMG" "$BLANK_ELF" ::dir/sub/blank.elf
 mcopy -i "$IMG" "$PROGRAM" ::disktest.elf

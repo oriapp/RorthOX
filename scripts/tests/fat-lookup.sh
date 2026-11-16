@@ -6,7 +6,9 @@
 # and fseek() can reach the end of a file but not go past it. A name that is nowhere is reported as
 # not found (-ENOENT), and nothing else is.
 #
-# Three copies of bin/os.bin, built with mtools and scripts/tests/lib/fatimg.py:
+# Three copies of the legacy layout (scripts/tests/lib/legacy-fat-image.py history: 64 root
+# entries, no label entry), whatever layout bin/os.bin has, built with mtools and
+# scripts/tests/lib/fatimg.py:
 #   deleted  zap.elf and later.elf (both blank.elf) in the root and in directory ldir; zap.elf is
 #            deleted afterwards, so a deleted slot lies right before later.elf in both.
 #   full     every root slot used by short entries (zero-size fillers), last.bin in the last one,
@@ -47,7 +49,9 @@ count_lines() {
     awk -v t="$1" '$0 == t || $0 == "> " t { n++ } END { print n + 0 }' "$2" 2> /dev/null || echo 0
 }
 
-$FATIMG info bin/os.bin > "$OUT/geometry.txt"
+LEGACY="$OUT/legacy.img"
+python3 -B scripts/tests/lib/legacy-fat-image.py history "$LEGACY" > "$OUT/legacy.txt"
+$FATIMG info "$LEGACY" > "$OUT/geometry.txt"
 . "$OUT/geometry.txt"
 python3 - "$OUT" <<'EOF'
 import sys
@@ -61,7 +65,7 @@ EOF
 
 # deleted: the directory first, so later.elf is the last entry in both places.
 DELETED="$OUT/deleted.img"
-cp bin/os.bin "$DELETED"
+cp "$LEGACY" "$DELETED"
 mmd -i "$DELETED" ::ldir
 mcopy -i "$DELETED" "$BLANK_ELF" ::ldir/zap.elf
 mcopy -i "$DELETED" "$BLANK_ELF" ::ldir/later.elf
@@ -71,7 +75,7 @@ mdel -i "$DELETED" ::zap.elf ::ldir/zap.elf
 
 # full: zero-size fillers up to the last root slot, then last.bin.
 FULL="$OUT/full.img"
-cp bin/os.bin "$FULL"
+cp "$LEGACY" "$FULL"
 used=$($FATIMG slots "$FULL" | sed -n 's/^used_slots=//p')
 mkdir -p "$OUT/fill"
 for ((i = used; i < root_entries - 1; i++)); do : > "$OUT/fill/f$i.bin"; done
@@ -80,7 +84,7 @@ mcopy -i "$FULL" "$OUT/last.bin" ::
 
 # odd: a duplicate name and a high cluster word.
 ODD="$OUT/odd.img"
-cp bin/os.bin "$ODD"
+cp "$LEGACY" "$ODD"
 for f in dup1.bin dup2.bin hiword.bin seek.bin empty.bin; do
     mcopy -i "$ODD" "$OUT/$f" ::
 done

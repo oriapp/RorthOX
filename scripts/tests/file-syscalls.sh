@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 #
-# File syscalls 13-18 from ring 3, on a copy of bin/os.bin, checked from outside with mtools and
-# fsck.fat and by booting the written image again.
+# File syscalls 13-18 from ring 3, checked from outside with mtools and fsck.fat and by booting
+# the written image again.
 #
-# The test image gets programs/filetest (FILETEST.ELF), KEEP.TXT, OLDFILE.TXT, a read-only
+# The test image is the legacy layout with a root label (scripts/tests/lib/legacy-fat-image.py
+# labelled: 64 KiB clusters, 64 root entries, the kernel of this build), whatever layout
+# bin/os.bin has. It gets programs/filetest (FILETEST.ELF), KEEP.TXT, OLDFILE.TXT, a read-only
 # RO.TXT, a directory SUB, 49 nested directories A/A/.../A holding TT.TXT (so "0:/A/.../TT.TXT"
 # is 107 bytes: a longer path must not be cut down to it), and FILLER.BIN, which leaves 12 free
 # clusters. The last usable cluster is worked out from the image size (QEMU's disk is the image
@@ -20,9 +22,10 @@
 #
 # After boot 1: mdir/mtype show every file with the expected bytes, both FATs are the same, every
 # cluster up to the last usable one is taken and the partial cluster after it is not, the root is
-# full, the image size didn't change, and fsck.fat -n (if installed) on sparse copies at the BPB's
-# full size finds nothing new. Boot 2 (same image): filetest.elf verify reads it all back, and
-# copy.elf still runs. bin/os.bin must not change.
+# full, the image size didn't change, and fsck.fat -n finds nothing on the image before and after
+# (scripts/tests/lib/fsck-fat.sh: exit 0, only the version and summary lines, 61,029 clusters).
+# Boot 2 (same image): filetest.elf verify reads it all back, and copy.elf still runs.
+# bin/os.bin must not change.
 #
 # Env: BOOT_TIMEOUT=60   RUN_TIMEOUT=120   FSCK_FAT=fsck.fat
 
@@ -30,9 +33,9 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-120}"
-FSCK_FAT="${FSCK_FAT:-fsck.fat}"
 export QEMU_TIMEOUT="${QEMU_TIMEOUT:-600}"
 . ./scripts/qemu-lib.sh
+. ./scripts/tests/lib/fsck-fat.sh
 
 OUT=${RORTHOX_TEST_ROOT:-build/tests}/file-syscalls
 PROGRAM=programs/filetest/build/filetest.elf
@@ -44,7 +47,7 @@ hash_before=$(sha256sum bin/os.bin | cut -d' ' -f1)
 rm -rf "$OUT"/*
 
 IMG="$OUT/file-syscalls.bin"
-cp bin/os.bin "$IMG"
+python3 -B scripts/tests/lib/legacy-fat-image.py labelled "$IMG" > "$OUT/legacy.txt"
 size_before=$(stat -c %s "$IMG")
 printf 'keep\n' > "$OUT/keep.txt"
 printf 'old file contents, longer than the new ones\n' > "$OUT/oldfile.txt"
@@ -259,29 +262,8 @@ check "the partial cluster after it never used"       "$OUT/outside.txt" "nothin
 check "root directory full"                           "$OUT/outside.txt" "root directory full" line
 check "image size unchanged by the writes"            "$OUT/outside.txt" "image size unchanged" line
 
-if command -v "$FSCK_FAT" > /dev/null 2>&1; then
-    SPARSE=$(mktemp -d)
-    # QEMU is stopped here; remove the sparse copies even if the run is killed
-    trap 'rm -rf "$SPARSE"; qemu_kill' EXIT
-    trap 'exit 1' TERM INT
-    for tag in fixture written; do
-        src="$OUT/fixture.bin"; [ "$tag" = written ] && src="$IMG"
-        cp --sparse=always "$src" "$SPARSE/$tag.img"
-        truncate -s "$total_bytes" "$SPARSE/$tag.img"
-        if "$FSCK_FAT" -n "$SPARSE/$tag.img" > "$OUT/fsck-$tag.log" 2>&1; then s=0; else s=$?; fi
-        echo "exit=$s" >> "$OUT/fsck-$tag.log"
-        grep -v -e '^fsck.fat ' -e "$SPARSE/" "$OUT/fsck-$tag.log" > "$OUT/fsck-$tag.txt" || true
-        rm -f "$SPARSE/$tag.img"
-    done
-    rm -rf "$SPARSE"
-    trap 'qemu_kill' EXIT
-    trap - TERM INT
-    echo "  fsck.fat on $total_bytes-byte copies: fixture $(tail -n 1 "$OUT/fsck-fixture.log"), written $(tail -n 1 "$OUT/fsck-written.log")"
-    { cmp -s "$OUT/fsck-fixture.txt" "$OUT/fsck-written.txt" && echo "same findings"; } > "$OUT/fsck.txt" || true
-    check "fsck.fat: nothing new after the writes" "$OUT/fsck.txt" "same findings" line
-else
-    echo "  fsck.fat not installed: the fsck check is skipped (mtools and the FAT checks still ran)"
-fi
+fsck_clean "fsck.fat: the fixture is clean"   "$OUT/fixture.bin" 61029 "$OUT/fsck-fixture.log"
+fsck_clean "fsck.fat: clean after the writes" "$IMG"              61029 "$OUT/fsck-written.log"
 
 echo "file-syscalls: boot 2 (same image)"
 alive=1

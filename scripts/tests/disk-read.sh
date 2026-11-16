@@ -15,12 +15,14 @@
 # the bytes around a partial sector, write whole sectors without reading them first and stop at
 # the first failed read or write.
 #
-# QEMU: copy bin/os.bin, add programs/disktest and a copy of blank.elf named diskbad.elf, and
-# point diskbad.elf's first cluster past the end of the image file (its size is below one
-# cluster, so no FAT entry is read). disktest.elf starts diskbad.elf with syscall 7: QEMU's IDE
-# fails that read with ERR, which used to hang the kernel waiting for DRQ. The syscall must
-# return -EIO, the keyboard must still reach disktest, and blank.elf must start afterwards.
-# QEMU's ide_sector_read trace shows the kernel asked for that sector. bin/os.bin must not change.
+# QEMU: build the legacy layout (scripts/tests/lib/legacy-fat-image.py history: a 16 MiB file under
+# a much bigger BPB volume, the kernel of this build), add programs/disktest and a copy of
+# blank.elf named diskbad.elf, and point diskbad.elf's first cluster past the end of the image
+# file (its size is below one cluster, so no FAT entry is read). disktest.elf starts diskbad.elf
+# with syscall 7: QEMU's IDE fails that read with ERR, which used to hang the kernel waiting for
+# DRQ. The syscall must return -EIO, the keyboard must still reach disktest, and blank.elf must
+# start afterwards. QEMU's ide_sector_read trace shows the kernel asked for that sector.
+# bin/os.bin must not change.
 #
 # Env: HOST_CC=cc   BOOT_TIMEOUT=60   RUN_TIMEOUT=60 (for each step of disktest and blank.elf)
 
@@ -87,7 +89,7 @@ fi
 check "kernel streamer.o: diskstreamer_read does not call itself" "$OUT/streamer-calls.txt" "no self call" line
 
 # The test image: disktest.elf, and diskbad.elf with its first cluster past the end of the file.
-cp bin/os.bin "$OUT/disk-read-before.bin"
+python3 -B scripts/tests/lib/legacy-fat-image.py history "$OUT/disk-read-before.bin" > "$OUT/legacy.txt"
 mcopy -i "$OUT/disk-read-before.bin" "$PROGRAM" ::disktest.elf
 mcopy -i "$OUT/disk-read-before.bin" "$BLANK_ELF" ::diskbad.elf
 $FATIMG info "$OUT/disk-read-before.bin" > "$OUT/geometry.txt"

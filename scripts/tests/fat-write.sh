@@ -21,18 +21,20 @@
 # hidden sectors (writing refused, reading works), 8.3 names, bad chains, FAT copies that differ,
 # no space, open descriptors that see a truncate or an append.
 #
-# The "save" case leaves the image before (fixture.img) and after (written.img) a create, an
-# append, a truncate and a create in a subdirectory: mdir and mtype must show the expected files
-# and bytes, and fsck.fat -n (if installed) on sparse copies at the BPB's full 4,000,000,000 bytes
-# must report nothing for written.img that it doesn't report for fixture.img.
+# The image is the legacy layout with a root label (scripts/tests/lib/legacy-fat-image.py
+# labelled: 64 KiB clusters, 64 root entries, 61,029 clusters on a 16 MiB file), whatever layout
+# bin/os.bin has. The "save" case leaves the image before (fixture.img) and after (written.img) a
+# create, an append, a truncate and a create in a subdirectory: mdir and mtype must show the
+# expected files and bytes, and fsck.fat -n must find nothing on either
+# (scripts/tests/lib/fsck-fat.sh: exit 0, only the version and summary lines, 61,029 clusters).
 #
 # Env: HOST_CC=cc   FSCK_FAT=fsck.fat
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 HOST_CC="${HOST_CC:-cc}"
-FSCK_FAT="${FSCK_FAT:-fsck.fat}"
 . ./scripts/qemu-lib.sh   # only for check() and finish()
+. ./scripts/tests/lib/fsck-fat.sh
 
 OUT=${RORTHOX_TEST_ROOT:-build/tests}/fat-write
 mkdir -p "$OUT"
@@ -41,7 +43,7 @@ hash_before=$(sha256sum bin/os.bin | cut -d' ' -f1)
 rm -f "$OUT"/host-* "$OUT"/*.txt "$OUT"/*.img "$OUT"/*.log "$OUT"/expect-* "$OUT"/got-*
 
 IMG="$OUT/os.bin"
-cp bin/os.bin "$IMG"
+python3 -B scripts/tests/lib/legacy-fat-image.py labelled "$IMG" > "$OUT/legacy.txt"
 
 echo "fat-write: host check of writing files"
 host_status="not built"
@@ -109,28 +111,10 @@ check "mtools: TRUNC.BIN empty"                   "$OUT/mtools.txt" "mtype TRUNC
 check "mtools: shell.elf untouched"               "$OUT/mtools.txt" "shell.elf unchanged" line
 check "mtools: blank.elf untouched"               "$OUT/mtools.txt" "blank.elf unchanged" line
 
-# fsck.fat -n (never repair) on sparse copies at the size the BPB gives, outside build/tests.
-if command -v "$FSCK_FAT" > /dev/null 2>&1 && [ -f "$OUT/written.img" ]; then
-    SPARSE=$(mktemp -d)
-    trap 'rm -rf "$SPARSE"' EXIT
-    total_bytes=$(python3 -c 'import struct,sys; d=open(sys.argv[1],"rb").read(64); print(struct.unpack_from("<I",d,32)[0]*struct.unpack_from("<H",d,11)[0])' "$OUT/written.img")
-    for tag in fixture written; do
-        cp --sparse=always "$OUT/$tag.img" "$SPARSE/$tag.img"
-        truncate -s "$total_bytes" "$SPARSE/$tag.img"
-        if "$FSCK_FAT" -n "$SPARSE/$tag.img" > "$OUT/fsck-$tag.log" 2>&1; then s=0; else s=$?; fi
-        echo "exit=$s" >> "$OUT/fsck-$tag.log"
-        # The version and summary lines differ (file name, counts); the findings must not.
-        grep -v -e '^fsck.fat ' -e "$SPARSE/" "$OUT/fsck-$tag.log" > "$OUT/fsck-$tag.txt" || true
-        rm -f "$SPARSE/$tag.img"
-    done
-    echo "  fsck.fat on $total_bytes-byte copies: fixture $(tail -n 1 "$OUT/fsck-fixture.log"), written $(tail -n 1 "$OUT/fsck-written.log")"
-    { cmp -s "$OUT/fsck-fixture.txt" "$OUT/fsck-written.txt" && echo "same findings"; } > "$OUT/fsck.txt" || true
-    grep -c 'files, .* clusters' "$OUT/fsck-written.log" > /dev/null && echo "summary" >> "$OUT/fsck.txt" || true
-    check "fsck.fat: nothing new in the written image"  "$OUT/fsck.txt" "same findings" line
-    check "fsck.fat: checked the whole written volume"  "$OUT/fsck.txt" "summary" line
-else
-    echo "  fsck.fat not installed: the fsck check is skipped (mtools and the host checker still ran)"
-fi
+# fsck.fat -n (never repair) on both saved images.
+for tag in fixture written; do
+    fsck_clean "fsck.fat: $tag.img clean" "$OUT/$tag.img" 61029 "$OUT/fsck-$tag.log"
+done
 
 [ "$(sha256sum bin/os.bin | cut -d' ' -f1)" = "$hash_before" ] && echo unchanged > "$OUT/image.txt" || echo changed > "$OUT/image.txt"
 check "bin/os.bin not changed by the test"  "$OUT/image.txt"  "unchanged" line

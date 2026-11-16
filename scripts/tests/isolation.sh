@@ -30,7 +30,9 @@
 #       process or task structures or page tables)
 #   f*: "fault.elf owner" keeps a page with a known pattern live, right next to the probe's own
 #       pages (same PDE), while its probe reads it, writes it, and hands it to print, write, read
-#       and stat (each must return -2); the owner then finds its page unchanged.
+#       and stat (each must return -2); the owner then finds its page unchanged. The write opens
+#       (creates) ISO.TXT before its refused write: afterwards mtools shows it empty and fsck.fat
+#       finds nothing on the image (scripts/tests/lib/legacy-fat-image.py labelled).
 # After each boot's attacks blank.elf runs from the same shell, the shell is the only task left
 # and the kernel heap is back where it was, the shell's command nodes included. A boot's
 # remaining attacks are skipped only when a probe never armed or its debugger session broke.
@@ -44,6 +46,7 @@ BOOT_TIMEOUT="${BOOT_TIMEOUT:-60}"
 STEP_TIMEOUT="${STEP_TIMEOUT:-20}"
 BOOTS="${ISOLATION_BOOTS:-kernel process foreign}"
 . ./scripts/qemu-lib.sh
+. ./scripts/tests/lib/fsck-fat.sh
 
 OUT=${RORTHOX_TEST_ROOT:-build/tests}/isolation
 PROGRAM=programs/faulttest/build/faulttest.elf
@@ -176,7 +179,7 @@ debugger_list() {   # debugger_list <tag> [options]
 IMAGE="$OUT/isolation.bin"
 image_hash() { sha256sum bin/os.bin | cut -d' ' -f1; }
 hash_before=$(image_hash)
-cp bin/os.bin "$IMAGE"
+python3 -B scripts/tests/lib/legacy-fat-image.py labelled "$IMAGE" > "$OUT/legacy.txt"
 mcopy -i "$IMAGE" "$PROGRAM" ::fault.elf
 GDB_DIR=$(mktemp -d --tmpdir rorthox-gdb.XXXXXX)
 trap 'rm -rf "$GDB_DIR"' EXIT
@@ -320,6 +323,14 @@ for b in $BOOTS; do
     run_boot "$b"
 done
 rm -rf "$GDB_DIR"
+
+# The disk after the boots: the foreign boot's refused write left an empty ISO.TXT, nothing else.
+if [[ " $BOOTS " == *" foreign "* ]]; then
+    mdir -i "$IMAGE" :: > "$OUT/mdir.txt" 2>&1 || true
+    awk '$1 == "ISO" && $2 == "TXT" { print "ISO.TXT size " $3 }' "$OUT/mdir.txt" > "$OUT/iso-txt.txt"
+    check "foreign: ISO.TXT created and empty (the write was refused)" "$OUT/iso-txt.txt" "ISO.TXT size 0" line
+fi
+fsck_clean "fsck.fat: the image is clean after the boots" "$IMAGE" 61029 "$OUT/fsck.log"
 
 hash_after=$(image_hash)
 [ "$hash_before" = "$hash_after" ] && echo "unchanged" > "$OUT/image.txt" || echo "changed" > "$OUT/image.txt"
